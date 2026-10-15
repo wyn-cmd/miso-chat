@@ -1,0 +1,28 @@
+# secrets and local state: never commit
+.env
+data/
+users/
+*.bak
+*.p2pbak
+*.p2ptmp
+
+# per-machine state written by the apps
+device_id.json
+user_id.json
+peers.json
+config.json
+token_tracker.json
+request_tracker.json
+
+# character memory and personal chat material (only the example cards are tracked)
+memory.json
+memory.md
+facts.json
+user.md
+*/context.md
+
+# Python and tooling
+__pycache__/
+*.pyc
+.venv/
+venv/

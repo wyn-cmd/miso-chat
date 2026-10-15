@@ -1,0 +1,366 @@
+:root {
+  color-scheme: dark;
+  --bg:#14110f; --ink:#ece5dd; --muted:#a1978f; --accent:#e8836a; --line:#3a332e;
+  --card:#1e1a17; --mine:#2d2620; --theirs:#1e1a17; --input:#2a2521;
+  --error:#ff8f8f; --on-accent:#14110f;
+}
+* { box-sizing: border-box; }
+body { margin:0; font: 15px/1.5 system-ui, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+body.centered { display:flex; min-height:100vh; align-items:center; justify-content:center; }
+header { display:flex; gap:10px; align-items:center; height:52px; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--card); }
+header a, header button { font: inherit; }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:24px; width:min(360px, 92vw); }
+h1 { margin:0 0 12px; font-size:22px; } h2 { font-size:18px; margin:18px 0 8px; }
+.brand { font-weight:700; color:var(--accent); }
+.muted { color:var(--muted); font-size:13px; }
+.error { color:var(--error); min-height:1.2em; margin:6px 0 0; }
+.spacer { flex:1; }
+.bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+select, input, textarea { font: inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--input); color:var(--ink); }
+input[type=number].cap { width:90px; }
+label { display:flex; flex-direction:column; gap:4px; font-size:14px; }
+label.inline { flex-direction:row; align-items:center; gap:8px; }
+.stack { display:flex; flex-direction:column; gap:12px; }
+.narrow { max-width:420px; }
+.row { display:flex; gap:8px; align-items:center; }
+button { font: inherit; padding:8px 14px; border:1px solid var(--accent); background:var(--accent); color:var(--on-accent); border-radius:6px; cursor:pointer; }
+button:disabled { opacity:.5; cursor:default; }
+button.ghost { background:transparent; color:var(--accent); }
+button.small { padding:3px 8px; font-size:13px; margin:0 2px; }
+a { color:var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.log { height: 58vh; overflow-y:auto; border:1px solid var(--line); border-radius:10px; padding:12px; background:var(--card); }
+.line { margin:0 0 10px; padding:8px 10px; border-radius:8px; background:var(--theirs); border:1px solid var(--line); }
+.line.mine { background:var(--mine); margin-left:15%; }
+.line.thinking { color:var(--muted); font-style:italic; }
+.line.note { color:var(--muted); font-size:13px; background:transparent; border:none; }
+.speaker { font-size:12px; font-weight:700; color:var(--muted); margin-bottom:2px; }
+.text { white-space: pre-wrap; word-wrap: break-word; }
+.composer { display:flex; gap:10px; margin-top:10px; }
+.composer textarea { flex:1; resize:vertical; }
+table { width:100%; border-collapse:collapse; background:var(--card); }
+th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); font-size:14px; vertical-align:middle; }
+
+/* ---- hidden attribute always wins over display rules */
+[hidden] { display: none !important; }
+
+/* ---- app layout: sidebar + content (rules below override the earlier ones) */
+.shell { display:flex; height: calc(100vh - 52px); height: calc(100dvh - 52px); }
+.sidebar { width: 240px; flex: none; overflow-y: auto; background: var(--card); border-right: 1px solid var(--line); padding: 4px 12px 16px; }
+.sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 4px 6px; }
+.char-list { display: flex; flex-direction: column; gap: 2px; }
+.char-item { text-align: left; background: transparent; color: var(--ink); border: 1px solid transparent; padding: 7px 10px; border-radius: 6px; }
+.char-item:hover:not(:disabled) { background: var(--input); }
+.char-item.active { background: var(--mine); border-color: var(--accent); font-weight: 700; }
+.content { flex: 1; min-width: 0; margin: 0; max-width: none; overflow-y: auto; display: flex; flex-direction: column; padding: 14px 18px; }
+#chatSection { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; max-width: 1120px; margin: 0 auto; }
+#pwSection { max-width: 420px; width: 100%; margin: 0 auto; }
+.chat-title { font-size: 18px; margin: 0; }
+.bar { flex: none; }
+.log { flex: 1; min-height: 200px; height: auto; }
+.scrim { position: fixed; top: 52px; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,.55); z-index: 15; }
+.menu-btn { padding: 4px 8px; line-height: 0; }
+body.locked .sidebar, body.locked .menu-btn { display: none; }
+@media (min-width: 761px) { .scrim { display: none !important; } }
+@media (min-width: 761px) { .shell.collapsed .sidebar { display: none; } }
+
+/* ---- mobile: sidebar becomes a drawer opened from the hamburger */
+@media (max-width: 760px) {
+  .menu-btn { display: inline-block; }
+  .sidebar { position: fixed; top: 52px; bottom: 0; left: 0; z-index: 20; width: min(280px, 82vw); transform: translateX(-105%); transition: transform .2s ease; box-shadow: 4px 0 18px rgba(0,0,0,.5); }
+  .sidebar.open { transform: none; }
+  .content { padding: 10px; }
+  .log { flex: 1; min-height: 120px; height: auto; }
+  #msg { font-size: max(16px, var(--chat-size)); }   /* iOS zooms in on inputs smaller than 16px */
+  body.fit-viewport .shell { height: calc(100% - 52px); }
+  .line.mine { margin-left: 8%; }
+  #who { display: none; }
+}
+
+/* ---- markdown inside messages (built as DOM nodes by markdown.js) */
+.text { white-space: normal; overflow-wrap: anywhere; }
+.text > :first-child { margin-top: 0; }
+.text > :last-child { margin-bottom: 0; }
+.text p { margin: 0 0 .9em; }
+.text pre { background: var(--input); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; overflow-x: auto; white-space: pre; }
+.text code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; background: var(--input); padding: 1px 4px; border-radius: 4px; }
+.text pre code { background: none; padding: 0; }
+.text blockquote { margin: .4em 0; padding: 2px 10px; border-left: 3px solid var(--accent); color: var(--muted); }
+.text ul, .text ol { margin: .3em 0 .6em 1.4em; padding: 0; }
+.text h4 { margin: .4em 0; font-size: 1em; }
+.text hr { border: 0; border-top: 1px solid var(--line); margin: .6em 0; }
+.text a { color: var(--accent); }
+
+/* ---- weights: quoted dialogue gets a little extra weight, real **bold** gets more */
+.text .dialogue { font-weight: 600; }
+.text strong { font-weight: 800; }
+
+/* ---- chat fonts: picked per browser from the bar above the chat (Merriweather is self-hosted, OFL) */
+@font-face { font-family: "Merriweather"; src: url("/static/fonts/merriweather-latin-wght-normal.woff2") format("woff2"); font-weight: 300 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Merriweather"; src: url("/static/fonts/merriweather-latin-wght-italic.woff2") format("woff2"); font-weight: 300 900; font-style: italic; font-display: swap; }
+body { --chat-font: system-ui, "Segoe UI", sans-serif; --chat-size: 15px; }
+body.font-serif { --chat-font: "Merriweather", Georgia, serif; }
+body.font-mono { --chat-font: ui-monospace, Consolas, "Cascadia Mono", monospace; }
+.log, #msg { font-family: var(--chat-font); font-size: var(--chat-size); }
+.size-ctl { display: inline-flex; align-items: center; gap: 2px; }
+.size-ctl span { min-width: 40px; text-align: center; font-size: 13px; }
+.size-ctl button:disabled { opacity: .4; cursor: default; }
+.font-select { padding: 4px 8px; font-size: 13px; }
+
+/* ---- italics: a shade greyer than the body text, so emphasis reads without changing the font */
+:root { --em: #cbc2b9; }
+.text em { color: var(--em); }
+
+/* ---- character colours (from each character.md Colour: line) */
+.char-item::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--dot, transparent); margin-right: 8px; vertical-align: middle; }
+.char-item.active::before { box-shadow: 0 0 0 2px var(--card), 0 0 0 3px var(--dot, transparent); }
+.speaker { letter-spacing: .01em; }
+
+/* badge mode (default): a coloured name pill and a coloured edge on the bubble */
+.bubble-badge .line.coloured { border-left: 3px solid var(--speaker); }
+.bubble-badge .line.coloured .speaker { display: inline-block; background: var(--speaker); color: var(--speaker-text); padding: 1px 9px; border-radius: 999px; margin-bottom: 4px; opacity: 1; }
+
+/* bubble mode: the whole bubble takes the colour; text switches black or white for legibility */
+.bubble-bubble .line.coloured { background: var(--speaker); color: var(--speaker-text); border-color: var(--speaker); }
+.bubble-bubble .line.coloured .speaker { color: var(--speaker-text); opacity: .8; }
+.bubble-bubble .line.coloured .text { color: var(--speaker-text); }
+.bubble-bubble .line.coloured .text em { color: inherit; opacity: .82; }
+.bubble-bubble .line.coloured .text a { color: var(--speaker-text); text-decoration: underline; }
+.bubble-bubble .line.coloured .text code,
+.bubble-bubble .line.coloured .text pre { background: var(--chip); border-color: transparent; }
+.bubble-bubble .line.coloured .text blockquote { border-left-color: var(--speaker-text); color: inherit; opacity: .9; }
+.bubble-bubble .line.coloured .text strong { color: var(--speaker-text); }
+.bubble-bubble .line.coloured .text hr { border-top-color: var(--speaker-text); opacity: .4; }
+
+/* ---- sidebar: icon beside each name, edit pencil for admins */
+.char-item { display: flex; align-items: center; gap: 8px; }
+.char-icon { flex: none; width: 30px; height: 30px; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; background: var(--input); border: 1px solid var(--line); font-size: 13px; font-weight: 700; color: var(--muted); }
+.char-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.char-icon.placeholder { color: var(--speaker-text, var(--muted)); background: var(--dot, var(--input)); border-color: transparent; }
+.char-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.char-edit { opacity: .55; padding: 0 4px; font-size: 13px; }
+.char-item:hover .char-edit { opacity: 1; }
+.side-section { margin-top: 8px; }
+.side-label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; margin: 6px 4px; }
+.side-label.inline { flex-direction: row; align-items: center; }
+.side-section select { width: 100%; }
+
+/* ---- thinking panel: collapsed by default, live preview line, streams like the answer */
+.think { margin: 0 0 8px; border: 1px dashed var(--line); border-radius: 8px; padding: 4px 8px; background: rgba(0,0,0,.12); }
+.think-summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted); list-style: none; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.think-summary::-webkit-details-marker { display: none; }
+.think-summary::before { content: "▸"; display: inline-block; transition: transform .15s; }
+.think[open] .think-summary::before { transform: rotate(90deg); }
+.think-preview { font-weight: 400; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; opacity: .85; }
+.think[open] .think-preview { display: none; }
+.think-body { margin-top: 6px; font-size: 13px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
+
+/* ---- character editor */
+.editor-form { max-width: 760px; }
+.editor-form textarea { font-family: var(--chat-font); width: 100%; }
+.editor-form .grow { flex: 1; }
+.editor-form input.invalid { border-color: var(--error); }
+input[type=color] { width: 44px; height: 34px; padding: 2px; }
+.icon-box { display: flex; gap: 16px; align-items: flex-start; margin-top: 18px; max-width: 760px; }
+.icon-preview { width: 96px; height: 96px; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 36px; font-weight: 700; background: var(--input); border: 1px solid var(--line); flex: none; }
+.icon-preview img { width: 100%; height: 100%; object-fit: cover; }
+.icon-preview.placeholder { color: var(--muted); }
+
+/* ---- context window marker: where the next prompt's rolling window starts, with its size estimate */
+.ctx-marker { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; font-size: 12px; color: var(--muted); }
+.ctx-rule { flex: 1; border-top: 1px dashed var(--line); }
+.ctx-label { white-space: nowrap; }
+.ctx-est { white-space: nowrap; border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; background: var(--input); color: var(--ink); font-variant-numeric: tabular-nums; }
+.ctx-est:empty { display: none; }
+
+/* ---- admin stats page */
+.stats main, main.stats { max-width: 1000px; }
+.stats .controls { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.stats .controls label { min-width: 160px; }
+.bar-track { height: 10px; background: var(--input); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; margin: 6px 0; }
+.bar-fill { height: 100%; width: 0; background: var(--accent); }
+.chart { margin: 0 0 14px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .axis { fill: var(--muted); font-size: 11px; }
+.chart .series { stroke: var(--accent); stroke-width: 2; }
+.chart .pt { fill: var(--accent); }
+tr.active td { font-weight: 700; }
+.group-block { margin-bottom: 14px; }
+.breakdown { margin: 4px 0 0 18px; font-size: 13px; }
+
+/* ---- chat header on one row (the title and usage shorten with an ellipsis rather than wrapping) */
+#chatSection .bar { flex-wrap: nowrap; gap: 8px; }
+#chatSection .bar > :not(.spacer) { flex: none; }
+#chatSection .bar > .chat-title, #chatSection .bar > #usage { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#chatSection .bar > .spacer { flex: 1; min-width: 0; }
+/* phones: row 1 = icon, title, undo; row 2 = usage; row 3 = font, bubble and size controls. Keeps the
+   whole chat area, including the message box, above a keyboard on a short visible screen. */
+@media (max-width: 760px) {
+  #chatSection .bar { flex-wrap: wrap; row-gap: 6px; }
+  #chatSection .bar > #chatIcon { order: 1; }
+  #chatSection .bar > .chat-title { order: 2; flex: 1 1 0; }
+  #chatSection .bar > #undoBtn { order: 3; }
+  #chatSection .bar > #usage { order: 4; flex: 1 0 100%; font-size: 12px; }
+  #chatSection .bar > #fontSelect, #chatSection .bar > #bubbleSelect, #chatSection .bar > .size-ctl { order: 5; }
+  #chatSection .bar > .spacer { display: none; }
+  .font-select { font-size: 12px; padding: 3px 4px; }
+  #chatErr:empty { display: none; }
+  #msg { height: 56px; }
+  .log { min-height: 48px; }
+}
+
+/* ---- phones: the page is fitted to the area still visible above the on-screen keyboard (see app.js) */
+body.fit-viewport { position: fixed; left: 0; right: 0; overflow: hidden; }
+
+/* ---- chat header icon, message timestamps, token budget inputs */
+#chatSection .bar { align-items: center; }
+.chat-icon { width: 34px; height: 34px; font-size: 14px; margin-right: 8px; flex: none; }
+.stamp { font-size: 11px; color: var(--muted); text-align: right; margin-top: 4px; opacity: .85; }
+input.budget { width: 84px; margin-right: 4px; }
+
+
+/* ---- phone: scale the chrome down a little so the chat has more room. The header stays 52px (the drawer and the
+   height sums rely on it), the message box stays 16px (iOS zooms in on smaller inputs), and the reader's chat text
+   size is left alone. */
+@media (max-width: 760px) {
+  .content { padding: 6px; }
+  header { padding: 8px 12px; gap: 8px; }
+  .menu-btn { padding: 2px 6px; }
+  #chatSection .bar { row-gap: 4px; margin-bottom: 6px; }
+  #chatSection .bar > #chatIcon { width: 24px; height: 24px; }
+  #chatSection .bar > .chat-title { font-size: 15px; }
+  #chatSection .bar > #usage { font-size: 11px; }
+  #chatSection .bar > #undoBtn { padding: 3px 8px; font-size: 13px; }
+  .font-select { font-size: 11px; padding: 2px 4px; }
+  .size-ctl span { font-size: 12px; min-width: 34px; }
+  .size-ctl button { padding: 2px 7px; }
+  .log { padding: 8px; }
+  .line { padding: 6px 8px; margin: 0 0 7px; }
+  .stamp { font-size: 10px; }
+  .composer { margin-top: 6px; gap: 6px; }
+  #msg { height: auto; font-size: max(16px, var(--chat-size)); line-height: 1.35; overflow-y: hidden; }   /* last rule for #msg, so iOS does not zoom in; app.js sets the height */
+  #sendBtn { padding: 6px 10px; }
+  .sidebar { padding: 4px 8px 12px; }
+  .sidebar h2 { margin: 12px 4px 4px; }
+  .char-item { padding: 5px 8px; font-size: 14px; gap: 6px; }
+  .char-icon { width: 26px; height: 26px; }
+}
+
+/* ---- phone settings sheet. The chat bar's first row keeps the icon, title and undo; the second row has the usage line
+   and a Settings button. The font, name badge, size, model, thinking and character creation controls live in the sheet.
+   Desktop keeps the controls in the bar and the sidebar; the button and the sheet are hidden there. */
+.settings-btn { display: none; }
+#settingsSheet[hidden] { display: none; }
+@media (max-width: 760px) {
+  #chatSection .bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 8px; row-gap: 4px; align-items: center; }
+  #chatSection .bar > #chatIcon { grid-column: 1; grid-row: 1; }
+  #chatSection .bar > .chat-title { grid-column: 2; grid-row: 1; min-width: 0; }
+  #chatSection .bar > #undoBtn { grid-column: 3; grid-row: 1; }
+  #chatSection .bar > #usage { grid-column: 1 / 3; grid-row: 2; min-width: 0; font-size: 11px; }
+  #chatSection .bar > .settings-btn { display: inline-flex; grid-column: 3; grid-row: 2; justify-self: end; align-items: center; gap: 4px; font-size: 13px; padding: 3px 10px; }
+  #settingsSheet { position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; background: rgba(0, 0, 0, .55); }
+  .sheet-card { width: 100%; max-height: 82vh; overflow-y: auto; background: var(--card); border-top: 1px solid var(--line); border-radius: 14px 14px 0 0; padding: 12px 14px 18px; box-shadow: 0 -6px 24px rgba(0, 0, 0, .4); }
+  .sheet h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; }
+  .sheet-head h2 { margin: 0; font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--ink); }
+  .sheet-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .sheet-row > span:first-child { color: var(--muted); font-size: 14px; }
+  .sheet .font-select { font-size: 14px; padding: 5px 8px; }
+  .sheet .size-ctl button { padding: 4px 10px; font-size: 14px; }
+  .sheet .size-ctl span { font-size: 14px; }
+  .sheet .side-section { margin-top: 0; }
+  .sheet .side-label { font-size: 14px; }
+}
+
+/* ---- header follows the chat text size selection: about 13px at the default 15px, and capped so the row still fits */
+header { font-size: clamp(10px, calc(var(--chat-size) * 0.87), 16px); }
+
+/* ---- phone header and chat bar: the character's icon and name sit in the header in place of "Miso Chat", Admin, Password
+   and Log out live in the drawer, and the usage line, Undo and Settings share one row. Desktop keeps its layout. */
+#headerChat { display: none; }
+#accountBox { display: none; }
+.u-short { display: none; }
+@media (max-width: 760px) {
+  header .brand { display: none; }
+  body:not(.chat-open) header .brand { display: inline-block; }
+  #headerChat { display: flex; flex: 1 1 auto; align-items: center; gap: 8px; min-width: 0; }
+  body:not(.chat-open) #headerChat { display: none; }
+  #headerChat .char-icon.chat-icon { width: 28px; height: 28px; flex: none; }
+  #headerChat .chat-title { font-size: 15px; margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #accountBox { display: block; }
+  #accountSlot { display: flex; flex-direction: column; gap: 6px; }
+  #accountSlot > * { display: block; width: 100%; text-align: left; font-size: 14px; padding: 8px 10px; }
+  #accountSlot [hidden] { display: none; }
+  #chatSection .bar { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; }
+  #chatSection .bar > #usage { order: 1; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+  .u-long { display: none; }
+  .u-short { display: inline; }
+  #chatSection .bar > #undoBtn { order: 2; flex: none; padding: 3px 10px; font-size: 13px; }
+  #chatSection .bar > .settings-btn { order: 3; flex: none; justify-self: auto; padding: 3px 10px; }
+}
+
+/* persona list inside the phone settings sheet */
+.sheet .char-list { display: flex; flex-direction: column; gap: 4px; }
+.sheet .char-item { padding: 8px 10px; font-size: 14px; }
+
+/* ---- highlight colour and a more modern surface. --accent is set from Settings (see common.js). */
+:root { --radius: 14px; --shadow: 0 8px 28px rgba(0, 0, 0, .35); --surface: #1a1613; }
+body { background: radial-gradient(900px 480px at 0% -10%, var(--accent-soft), transparent 70%), var(--bg); background-attachment: fixed; }
+header { position: sticky; top: 0; z-index: 10; background: rgba(30, 26, 23, .82); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 1px 0 var(--line), 0 6px 18px rgba(0, 0, 0, .25); }
+.brand { letter-spacing: .01em; }
+.card { border-radius: var(--radius); box-shadow: var(--shadow); }
+table { border-radius: 10px; overflow: hidden; }
+button { border-radius: 10px; transition: background .15s, box-shadow .15s, transform .06s, opacity .15s; }
+button:not(:disabled):hover { box-shadow: 0 0 0 3px var(--accent-soft); }
+button:not(:disabled):not(.ghost):hover { box-shadow: 0 0 0 3px var(--accent-soft), 0 6px 16px var(--accent-glow); }
+button:not(:disabled):active { transform: translateY(1px); }
+button.ghost:not(:disabled):hover { background: var(--accent-soft); }
+/* filled buttons sit a shade off the page background, nudged toward the highlight colour */
+button:not(.ghost) { background: var(--btn-bg); color: var(--ink); border-color: var(--accent-glow); }
+select, input, textarea { border-radius: 10px; transition: border-color .15s, box-shadow .15s; }
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.log { border-radius: var(--radius); border: 1px solid var(--accent); background: var(--card); box-shadow: 0 0 0 1px var(--accent-soft), 0 12px 32px rgba(0, 0, 0, .3); }
+.line { border-radius: var(--radius); box-shadow: 0 2px 10px rgba(0, 0, 0, .18); }
+.line.mine { border-color: var(--accent-soft); }
+#msg { border: 1px solid var(--accent); border-radius: var(--radius); }
+.sidebar { background: var(--card); }
+.char-item { border-radius: 10px; }
+.char-item.active { background: var(--accent-soft); border-color: var(--accent-glow); box-shadow: inset 3px 0 0 var(--accent); }
+.char-item:hover:not(:disabled) { background: var(--input); }
+a { text-decoration-color: var(--accent-glow); text-underline-offset: 3px; }
+.brand { letter-spacing: .01em; }
+.card { border-radius: var(--radius); box-shadow: var(--shadow); }
+table { border-radius: 10px; overflow: hidden; }
+button { border-radius: 10px; transition: background .15s, box-shadow .15s, transform .06s, opacity .15s; }
+button:not(:disabled):hover { box-shadow: 0 0 0 3px var(--accent-soft); }
+button:not(:disabled):not(.ghost):hover { box-shadow: 0 0 0 3px var(--accent-soft), 0 6px 16px var(--accent-glow); }
+button:not(:disabled):active { transform: translateY(1px); }
+button.ghost:not(:disabled):hover { background: var(--accent-soft); }
+select, input, textarea { border-radius: 10px; transition: border-color .15s, box-shadow .15s; }
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.log { border-radius: var(--radius); border: 1px solid var(--accent); background: linear-gradient(180deg, var(--card), var(--surface)); box-shadow: 0 0 0 1px var(--accent-soft), 0 12px 32px rgba(0, 0, 0, .3); }
+.line { border-radius: var(--radius); box-shadow: 0 2px 10px rgba(0, 0, 0, .18); }
+.line.mine { border-color: var(--accent-soft); }
+#msg { border: 1px solid var(--accent); border-radius: var(--radius); }
+.sidebar { background: linear-gradient(180deg, var(--card), var(--bg)); }
+.char-item { border-radius: 10px; }
+.char-item.active { background: var(--accent-soft); border-color: var(--accent-glow); box-shadow: inset 3px 0 0 var(--accent); }
+.char-item:hover:not(:disabled) { background: var(--input); }
+a { text-decoration-color: var(--accent-glow); text-underline-offset: 3px; }
+
+/* ---- Settings: a centred dialog on desktop (the bottom sheet stays on phones). The Settings button shows on desktop too. */
+@media (min-width: 761px) {
+  .settings-btn { display: inline-flex; align-items: center; gap: 6px; }
+  #settingsSheet { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .55); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+  .sheet-card { width: min(440px, 92vw); max-height: 80vh; overflow-y: auto; background: var(--card); border: 1px solid var(--accent-glow); border-radius: var(--radius); padding: 16px 20px 20px; box-shadow: 0 24px 64px rgba(0, 0, 0, .55); }
+  .sheet h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; }
+  .sheet-head h2 { margin: 0; font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--ink); }
+  .sheet-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .sheet-row > span:first-child { color: var(--muted); font-size: 14px; }
+  .phone-only { display: none; }
+}
+.accent-ctl { display: flex; align-items: center; gap: 8px; }
+.accent-ctl input[type=color] { width: 44px; height: 30px; padding: 2px; border-radius: 8px; cursor: pointer; }
