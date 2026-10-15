@@ -1,7 +1,7 @@
 # SQLite storage for the Miso Chat web app: accounts, sessions, usage and settings.
 #
 # Lives outside the character folders on purpose (the database sits in the data dir),
-# so nothing here is walked by the terminal script's sync.
+# so nothing here is walked by anything else.
 import hashlib
 import hmac
 import os

@@ -1,11 +1,9 @@
 # Miso Chat
 
-Miso Chat is a roleplay chat app. It talks to Gemini, with optional DeepSeek, local OpenAI-style server and Claude Code backends. It has two front ends:
+Miso Chat is a roleplay chat app that talks to Gemini, with optional DeepSeek, local OpenAI-style server and Claude Code backends. It has two front ends:
 
 - `roleplay.py`, a terminal chat for one character, or a group of characters.
-- `web/`, a FastAPI web app for several accounts. Each account has its own chat history, memory and persona choice. The admin manages accounts, usage caps, token budgets, providers, character cards, icons and a stats page.
-
-Miso Chat is the web version of [Character-Forge](https://github.com/wyn-cmd/character-forge), the terminal roleplay engine it grew out of. The character-folder format, memory banks, group chats and the terminal engine (`roleplay.py`) originate there. The web app, accounts, admin editor, icons and browser interface are new here.
+- `web/`, a FastAPI web app for several accounts: each account has its own chat history, memory and persona choice, and the admin manages accounts, usage caps, token budgets, providers, character cards and icons, and a stats page.
 
 This is a personal project. It is built for use on one machine or a private network. It is not hardened for the open internet. See Security below.
 
@@ -28,7 +26,7 @@ Open `.env` and set `GEMINI_API_KEY`. The app reads `.env` when it starts. A val
 
     python roleplay.py Cliff
     python roleplay.py Cliff Cayprae
-    python roleplay.py --group MyGroup Cliff Akhazane
+    python roleplay.py --group MyGroup Cliff Cayprae
 
 The second argument is the persona folder you speak as. Inside a chat:
 
@@ -37,7 +35,6 @@ The second argument is the persona folder you speak as. Inside a chat:
 - `/back` removes the last exchange.
 - `/history` prints the whole chat.
 - `/verbose` toggles diagnostics.
-- `/sync` and `/sync <address>` run the optional LAN sync described under Sync below.
 - `/quit` or `/exit` ends the session and saves the memory bank.
 
 ## Web app
@@ -47,12 +44,6 @@ The second argument is the persona folder you speak as. Inside a chat:
 Open http://127.0.0.1:8000 in a browser. The first login is `admin` with the password `admin`. The app asks you to change it before anything else. Create other accounts from the admin page.
 
 Run the web app from the project folder, because character folders are read relative to it.
-
-### Appearance
-
-Each browser can set its own highlight colour in the Settings window (the Settings button above the chat box). The colour drives the chat outline, buttons, links and the settings and admin text. It is saved in the browser's local storage, so it is not shared between accounts or devices.
-
-The chat look (font, name badge and size) is in the same window. On phones, the Settings button opens a bottom sheet with these controls.
 
 ## Configuration
 
@@ -80,55 +71,25 @@ Each character is a folder in the project root.
 
 - `character.md` holds the card. The first line is `Character Persona: <Name>`, and a line `Colour: <name or #hex>` sets the colour used for the name badge and bubble.
 - `context.md` (optional) holds memories, places and situations, and is added to the prompt.
-- `icon.png`, `icon.jpg` or `icon.webp` (optional) is shown beside the name. Without one, the app shows a coloured initial. Uploads in the web editor accept PNG, JPEG or WebP and are re-encoded to a WebP icon under 512 KB, cropped to a square.
-- `wiki.md` (optional) is a lore file. When it exists, the model can ask for lines from it mid-scene with `[WIKI_SEARCH: keyword]`, and only the matching lines go into the prompt. The terminal chat and the web app both support this.
+- `icon.png` or `icon.jpg` (optional) is shown beside the name. Without one, the app shows a coloured initial.
+- Names can hold any characters, such as `Dr. Fox: Night Form` or `Fox [Night]`. Windows folder names can't hold `< > : " / \ | ? *` or `%`, so those are percent-encoded in the folder name: `Dr. Fox: Night Form` lives in the folder `Dr. Fox%3A Night Form`. The name shown in chat comes from the folder name, or from the `Character Persona:` line when it is present.
 - `memory.json` and `memory.md` are written by the app as the chat runs. Do not edit them while a chat is open.
 
 A group chat is a folder with a `group_config.json` that lists its members.
 
-`personas.json` lists the folders you can speak as. A persona is never offered as a character to chat with. Personas can have an icon and can be edited in the web editor by an admin, the same as characters. Personas cannot be created from the web editor yet; add a folder and list it in `personas.json`.
+`personas.json` lists the folders you can speak as. A persona is never offered as a character to chat with. `Cayprae` is included as an example persona.
 
-`Cliff` (a character) and `Cayprae` (a persona) are included as examples.
+`Cliff` is included as an example character.
 
 ## Word substitutions
 
-An optional `substitutions.json` in the project root maps the text you type (the key) to the text the model receives (the value). This copy ships with no substitutions.
-
-    {
-      "[Big Shot!]": "big shot!",
-      "[For 9.99]": "for nine ninety-nine",
-      "[Spamton](https://deltarune.fandom.com/wiki/Spamton)": "Spamton"
-    }
-
-How it works:
-
-- The model receives the value. The chat shows the key. Model replies are converted from values back to keys before they are displayed, so the key's formatting, brackets and links appear in the chat.
-- Matching is case-insensitive, whole-word and longest key first. A key only matches when it isn't touching another letter or digit.
-- Keys can hold punctuation, brackets and markdown. Model replies are rendered as markdown, and links must be `http` or `https`, so a key can be a link.
-- Saved history keeps the values, so the links are not sent back to the model.
-- Sessions read the file when they start. Restart the terminal chat, or restart the web server, after editing it.
-
-Ideas for using it:
-
-- Stage tags: `[Big Shot!]` shows in the chat as a bracketed tag, while the model only sees a plain phrase.
-- Character links: wrap a character's name as a markdown link to its wiki page, so the model's mentions become clickable.
-- Catchphrase formatting: keep a character's signature line in its exact capitals or punctuation in the display, while the model reads a plainer version.
-- Prices and numbers: `[For 9.99]` can show in a shop line while the model reads the spelled-out form.
-
-Watch out for:
-
-- Values are replaced inside text, including inside URLs that were inserted by an earlier key. Pick values that don't appear in any link target. For example, a value of `wiki` would also rewrite the `wiki` in `deltarune.fandom.com/wiki/...`.
-- A value that is a common word (`the`, `a`) will match everywhere. Keep values specific.
-
-## Sync (terminal only)
-
-`roleplay.py` contains an optional peer-to-peer sync that copies character folders between two machines on the same local network. It listens on port 54322 and searches for peers on the local network. Peers can also be listed in `peers.json`, for example `["192.0.2.10"]`, or added at runtime with `/sync <address>`. Sync state files (`device_id.json`, `user_id.json`, `peers.json`, `*.p2pbak`) are per machine and git-ignored. The web app does not sync.
+An optional `substitutions.json` in the project root maps a word or phrase to a replacement, for example `{"old word": "new word"}`. Matching is whole-word and longest phrase first, and the replacement is applied to your messages before they are sent. This copy ships with no substitutions.
 
 ## Data and what is not included
 
-`data/` holds the database, accounts, sessions, per-user chat history and memory, and provider keys. `.env` holds your Gemini key. Both are git-ignored in `.gitignore`. Keep them out of any repository or shared folder. The same applies to `memory.json`, `memory.md`, `facts.json`, `user.md` and the per-machine state files.
+`data/` holds the database, accounts, sessions, per-user chat history and memory, and provider keys. `.env` holds your Gemini key. Both are git-ignored in `.gitignore`. Keep them out of any repository or shared folder.
 
-This repository ships only the example character and persona cards. Personal characters, their memories and chat history are not included.
+This copy has no peer-to-peer sync. Earlier versions could sync character folders between two machines on a local network; that code has been removed from the public copy. It also has no wiki lookup and no web search.
 
 ## Security
 
@@ -149,7 +110,6 @@ This copy does not include the automated test suite. A basic static check is:
 - Usage caps and token budgets are checked before each turn. A turn that starts under budget can finish over it.
 - Token counts in the context marker are estimates, about four characters per token.
 - Gemma 4 31B on the free tier has a small input limit. Group chats do not use it.
-- The web app's browser tests have not been run in this copy. Check the layout on your own screens, especially the colour settings.
 
 ## Credits and licences
 

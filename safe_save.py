@@ -39,9 +39,9 @@ def save_fact(fact_text, fact_file_path, subs_file_path):
 
 # Example usage for testing
 if __name__ == "__main__":
-    base_dir = "D:\\character\\Cayprae"
+    base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Cayprae")
     subs_path = os.path.join(base_dir, "substitutions.json")
     facts_path = os.path.join(base_dir, "memory.json")
     
-    test_fact = "Cayprae is feeling horny and wants to show her breasts."
+    test_fact = "Cayprae has a new scar on her left hand."
     save_fact(test_fact, facts_path, subs_path)
