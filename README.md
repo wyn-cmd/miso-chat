@@ -87,7 +87,33 @@ A group chat is a folder with a `group_config.json` that lists its members.
 
 ## Word substitutions
 
-An optional `substitutions.json` in the project root maps a word or phrase to a replacement, for example `{"old word": "new word"}`. Matching is whole-word and longest phrase first, and the replacement is applied to your messages before they are sent.
+An optional `substitutions.json` in the project root maps the text you type (the key) to the text the model receives (the value).
+
+    {
+      "[Big Shot!]": "big shot!",
+      "[For 9.99]": "for nine ninety-nine",
+      "[Spamton](https://deltarune.fandom.com/wiki/Spamton)": "Spamton"
+    }
+
+How it works:
+
+- The model receives the value. The chat shows the key. Model replies are converted from values back to keys before they are displayed, so the key's formatting, brackets and links appear in the chat.
+- Matching is case-insensitive, whole-word and longest key first. A key only matches when it isn't touching another letter or digit.
+- Keys can hold punctuation, brackets and markdown. Model replies are rendered as markdown, and links must be `http` or `https`, so a key can be a link.
+- Saved history keeps the values, so the links are not sent back to the model.
+- Sessions read the file when they start. Restart the terminal chat, or restart the web server, after editing it.
+
+Ideas for using it:
+
+- Stage tags: `[Big Shot!]` shows in the chat as a bracketed tag, while the model only sees a plain phrase.
+- Character links: wrap a character's name as a markdown link to its wiki page, so the model's mentions become clickable.
+- Catchphrase formatting: keep a character's signature line in its exact capitals or punctuation in the display, while the model reads a plainer version.
+- Prices and numbers: `[For 9.99]` can show in a shop line while the model reads the spelled-out form.
+
+Watch out for:
+
+- Values are replaced inside text, including inside URLs that were inserted by an earlier key. Pick values that don't appear in any link target. For example, a value of `wiki` would also rewrite the `wiki` in `deltarune.fandom.com/wiki/...`.
+- A value that is a common word (`the`, `a`) will match everywhere. Keep values specific.
 
 ## Sync (terminal only)
 
