@@ -92,6 +92,8 @@ function colourLine(box, speaker) {
 function setBusy(on) {
   busy = on;
   $("sendBtn").disabled = on;
+  $("autoBtn").disabled = on;
+  $("rollBtn").disabled = on;
   $("undoBtn").disabled = on;
   for (const b of document.querySelectorAll(".char-item")) b.disabled = on;
 }
@@ -211,9 +213,10 @@ function renderHistory(messages) {
     addLine("", "No messages yet. Say hello!", "note");
   } else {
     messages.forEach((m, i) => {
-      const box = addLine(m.speaker, m.text, m.role === "user" ? "mine" : "theirs", m.time);
+      const isEvent = m.speaker === "Narrator";   // random events are saved as user-side entries, shown as notes
+      const box = addLine(m.speaker, m.text, isEvent ? "note event" : (m.role === "user" ? "mine" : "theirs"), m.time);
       box.dataset.idx = String(i);   // position in the saved chat, used to place the context marker
-      if (m.role === "user" && me && me.persona) colourLine(box, me.persona.name);
+      if (m.role === "user" && !isEvent && me && me.persona) colourLine(box, me.persona.name);
       if (m.thinking) setThinking(box, m.thinking);
     });
   }
@@ -626,6 +629,52 @@ async function init() {
 }
 
 $("chatForm").addEventListener("submit", send);
+
+async function refreshMe() {
+  try { me = await api("GET", "/api/me"); renderUsage(); } catch (err) { /* the usage bar keeps its last values */ }
+}
+
+// Auto-fill: the model drafts the user's next message into the box. The user reads it, edits it, then sends it.
+async function autoFill() {
+  if (busy || !current) return;
+  const who = current;
+  if ($("msg").value.trim()) { $("chatErr").textContent = "Clear the message box first, then Auto-fill."; return; }
+  setBusy(true);
+  $("chatErr").textContent = "";
+  try {
+    const data = await api("POST", "/api/autofill", { character: who });
+    if (who === current && !$("msg").value.trim()) {
+      $("msg").value = data.text;
+      $("msg").dispatchEvent(new Event("input"));
+      $("msg").focus();
+    }
+  } catch (err) {
+    if (who === current) $("chatErr").textContent = err.message;
+  } finally {
+    setBusy(false);
+    refreshMe();
+  }
+}
+
+// Roll: the model adds a random event to the scene as a narrator note. The next reply takes it into account.
+async function rollEvent() {
+  if (busy || !current) return;
+  const who = current;
+  setBusy(true);
+  $("chatErr").textContent = "";
+  try {
+    const data = await api("POST", "/api/roll", { character: who });
+    if (who === current) addLine("Narrator", data.event.text, "note event", new Date().toISOString());
+  } catch (err) {
+    if (who === current) $("chatErr").textContent = err.message;
+  } finally {
+    setBusy(false);
+    refreshMe();
+  }
+}
+
+$("autoBtn").addEventListener("click", autoFill);
+$("rollBtn").addEventListener("click", rollEvent);
 $("msg").addEventListener("input", updateEstimate);
 
 // Phones: the on-screen keyboard covers the lower part of the page. Fit the app to the area still visible
@@ -792,7 +841,7 @@ init();
   const headerChat = document.getElementById("headerChat");
   const accountSlot = document.getElementById("accountSlot");
   const section = document.getElementById("chatSection");
-  const parts = [["chatIcon", "chat"], ["chatTitle", "chat"], ["adminLink", "account"], ["pwBtn", "account"], ["logoutBtn", "account"]]
+  const parts = [["chatIcon", "chat"], ["chatTitle", "chat"], ["settingsBtn", "chat"], ["adminLink", "account"], ["pwBtn", "account"], ["logoutBtn", "account"]]
     .map(([id, group]) => {
       const node = document.getElementById(id);
       const home = document.createComment("home:" + id);   // where the control belongs on desktop

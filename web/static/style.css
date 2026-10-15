@@ -35,6 +35,7 @@ a { color:var(--accent); }
 .line.mine { background:var(--mine); margin-left:15%; }
 .line.thinking { color:var(--muted); font-style:italic; }
 .line.note { color:var(--muted); font-size:13px; background:transparent; border:none; }
+.line.event { font-style:italic; }
 .speaker { font-size:12px; font-weight:700; color:var(--muted); margin-bottom:2px; }
 .text { white-space: pre-wrap; word-wrap: break-word; }
 .composer { display:flex; gap:10px; margin-top:10px; }
@@ -364,3 +365,28 @@ a { text-decoration-color: var(--accent-glow); text-underline-offset: 3px; }
 }
 .accent-ctl { display: flex; align-items: center; gap: 8px; }
 .accent-ctl input[type=color] { width: 44px; height: 30px; padding: 2px; border-radius: 8px; cursor: pointer; }
+
+/* ---- Auto-fill: a small translucent dice button inside the message box, on the right. The box keeps its full width;
+   the text gets right padding so it never runs under the button. */
+.msg-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
+.msg-wrap textarea { flex: 1; width: 100%; min-width: 0; padding-right: 42px; }
+.dice-btn { position: absolute; right: 8px; bottom: 8px; width: 28px; height: 28px; padding: 0; display: inline-flex;
+  align-items: center; justify-content: center; border-radius: 50%; border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--input) 55%, transparent); color: var(--ink); opacity: .6; cursor: pointer;
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); transition: opacity .15s, background .15s; }
+.dice-btn:hover, .dice-btn:focus-visible { opacity: 1; background: color-mix(in srgb, var(--accent-soft) 70%, transparent); outline: none; }
+.dice-btn:disabled { opacity: .25; cursor: default; }
+
+/* ---- Roll sits in the chat bar, next to Undo */
+#chatSection .bar > #rollBtn { flex: none; }
+
+/* ---- phones: the character icon, name and Settings button sit in the top header row (app.js moves them there).
+   The chat bar keeps the usage line, Undo and Roll on one row. Written last so it wins over the older phone rules. */
+#headerChat .settings-btn { display: inline-flex; flex: none; align-items: center; gap: 4px; padding: 3px 10px; font-size: 13px; }
+@media (max-width: 760px) {
+  #chatSection .bar { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
+  #chatSection .bar > #usage { order: 0; flex: 1 1 auto; min-width: 0; }
+  #chatSection .bar > #undoBtn, #chatSection .bar > #rollBtn { order: 0; flex: none; padding: 3px 8px; font-size: 13px; }
+  .dice-btn { width: 26px; height: 26px; right: 6px; bottom: 6px; }
+  .msg-wrap textarea { padding-right: 38px; }
+}
