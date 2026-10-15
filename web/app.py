@@ -25,6 +25,7 @@ from starlette.concurrency import run_in_threadpool
 
 from google import genai
 from rp_core import Engine
+from charname import display_for, folder_for
 import llm_backends
 from web import providers, editor
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, budget_days, recent_days, verify_password
@@ -96,12 +97,12 @@ def _colour_map(root):
     for d in sorted(os.listdir(root)):
         if d.startswith((".", "__")) or not os.path.isfile(os.path.join(root, d, "character.md")):
             continue
-        out[d] = colour_of(root, d) or NEUTRAL_HEX
+        out[display_for(d)] = colour_of(root, d) or NEUTRAL_HEX
     return out
 
 
 def _persona_list(st):
-    return [{"name": n, "color": colour_of(st.char_root, n) or NEUTRAL_HEX} for n in load_personas(st.char_root)]
+    return [{"name": display_for(n), "color": colour_of(st.char_root, n) or NEUTRAL_HEX} for n in load_personas(st.char_root)]
 
 
 def _persona_for(st, user):
@@ -115,7 +116,7 @@ def _persona_for(st, user):
 
 def _persona_info(st, user):
     name = _persona_for(st, user)
-    return {"name": name, "color": colour_of(st.char_root, name) or NEUTRAL_HEX} if name else None
+    return {"name": display_for(name), "color": colour_of(st.char_root, name) or NEUTRAL_HEX} if name else None
 
 
 def _has_icon(root, name):
@@ -299,6 +300,8 @@ def _check_caps(st, user):
 
 
 def _resolve_profile(st, name):
+    # Client names are display names; the folder name is the ID used on disk and in the engine.
+    name = folder_for(str(name))
     solo, groups = scan_characters(st.char_root)
     if name in groups:
         return name, True
@@ -414,7 +417,7 @@ def _character_stats(st):
     def stamp(ts):
         return time.strftime("%d/%m/%y %H:%M", time.localtime(ts)) if ts else "N/A"
 
-    out_chars = [{"name": r["name"], "accounts": r["accounts"], "messages": r["messages"],
+    out_chars = [{"name": display_for(r["name"]), "accounts": r["accounts"], "messages": r["messages"],
                   "history_tokens": r["history_tokens"], "memory_tokens": r["memory_tokens"],
                   "last_memory": stamp(r["last_memory"])} for r in chars.values()]
     out_groups = []
@@ -425,9 +428,9 @@ def _character_stats(st):
                 members = json.load(f).get("members", [])
         except (OSError, ValueError, AttributeError):
             pass
-        breakdown = [{"speaker": m, **r["breakdown"].get(m, {"messages": 0, "tokens": 0})} for m in members]
-        breakdown += [{"speaker": w, **p} for w, p in r["breakdown"].items() if w not in members]
-        out_groups.append({"name": r["name"], "accounts": r["accounts"], "members": members,
+        breakdown = [{"speaker": display_for(m), **r["breakdown"].get(m, {"messages": 0, "tokens": 0})} for m in members]
+        breakdown += [{"speaker": display_for(w), **p} for w, p in r["breakdown"].items() if w not in members]
+        out_groups.append({"name": display_for(r["name"]), "accounts": r["accounts"], "members": [display_for(m) for m in members],
                            "messages": r["messages"], "history_tokens": r["history_tokens"],
                            "memory_tokens": r["memory_tokens"], "last_memory": stamp(r["last_memory"]),
                            "breakdown": breakdown})
@@ -442,7 +445,12 @@ def _history(engine):
     out = []
     for e in engine.full_history:
         role = e.get("role")
-        speaker = engine.user_display_name if role == "user" else (e.get("speaker") or engine.character_name)
+        if e.get("speaker") == "narrator":
+            speaker = "Narrator"
+        elif role == "user":
+            speaker = engine.user_display_name
+        else:
+            speaker = display_for(e["speaker"]) if e.get("speaker") else engine.character_name
         item = {"speaker": speaker, "role": role, "text": engine.restore(e.get("text", ""))}
         if e.get("thinking"):
             item["thinking"] = e["thinking"]
@@ -617,7 +625,7 @@ def _run_command(st, user, name, is_group, word, arg):
 def make_app(client=None, data_dir=None, char_root=None):
     char_root = char_root or CHAR_ROOT
     data_dir = data_dir or DATA_DIR
-    os.chdir(char_root)  # engine paths (character folders, wiki, group configs) are relative
+    os.chdir(char_root)  # engine paths (character folders, group configs) are relative
     if client is None:
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
@@ -779,9 +787,9 @@ def make_app(client=None, data_dir=None, char_root=None):
     def characters(request: Request):
         require(request)
         solo, groups = scan_characters(st.char_root)
-        return {"solo": solo, "groups": [{"name": g, "members": m} for g, m in groups.items()],
+        return {"solo": [display_for(s) for s in solo], "groups": [{"name": display_for(g), "members": [display_for(x) for x in m]} for g, m in groups.items()],
                 "personas": _persona_list(st), "colors": _colour_map(st.char_root),
-                "icons": [n for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, n)]}
+                "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))]}
 
     @app.get("/api/history")
     def history(request: Request, character: str):
@@ -799,7 +807,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         slot = _slot(st, user, name, is_group)
         with slot.lock:
             info = slot.engine.context_estimate()
-        info["character"] = name
+        info["character"] = display_for(name)
         return info
 
     @app.post("/api/chat")
@@ -822,12 +830,50 @@ def make_app(client=None, data_dir=None, char_root=None):
         return StreamingResponse(_run_turn(st, user, name, slot, message),
                                  media_type="text/event-stream", headers=SSE_HEADERS)
 
+    @app.post("/api/autofill")
+    async def autofill(request: Request):
+        # Draft the user's next message. Not saved to the chat; the user edits it and sends it.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        _check_caps(st, user)
+        slot = await run_in_threadpool(_slot, st, user, name, is_group)
+
+        def work():
+            with slot.lock:
+                return slot.engine.autofill()
+        try:
+            text = await run_in_threadpool(work)
+        except RuntimeError as err:
+            raise HTTPException(502, f"Auto-fill failed: {err}")
+        return {"text": text}
+
+    @app.post("/api/roll")
+    async def roll(request: Request):
+        # Add a random event to the chat as a narrator note; the next reply takes it into account.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        _check_caps(st, user)
+        slot = await run_in_threadpool(_slot, st, user, name, is_group)
+
+        def work():
+            with slot.lock:
+                return slot.engine.restore(slot.engine.roll_event())
+        try:
+            text = await run_in_threadpool(work)
+        except RuntimeError as err:
+            raise HTTPException(502, f"Roll failed: {err}")
+        return {"event": {"speaker": "Narrator", "text": text}}
+
     @app.post("/api/persona")
     async def set_persona(request: Request):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        choice = str(body.get("persona", ""))
+        choice = folder_for(str(body.get("persona", ""))) if body.get("persona") else ""
         if choice and choice not in load_personas(st.char_root):
             raise HTTPException(400, "Unknown persona.")
         # the chat sessions cache the history in memory; a persona switch rebuilds them from disk,
@@ -994,7 +1040,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         with st.slots_lock:
-            for k in [k for k in st.slots if k[1] == name]:
+            for k in [k for k in st.slots if k[1] == folder_for(name)]:
                 st.slots.pop(k, None)   # cached engines hold the old card
         return out
 

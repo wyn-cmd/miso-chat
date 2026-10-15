@@ -21,20 +21,45 @@ from types import SimpleNamespace
 
 import pytz
 from google.genai import types
+from charname import display_for
+
+
+def _mk(text):
+    # Escape Rich markup brackets so a name such as 'Fox [Night]' prints as typed.
+    return str(text).replace("[", "\\[")
 
 
 CONFIG_FILE = "config.json"
 REQUEST_TRACKER_FILE = "request_tracker.json"
 TOKEN_TRACKER_FILE = "token_tracker.json"
 GLOBAL_SUBS_FILE = "substitutions.json"
-WIKI_NAME = "wiki.md"
-TMP_SUFFIX = ".p2ptmp"
+TMP_SUFFIX = ".tmp"
 
 REQUEST_LIMIT = 14400
 TOKEN_LIMIT = 1000000
 SOLO_WINDOW = 25        # messages sent to the model in 1:1 chats
 GROUP_WINDOW = 40       # messages sent to each group member
 SELECTOR_WINDOW = 60    # messages the group director reads
+
+AUTOFILL_SYSTEM = (
+    "You write the next message the user would send in this roleplay chat. Write it as the user, in first person, "
+    "using the user's persona where one is given. Respond to the latest messages and move the scene forward. "
+    "Keep it to one to three sentences. Output only the message text, with no quotes, labels or notes."
+)
+ROLL_SYSTEM = (
+    "You add one random event to this roleplay scene. Choose something that fits the setting and the recent messages, "
+    "and that gives the characters something to react to. Write it as a short narrator note in the third person, "
+    "present tense, one to three sentences. Do not write dialogue or actions for the user's character. "
+    "Output only the note text."
+)
+
+
+def _clean_plain(text):
+    # Model output for the chat box or the narrator note: trimmed, wrapping quotes removed, capped in length.
+    t = (text or "").strip()
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'\u201c\u201d":
+        t = t[1:-1].strip()
+    return t[:1000]
 MEMORY_EVERY = 18       # refresh memory.md every N messages
 MEMORY_SNIPPET = 30     # messages fed into a memory.md refresh
 
@@ -75,12 +100,6 @@ FORMAT_INSTRUCTION = (
     "Put speech and dialogue in double quotation marks, like \"this\". Show emphasis in **bold**. "
     "Dialogue may also be in *italics* when it is a whisper, a thought, or a line that must stand apart. "
     "Put the asterisks directly against the words with no space inside them, and close every marker you open."
-)
-WIKI_INSTRUCTION = (
-    "\n\n--- Knowledge Access ---\n"
-    "You have access to a local character wiki file (wiki.md). If you need specific information, "
-    "output the tag '[WIKI_SEARCH: keyword]' and the system will provide the relevant details from the wiki. "
-    "Use this sparingly for deep lore retrieval only."
 )
 GROUP_RULE = (
     "\n\nCRITICAL: You are part of a group chat. Provide a unique response to the user's input. "
@@ -235,13 +254,13 @@ def _entry_key(item):
         return repr(item)
 
 
-def merge_memory(local_data, peer_data):
+def merge_memory(local_data, other_data):
     # Union two chat histories: nothing either device wrote is dropped.
-    if not isinstance(local_data, list) or not isinstance(peer_data, list):
+    if not isinstance(local_data, list) or not isinstance(other_data, list):
         return None
     merged = list(local_data)
     have = {_entry_key(i) for i in local_data}
-    for item in peer_data:
+    for item in other_data:
         if _entry_key(item) not in have:
             merged.append(item)
     return merged
@@ -461,7 +480,6 @@ class Engine:
         self.character_file = os.path.join(ai_dir, "character.md")
         self.memory_file = os.path.join(self.state_dir, "memory.json")
         self.memory_bank_file = os.path.join(self.state_dir, "memory.md")
-        self.wiki_file = os.path.join(ai_dir, WIKI_NAME)
         self.group_config_file = os.path.join(ai_dir, "group_config.json")
 
         self.fallback_models = []
@@ -475,7 +493,7 @@ class Engine:
         self.spicy_to_safe = {}
         self.safe_to_spicy = {}
 
-        self.character_name = ai_dir
+        self.character_name = display_for(ai_dir)
         self.character_color = "cyan"
         self.character_prompt = ""
         self.is_group = False
@@ -536,7 +554,7 @@ class Engine:
             shutil.copy("character.md", self.character_file)
         else:
             with open(self.character_file, "w", encoding="utf-8") as f:
-                f.write("# Character Persona: " + self.ai_dir + "\nColour: Cyan\n- **Personality:** Immersive roleplay partner.")
+                f.write("# Character Persona: " + display_for(self.ai_dir) + "\nColour: Cyan\n- **Personality:** Immersive roleplay partner.")
         if not os.path.exists(self.memory_file):
             with open(self.memory_file, "w", encoding="utf-8") as f:
                 json.dump([], f)
@@ -580,7 +598,7 @@ class Engine:
         self.safe_to_spicy = {v.lower(): k for k, v in self.spicy_to_safe.items()}
 
     def _load_character(self):
-        self.character_name = self.ai_dir
+        self.character_name = display_for(self.ai_dir)
         self.character_color = "cyan"
         self.character_prompt = ""
         self.is_group = False
@@ -594,13 +612,13 @@ class Engine:
                 pass
 
         if self.is_group:
-            self.character_name = self.ai_dir
+            self.character_name = display_for(self.ai_dir)
             self.character_color = "magenta"
             self.character_prompt = (
-                f"You are managing a group chat group named {self.ai_dir} consisting of members: "
-                f"{', '.join(self.group_members)}."
+                f"You are managing a group chat group named {display_for(self.ai_dir)} consisting of members: "
+                f"{', '.join(display_for(m) for m in self.group_members)}."
             )
-            self.log(f"[bold green]Loaded Group Chat: {self.ai_dir} with members {self.group_members} (o_O)[/bold green]")
+            self.log(f"[bold green]Loaded Group Chat: {_mk(display_for(self.ai_dir))} with members {[display_for(m) for m in self.group_members]} (o_O)[/bold green]")
         elif os.path.exists(self.character_file):
             self.character_prompt = _read_text(self.character_file)
             for line in self.character_prompt.splitlines():
@@ -612,12 +630,12 @@ class Engine:
                             self.character_color = get_safe_color(col, "cyan")
                 if "character persona:" in line.lower() or line.startswith("# "):
                     if ":" in line:
-                        parts = line.split(":")
+                        parts = line.split(":", 1)
                         if len(parts) > 1 and len(parts[1].strip()) > 0:
                             self.character_name = parts[1].strip()
                     elif line.startswith("# "):
-                        self.character_name = line.replace("#", "").strip()
-            self.log(f"[bold green]Loaded AI persona from {self.character_file} ({self.character_name}) (^V^)[/bold green]")
+                        self.character_name = line[2:].strip()
+            self.log(f"[bold green]Loaded AI persona from {self.character_file} ({_mk(self.character_name)}) (^V^)[/bold green]")
         else:
             self.character_prompt = "You are a helpful, immersive roleplay partner."
 
@@ -641,11 +659,11 @@ class Engine:
                                 self.user_color = get_safe_color(col, "blue")
                     if "name:" in line.lower() or "persona:" in line.lower() or line.startswith("# "):
                         if ":" in line:
-                            parts = line.split(":")
+                            parts = line.split(":", 1)
                             if len(parts) > 1 and len(parts[1].strip()) > 0:
                                 self.user_display_name = parts[1].strip()
                         elif line.startswith("# "):
-                            self.user_display_name = line.replace("#", "").strip()
+                            self.user_display_name = line[2:].strip()
                 self.log(f"[bold {self.user_color}]Loaded user persona from folder '{self.user_dir}' ({self.user_display_name}) (O_O)[/bold {self.user_color}]")
         elif self.allow_root_user:
             if os.path.exists("user.md"):
@@ -669,10 +687,6 @@ class Engine:
                     prompt += ("\n\n--- Context: memories, locations and situations for this character ---\n" + ctx)
             except Exception as e:
                 self.log(f"[yellow]Could not load context.md: {e}[/yellow]")
-
-        if os.path.exists(self.wiki_file):
-            prompt += WIKI_INSTRUCTION
-            self.log(f"[cyan]✨ Knowledge Access enabled: wiki.md found for {self.character_name}! ✨[/cyan]")
 
         if os.path.exists(self.memory_bank_file):
             try:
@@ -717,18 +731,8 @@ class Engine:
         return text
 
     def prepare_input(self, user_input):
-        # Expand [WIKI_SEARCH: x] tags, then apply safe-word substitutions.
-        processed = user_input
-        if "[WIKI_SEARCH:" in processed:
-            match = re.search(r"\[WIKI_SEARCH:\s*(.*?)\]", processed)
-            if match and os.path.exists(self.wiki_file):
-                keyword = match.group(1).strip()
-                self.log(f"[dim blue]🔍 Searching wiki for: {keyword}[/dim blue]")
-                found = [line for line in _read_text(self.wiki_file).split("\n") if keyword.lower() in line.lower()]
-                snippet = "\n".join(found[:5]) if found else "No specific details found."
-                processed = (f"Context from {self.character_name}'s Wiki about '{keyword}':\n{snippet}\n\n"
-                             f"User Question: {processed.replace(match.group(0), '')}")
-        return self.safe_text(processed)
+        # Apply safe-word substitutions before the text goes to the model.
+        return self.safe_text(user_input)
 
     # ---- model selection
 
@@ -920,15 +924,16 @@ class Engine:
         self.full_history.append({"role": "user", "speaker": "user", "text": processed, "ts": _now_iso()})
         total = 0
         for name in selected:
+            label = display_for(name)
             self._count_request()
             prompt, color = self._member_prompt(name)
             contents = self._window(GROUP_WINDOW, labelled=True)
             resp = None
             for model in self.ordered_models(self.group_models):
                 if on_delta:
-                    on_delta(name, "")
+                    on_delta(label, "")
                 if on_think:
-                    on_think(name, "")
+                    on_think(label, "")
                 progress = {"at": time.time(), "live": True}
                 try:
                     chat = self.client.chats.create(
@@ -937,7 +942,7 @@ class Engine:
                         config=types.GenerateContentConfig(system_instruction=prompt, temperature=0.7,
                                                            thinking_config=thinking_config_for(model, self.thinking)),
                     )
-                    resp = _run_with_limit(self._call, progress, chat, f"[{name} respond to the group]: {processed}", name,
+                    resp = _run_with_limit(self._call, progress, chat, f"[{label} respond to the group]: {processed}", label,
                                            _tracked(on_delta, progress), _tracked(on_think, progress))
                     if not _text(resp):
                         raise RuntimeError("the model sent an empty reply")
@@ -952,7 +957,7 @@ class Engine:
                 continue
             raw = text.strip()
             thought = getattr(resp, "thought", "") or ""
-            result.replies.append(Reply(name, color, raw, self.restore(raw), self.model_name, get_request_bar(), thought))
+            result.replies.append(Reply(label, color, raw, self.restore(raw), self.model_name, get_request_bar(), thought))
             self.full_history.append({"role": "model", "speaker": name, "text": raw, "ts": _now_iso(), **({"thinking": thought} if thought else {})})
             usage = getattr(resp, "usage_metadata", None)
             if usage and hasattr(usage, "total_token_count") and usage.total_token_count:
@@ -974,7 +979,7 @@ class Engine:
 
     def _member_prompt(self, name):
         char_file = os.path.join(name, "character.md")
-        prompt = (f"You are {name}, participating in a group chat. CRITICAL: Provide a unique response to the user's input. "
+        prompt = (f"You are {display_for(name)}, participating in a group chat. CRITICAL: Provide a unique response to the user's input. "
                   "Do not repeat what other group members have already said in this turn. Focus on your specific character's perspective.")
         color = "cyan"
         if os.path.exists(char_file):
@@ -994,10 +999,12 @@ class Engine:
         members = self.group_members
         if not members:
             return [], None
+        labels = {display_for(m): m for m in members}   # display name -> folder name
+        shown = list(labels)
 
         bios = []
         for name in members:
-            snippet = f"Member: {name}"
+            snippet = f"Member: {display_for(name)}"
             char_file = os.path.join(name, "character.md")
             mem_file = os.path.join(name, "memory.md")
             if os.path.exists(char_file):
@@ -1013,15 +1020,15 @@ class Engine:
             bios.append(snippet)
 
         recent = self.full_history[-SELECTOR_WINDOW:]
-        history_text = "\n".join(f"[{e.get('speaker', e['role'])}]: {e['text']}" for e in recent)
+        history_text = "\n".join(f"[{display_for(e['speaker']) if 'speaker' in e else e['role']}]: {e['text']}" for e in recent)
         prompt = (
-            f"You are the director of group chat '{self.ai_dir}'.\n"
-            f"Available members: {members}\n\n"
+            f"You are the director of group chat '{display_for(self.ai_dir)}'.\n"
+            f"Available members: {shown}\n\n"
             f"Member details and memories:\n" + "\n---\n".join(bios) + "\n\n"
             f"Recent chat history:\n{history_text}\n\n"
             f"Current user prompt / input: {processed}\n\n"
             f"CRITICAL INSTRUCTION: Decide how many members (between 1 and {len(members)}) should respond based on the user's prompt and chat context. "
-            f"Select the most relevant character(s) from {members}.\n"
+            f"Select the most relevant character(s) from {shown}.\n"
             f"Return ONLY the names of the selected members separated by commas (e.g. CharacterA, CharacterB), with no extra text or explanation."
         )
 
@@ -1032,7 +1039,7 @@ class Engine:
                 text = _text(chat.send_message(prompt))
                 if text:
                     lowered = text.strip().lower()
-                    found = [n for n in members if n.lower() in lowered]
+                    found = [labels[k] for k in labels if k.lower() in lowered]
                     unique = list(dict.fromkeys(found))
                     if unique:
                         selected = unique
@@ -1042,8 +1049,8 @@ class Engine:
 
         if not selected:
             selected = [random.choice(members)]
-            return selected, f"Group chat selector fallback: selected {selected} (OwO)"
-        return selected, f"Group chat active: AI director selected speakers: {selected} (OwO)"
+            return selected, f"Group chat selector fallback: selected {[display_for(s) for s in selected]} (OwO)"
+        return selected, f"Group chat active: AI director selected speakers: {[display_for(s) for s in selected]} (OwO)"
 
     # ---- saving, undo, memory
 
@@ -1065,6 +1072,53 @@ class Engine:
         with open(self.memory_file, "w", encoding="utf-8") as f:
             json.dump(self.full_history, f, indent=2, ensure_ascii=False)
         return True
+
+    def _scene_system(self, base):
+        # Instructions plus the card and persona, so suggestions and events fit this chat.
+        parts = [base]
+        if self.character_prompt:
+            parts.append("CHARACTER CARD:\n" + self.character_prompt)
+        if self.user_prompt:
+            parts.append("USER PERSONA:\n" + self.user_prompt)
+        return "\n\n".join(parts)
+
+    def _one_shot(self, system, final_prompt):
+        # One model call that is not saved to the chat. Counted like any other request. Returns (text, model).
+        contents = self._window(GROUP_WINDOW if self.is_group else SOLO_WINDOW, labelled=True)
+        models = self.group_models if (self.is_group and self.group_models) else self.fallback_models
+        last_err = None
+        for model in self.ordered_models(models):
+            try:
+                self._count_request(model)
+                chat = self.client.chats.create(
+                    model=model,
+                    history=contents if contents else None,
+                    config=types.GenerateContentConfig(system_instruction=system, temperature=0.9,
+                                                       safety_settings=safety_settings(),
+                                                       thinking_config=thinking_config_for(model, self.thinking)),
+                )
+                text = _text(chat.send_message(final_prompt))
+                if text and text.strip():
+                    return text.strip(), model
+                last_err = RuntimeError("the model sent an empty reply")
+            except Exception as err:
+                last_err = err
+        raise RuntimeError(f"no model could write that ({last_err})")
+
+    def autofill(self):
+        # Draft the user's next message from the chat so far. Not saved: the user edits it and sends it.
+        text, _ = self._one_shot(self._scene_system(AUTOFILL_SYSTEM), "Write the user's next message now.")
+        return _clean_plain(text)
+
+    def roll_event(self):
+        # Add one random event to the chat as a narrator note. It is saved, so the next reply sees it.
+        text, _ = self._one_shot(self._scene_system(ROLL_SYSTEM), "Write the random event now.")
+        text = _clean_plain(text)
+        if not text:
+            raise RuntimeError("the model sent an empty event")
+        self.full_history.append({"role": "user", "speaker": "narrator", "text": "Random event: " + text, "ts": _now_iso()})
+        self.save()
+        return text
 
     def update_memory_bank(self):
         # Rewrite memory.md from the recent history, trying models in order.
