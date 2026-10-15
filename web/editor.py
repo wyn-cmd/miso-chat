@@ -9,7 +9,8 @@ import re
 
 from PIL import Image, ImageOps
 
-NAME_RE = re.compile(r"^[A-Za-z0-9 _\-.]{1,40}$")
+from charname import check_display, folder_for
+
 COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 UPLOAD_MAX = 10 * 1024 * 1024         # largest file an admin may upload
 ICON_OUT_MAX = 512 * 1024             # the stored icon stays under this
@@ -31,16 +32,16 @@ class EditorError(ValueError):
 
 
 def valid_name(name):
-    if not isinstance(name, str) or not NAME_RE.match(name) or name.strip() in (".", ".."):
-        raise EditorError("Names use letters, digits, spaces, _ - or . (up to 40 characters).")
-    if name.startswith((".", "__")):
-        raise EditorError("Names can't start with a dot or two underscores.")
-    return name.strip()
+    # A display name as the admin types it. The folder name is derived from it (charname.folder_for).
+    try:
+        return check_display(name)
+    except ValueError as err:
+        raise EditorError(str(err)) from None
 
 
 def folder_of(root, name):
     name = valid_name(name)
-    path = os.path.join(root, name)
+    path = os.path.join(root, folder_for(name))
     if os.path.dirname(os.path.realpath(path)) != os.path.realpath(root):
         raise EditorError("That name points outside the character folder.")
     return path
