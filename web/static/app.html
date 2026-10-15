@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Miso Chat">
+  <meta name="apple-mobile-web-app-title" content="Miso Chat">
+  <title>Miso Chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#14110f">
+</head>
+<body>
+  <header>
+    <button id="menuBtn" class="ghost menu-btn" type="button" aria-label="Open character list" aria-controls="sidebar" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+    </button>
+    <span class="brand">Miso Chat</span>
+    <span id="headerChat" class="header-chat"></span>
+    <span id="who" class="muted"></span>
+    <span class="spacer"></span>
+    <a id="adminLink" href="/admin" hidden>Admin</a>
+    <button id="pwBtn" class="ghost" type="button">Password</button>
+    <button id="logoutBtn" class="ghost" type="button">Log out</button>
+  </header>
+  <div class="shell">
+    <aside id="sidebar" class="sidebar" aria-label="Characters">
+      <h2>Characters</h2>
+      <div id="charList" class="char-list"></div>
+      <div id="groupBox" hidden>
+        <h2>Group chats</h2>
+        <div id="groupList" class="char-list"></div>
+      </div>
+      <div id="personaBox" hidden>
+        <h2>Persona (you)</h2>
+        <div id="personaList" class="char-list"></div>
+      </div>
+      <div id="accountBox" class="side-section account-box">
+        <h2>Account</h2>
+        <div id="accountSlot"></div>
+      </div>
+      <div id="modelSection" class="side-section">
+        <h2>Model &amp; thinking</h2>
+        <label class="side-label">Model
+          <select id="modelSelect" aria-label="Model"></select>
+        </label>
+        <label class="inline side-label"><input id="thinkToggle" type="checkbox"> Show and use thinking</label>
+        <p id="settingsMsg" class="muted"></p>
+      </div>
+      <div id="editBox" class="side-section" hidden>
+        <h2>Characters (admin)</h2>
+        <button id="editNewBtn" class="ghost small" type="button">+ New character</button>
+      </div>
+    </aside>
+    <div id="scrim" class="scrim" hidden></div>
+    <main class="content">
+    <section id="pwSection" hidden>
+      <h2>Set a new password</h2>
+      <p id="pwNote" class="muted"></p>
+      <form id="pwForm" class="stack">
+        <label>Current password <input type="password" id="pwOld" autocomplete="current-password" required></label>
+        <label>New password (8 characters or more) <input type="password" id="pwNew" autocomplete="new-password" minlength="8" required></label>
+        <div class="row">
+          <button type="submit">Save password</button>
+          <button id="backBtn" class="ghost" type="button" hidden>Back to chat</button>
+        </div>
+        <p id="pwErr" class="error"></p>
+      </form>
+    </section>
+    <section id="editorSection" hidden>
+      <div class="bar">
+        <h1 id="editorTitle" class="chat-title">New character</h1>
+        <span class="spacer"></span>
+        <button id="editorBack" class="ghost" type="button">Back to chat</button>
+      </div>
+      <form id="editorForm" class="stack editor-form">
+        <label>Name <input id="edName" maxlength="40" required></label>
+        <div class="row">
+          <label class="grow">Colour (hex code or pick)
+            <span class="row"><input id="edColourText" placeholder="#c0392b" maxlength="7"><input id="edColour" type="color" aria-label="Colour picker"></span>
+          </label>
+        </div>
+        <label>Character card
+          <textarea id="edCard" rows="14" maxlength="20000" required></textarea>
+        </label>
+        <p class="muted">The card is the character's persona. Keep the <code>Colour:</code> line as it is; the colour above updates it.</p>
+        <label>Context: memories, locations, situations
+          <textarea id="edContext" rows="8" maxlength="20000" placeholder="Memories, places, and situations to add to this character."></textarea>
+        </label>
+        <div class="row">
+          <button id="edExample" class="ghost" type="button">Load example card</button>
+          <button id="edSave" type="submit">Save character</button>
+        </div>
+        <p id="edErr" class="error"></p>
+        <p id="edOk" class="muted"></p>
+      </form>
+      <div class="icon-box">
+        <div id="edIconPreview" class="icon-preview placeholder"></div>
+        <div class="stack">
+          <input id="edIconFile" type="file" accept="image/png,image/jpeg,image/webp">
+          <p class="muted">PNG, JPEG or WebP, up to 10 MB. It is cropped to a square and reduced to under 512 KB. Without one, a placeholder initial is shown.</p>
+          <button id="edIconSave" class="ghost" type="button" disabled>Upload icon</button>
+          <p id="edIconErr" class="error"></p>
+        </div>
+      </div>
+    </section>
+    <section id="chatSection" hidden>
+      <div class="bar">
+          <span id="chatIcon" class="char-icon chat-icon placeholder" aria-hidden="true"></span>
+          <h1 id="chatTitle" class="chat-title"></h1>
+        <span id="usage" class="muted"></span>
+          <button id="settingsBtn" class="ghost settings-btn" type="button" aria-haspopup="dialog" aria-controls="settingsSheet" aria-expanded="false">&#9881; Settings</button>
+          <select id="fontSelect" class="font-select" aria-label="Chat font" title="Chat font">
+            <option value="sans">Sans-serif</option>
+            <option value="serif">Serif (Merriweather)</option>
+            <option value="mono">Monospace</option>
+          </select>
+          <select id="bubbleSelect" class="font-select" aria-label="Bubble style" title="Bubble style">
+            <option value="badge">Name badge</option>
+            <option value="bubble">Coloured bubble</option>
+          </select>
+          <span id="sizeCtl" class="size-ctl" role="group" aria-label="Chat text size">
+            <button id="sizeDown" class="ghost small" type="button" aria-label="Smaller text" title="Smaller text">A&minus;</button>
+            <span id="sizeLabel" class="muted" aria-live="polite">15px</span>
+            <button id="sizeUp" class="ghost small" type="button" aria-label="Larger text" title="Larger text">A+</button>
+          </span>
+        <span class="spacer"></span>
+        <button id="undoBtn" class="ghost" type="button">Undo</button>
+      </div>
+      <div id="log" class="log" aria-live="polite"></div>
+      <form id="chatForm" class="composer">
+        <textarea id="msg" rows="3" maxlength="4000" placeholder="Say something… (Enter sends, Shift+Enter for a new line, /help for commands)"></textarea>
+        <button id="sendBtn" type="submit">Send</button>
+      </form>
+      <p id="chatErr" class="error"></p>
+    </section>
+  </main>
+  </div>
+  <div id="settingsSheet" class="sheet" hidden>
+    <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <div class="sheet-head">
+        <h2 id="sheetTitle">Settings</h2>
+        <button id="sheetClose" class="ghost small" type="button">Done</button>
+      </div>
+      <h2>Appearance</h2>
+      <div class="sheet-row"><span>Highlight colour</span>
+        <span class="accent-ctl"><input id="accentPick" type="color" aria-label="Highlight colour"><button id="accentReset" class="ghost small" type="button">Reset</button></span>
+      </div>
+      <div class="phone-only">
+        <h2>Chat look</h2>
+        <div class="sheet-row"><span>Font type</span><span data-slot="font"></span></div>
+        <div class="sheet-row"><span>Name badge</span><span data-slot="badge"></span></div>
+        <div class="sheet-row"><span>Font size</span><span data-slot="size"></span></div>
+        <div data-slot="persona"></div>
+        <div data-slot="model"></div>
+        <div data-slot="characters"></div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/common.js"></script>
+  <script src="/static/markdown.js"></script>
+  <script src="/static/app.js"></script>
+  <script src="/static/editor.js"></script>
+</body>
+</html>
