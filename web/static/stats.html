@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Miso Chat">
+  <meta name="apple-mobile-web-app-title" content="Miso Chat">
+  <title>Stats · Miso Chat admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#14110f">
+</head>
+<body>
+  <header>
+    <span class="brand">Miso Chat admin</span>
+    <span class="spacer"></span>
+    <a href="/admin">Users and settings</a>
+    <a href="/">Back to chat</a>
+  </header>
+  <main class="stats">
+    <p id="err" class="error"></p>
+
+    <section class="controls">
+      <label>Provider key
+        <select id="providerSel" aria-label="Provider key filter">
+          <option value="all">All providers</option>
+          <option value="gemini">Gemini key</option>
+          <option value="deepseek">DeepSeek key</option>
+          <option value="local">Local LLM key</option>
+          <option value="claude">Claude Code</option>
+        </select>
+      </label>
+      <label>Range
+        <select id="daysSel" aria-label="Date range">
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="365">Last 365 days</option>
+        </select>
+      </label>
+      <button id="reloadBtn" class="ghost" type="button">Refresh</button>
+      <span id="stamp" class="muted"></span>
+    </section>
+
+    <section>
+      <h2>Today (Pacific day)</h2>
+      <div class="bar-track" aria-hidden="true"><div id="todayBar" class="bar-fill"></div></div>
+      <p id="todayText" class="muted"></p>
+    </section>
+
+    <section>
+      <h2>Usage over time</h2>
+      <p id="noteLine" class="muted"></p>
+      <h3 id="hTokens">Tokens per day</h3>
+      <div id="chartTokens" class="chart"></div>
+      <h3 id="hRequests">API calls per day</h3>
+      <div id="chartRequests" class="chart"></div>
+      <h3 id="hMessages">Messages per day</h3>
+      <div id="chartMessages" class="chart"></div>
+    </section>
+
+    <section>
+      <h2>Totals by provider key (selected range)</h2>
+      <table>
+        <thead><tr><th>Provider key</th><th>API calls</th><th>Tokens</th><th>Messages</th></tr></thead>
+        <tbody id="totalsBody"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Accounts today</h2>
+      <table>
+        <thead><tr><th>Account</th><th>API calls</th><th>Tokens</th><th>Messages</th></tr></thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Character statistics (all accounts)</h2>
+      <p class="muted">The same measures as stats.py: messages, estimated tokens (characters ÷ 4), memory bank size and the last memory update. Totals add up every account's copy. The terminal's own history in the character folders is not included.</p>
+      <table>
+        <thead><tr><th>Character</th><th>Accounts</th><th>Msgs</th><th>History (est. tokens)</th><th>Memory bank (est. tokens)</th><th>Last memory update</th></tr></thead>
+        <tbody id="charBody"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Group statistics (all accounts)</h2>
+      <div id="groupBox"></div>
+    </section>
+  </main>
+  <script src="/static/common.js"></script>
+  <script src="/static/stats.js"></script>
+</body>
+</html>

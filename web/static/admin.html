@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Miso Chat">
+  <meta name="apple-mobile-web-app-title" content="Miso Chat">
+  <title>Admin · Miso Chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#14110f">
+</head>
+<body>
+  <header>
+    <span class="brand">Miso Chat admin</span>
+    <span class="spacer"></span>
+    <a href="/admin/stats">Stats</a>
+    <a href="/">Back to chat</a>
+  </header>
+  <main>
+    <p id="err" class="error"></p>
+    <section>
+      <h2>Usage today</h2>
+      <p id="globalUse" class="muted"></p>
+    </section>
+    <section>
+      <h2>Users</h2>
+      <table>
+        <thead>
+          <tr><th>User</th><th>Role</th><th>Status</th><th>Requests today</th><th>Cap</th><th>Tokens today</th><th>Tokens this week</th><th>Tokens this month</th><th>Token budgets (day / week / month)</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="users"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Add a user</h2>
+      <form id="createForm" class="stack narrow">
+        <label>Username <input id="newName" pattern="[A-Za-z0-9_\-]{2,32}" required></label>
+        <label>Starting password (8+ characters, they change it on first login) <input id="newPass" type="text" minlength="8" required></label>
+        <label>Daily cap (blank = default) <input id="newCap" type="number" min="0"></label>
+        <label class="inline"><input id="newAdmin" type="checkbox"> Admin</label>
+        <button type="submit">Create user</button>
+        <p id="createMsg" class="muted"></p>
+      </form>
+    </section>
+    <section>
+      <h2>Limits</h2>
+      <form id="settingsForm" class="stack narrow">
+        <label>Requests per user per day <input id="s_user_daily_cap" type="number" min="1" required></label>
+        <label>Requests for all web users per day <input id="s_global_daily_cap" type="number" min="1" required></label>
+        <label>Requests per minute for all web users <input id="s_rpm_limit" type="number" min="1" required></label>
+        <button type="submit">Save limits</button>
+        <p id="settingsMsg" class="muted"></p>
+      </form>
+    </section>
+    <section>
+      <h2>Model providers</h2>
+      <p class="muted">Keys are stored on the server only and are never shown in full. Leave a key box blank to keep the saved key.</p>
+      <form id="providerForm" class="stack narrow">
+        <fieldset class="prov">
+          <legend>DeepSeek</legend>
+          <label class="inline"><input id="p_deepseek_enabled" type="checkbox"> Enabled</label>
+          <label>API key <input id="p_deepseek_key" type="password" autocomplete="off" placeholder="leave blank to keep"></label>
+          <p id="p_deepseek_hint" class="muted"></p>
+        </fieldset>
+        <fieldset class="prov">
+          <legend>Local LLM (OpenAI-style endpoint)</legend>
+          <label class="inline"><input id="p_local_enabled" type="checkbox"> Enabled</label>
+          <label>Base URL, including /v1 <input id="p_local_url" placeholder="http://127.0.0.1:8000/v1"></label>
+          <label>API key (optional) <input id="p_local_key" type="password" autocomplete="off" placeholder="leave blank to keep"></label>
+          <p id="p_local_hint" class="muted"></p>
+        </fieldset>
+        <fieldset class="prov">
+          <legend>Claude Code (uses the account signed in to the claude CLI)</legend>
+          <label class="inline"><input id="p_claude_enabled" type="checkbox"> Enabled</label>
+          <label>Path to claude (blank = find it on PATH) <input id="p_claude_exe" placeholder="claude"></label>
+          <p id="p_claude_hint" class="muted"></p>
+        </fieldset>
+        <button type="submit">Save providers</button>
+        <p id="providerMsg" class="muted"></p>
+      </form>
+    </section>
+  </main>
+  <script src="/static/common.js"></script>
+  <script src="/static/admin.js"></script>
+  <script src="/static/providers.js"></script>
+</body>
+</html>
