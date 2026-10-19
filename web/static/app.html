@@ -6,11 +6,12 @@
   <meta name="application-name" content="Miso Chat">
   <meta name="apple-mobile-web-app-title" content="Miso Chat">
   <title>Miso Chat</title>
+  <script src="/static/theme-init.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
-  <meta name="theme-color" content="#14110f">
+  <meta name="theme-color" content="#020307">
 </head>
 <body>
   <header>
@@ -24,6 +25,7 @@
     <a id="adminLink" href="/admin" hidden>Admin</a>
     <button id="pwBtn" class="ghost" type="button">Password</button>
     <button id="logoutBtn" class="ghost" type="button">Log out</button>
+    <button id="themeBtn" class="icon-btn" type="button" aria-label="Switch to light theme"></button>
   </header>
   <div class="shell">
     <aside id="sidebar" class="sidebar" aria-label="Characters">
@@ -82,6 +84,7 @@
             <span class="row"><input id="edColourText" placeholder="#c0392b" maxlength="7"><input id="edColour" type="color" aria-label="Colour picker"></span>
           </label>
         </div>
+        <label class="check-row"><input id="edSandbox" type="checkbox"> Give this character a private sandbox: a folder of notes and files it can keep and manage. Off by default.</label>
         <label>Character card
           <textarea id="edCard" rows="14" maxlength="20000" required></textarea>
         </label>
@@ -111,7 +114,7 @@
           <span id="chatIcon" class="char-icon chat-icon placeholder" aria-hidden="true"></span>
           <h1 id="chatTitle" class="chat-title"></h1>
         <span id="usage" class="muted"></span>
-          <button id="settingsBtn" class="ghost settings-btn" type="button" aria-haspopup="dialog" aria-controls="settingsSheet" aria-expanded="false">&#9881; Settings</button>
+          <button id="settingsBtn" class="ghost settings-btn" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-controls="settingsSheet" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke-width="3"/></svg></button>
           <select id="fontSelect" class="font-select" aria-label="Chat font" title="Chat font">
             <option value="sans">Sans-serif</option>
             <option value="serif">Serif (Merriweather)</option>
@@ -127,6 +130,7 @@
             <button id="sizeUp" class="ghost small" type="button" aria-label="Larger text" title="Larger text">A+</button>
           </span>
         <span class="spacer"></span>
+        <button id="memBtn" class="ghost" type="button" title="See and edit what the character remembers">Memory</button>
         <button id="rollBtn" class="ghost" type="button" title="Roll: the model adds a random event to the scene">Roll</button>
         <button id="undoBtn" class="ghost" type="button">Undo</button>
       </div>
@@ -136,9 +140,36 @@
           <textarea id="msg" rows="3" maxlength="4000" placeholder="Say something… (Enter sends, Shift+Enter for a new line, /help for commands)"></textarea>
           <button id="autoBtn" class="dice-btn" type="button" title="Auto-fill: let the model draft your next message" aria-label="Auto-fill your next message"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="1.7" fill="currentColor"/><circle cx="16" cy="8" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="8" cy="16" r="1.7" fill="currentColor"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/></svg></button>
         </div>
-        <button id="sendBtn" type="submit">Send</button>
+        <button id="sendBtn" type="submit" aria-label="Send" title="Send"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/></svg></button>
       </form>
       <p id="chatErr" class="error"></p>
+    </section>
+    <section id="memSection" hidden>
+      <div class="bar">
+        <h1 id="memTitle" class="chat-title">Memory</h1>
+        <span class="spacer"></span>
+        <button id="memBack" class="ghost" type="button">Back to chat</button>
+      </div>
+      <div class="stack editor-form">
+        <label>Memory bank (memory.md)
+          <textarea id="memText" rows="14" maxlength="20000"></textarea>
+        </label>
+        <p class="muted">The character's running notes. A refresh from the chat rewrites this, so anything you must keep goes in the pinned facts.</p>
+        <label>Pinned facts (pinned.md)
+          <textarea id="pinText" rows="6" maxlength="20000"></textarea>
+        </label>
+        <p class="muted">Kept exactly as written. The refresh never changes them, and the character sees them on every reply.</p>
+        <label>Running summary (summary.json)
+          <textarea id="sumText" rows="6" maxlength="20000"></textarea>
+        </label>
+        <p class="muted">Written by the memory refresh as messages leave the rolling window. Edit it to correct what it recorded.</p>
+        <div class="row">
+          <button id="memSave" type="button">Save</button>
+          <button id="memRefresh" class="ghost" type="button" title="Rewrite the memory bank from the recent chat now. Uses one request.">Refresh from chat</button>
+        </div>
+        <p id="memErr" class="error"></p>
+        <p id="memOk" class="muted"></p>
+      </div>
     </section>
   </main>
   </div>
@@ -148,11 +179,30 @@
         <h2 id="sheetTitle">Settings</h2>
         <button id="sheetClose" class="ghost small" type="button">Done</button>
       </div>
+      <h2>Admin</h2>
+      <div class="sheet-row"><span>Character sandboxes</span><a id="sandboxLink" href="/admin/sandboxes" hidden>Open</a></div>
       <h2>Appearance</h2>
       <div class="sheet-row"><span>Highlight colour</span>
         <span class="accent-ctl"><input id="accentPick" type="color" aria-label="Highlight colour"><button id="accentReset" class="ghost small" type="button">Reset</button></span>
       </div>
+      <div id="charSettings" hidden>
+        <h2>This character</h2>
+        <div class="sheet-row slider-row"><label for="tempSlider">Creativity (temperature) <span id="tempVal" class="muted"></span></label>
+          <span class="slider-ctl"><input id="tempSlider" type="range" min="0" max="1.5" step="0.05" aria-label="Creativity"><button id="tempReset" class="ghost small" type="button">Default</button></span>
+        </div>
+      </div>
+      <h2>Chat history</h2>
+      <div class="sheet-row slider-row"><label for="winSlider">Rolling window (messages) <span id="winVal" class="muted"></span></label>
+        <span class="slider-ctl"><input id="winSlider" type="range" min="1" max="100" step="1" aria-label="Rolling window in messages"><button id="winReset" class="ghost small" type="button">Default</button></span>
+      </div>
+      <p id="winNote" class="muted"></p>
+      <div class="sheet-row"><span>Export this chat</span>
+        <span class="slider-ctl"><button id="exportMd" class="ghost small" type="button">Markdown</button><button id="exportTxt" class="ghost small" type="button">Text</button></span>
+      </div>
+      <p id="charMsg" class="muted"></p>
       <div class="phone-only">
+        <h2>Character</h2>
+        <div class="sheet-row"><span>Memory</span><span data-slot="memory"></span></div>
         <h2>Chat look</h2>
         <div class="sheet-row"><span>Font type</span><span data-slot="font"></span></div>
         <div class="sheet-row"><span>Name badge</span><span data-slot="badge"></span></div>
