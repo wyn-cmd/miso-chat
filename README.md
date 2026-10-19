@@ -140,8 +140,6 @@ This repository does not include an automated test suite. A basic static check i
 
 The version is in `VERSION`, and every release is listed in `CHANGELOG.md`. Each release is tagged on GitHub (for example `v1.1.0`).
 
-Comments in Python code use `#`. Do not use docstrings (triple-quoted strings) for comments. Keep comments short, and say why something is done rather than repeating what the code says.
-
 ## Credits and licences
 
 - Miso Chat is released under the MIT licence. See `LICENSE`.
