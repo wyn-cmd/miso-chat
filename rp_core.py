@@ -35,7 +35,6 @@ CONFIG_FILE = "config.json"
 REQUEST_TRACKER_FILE = "request_tracker.json"
 TOKEN_TRACKER_FILE = "token_tracker.json"
 GLOBAL_SUBS_FILE = "substitutions.json"
-WIKI_NAME = "wiki.md"
 TMP_SUFFIX = ".p2ptmp"
 
 REQUEST_LIMIT = 14400
@@ -116,12 +115,6 @@ FORMAT_INSTRUCTION = (
     "Put speech and dialogue in double quotation marks, like \"this\". Show emphasis in **bold**. "
     "Dialogue may also be in *italics* when it is a whisper, a thought, or a line that must stand apart. "
     "Put the asterisks directly against the words with no space inside them, and close every marker you open."
-)
-WIKI_INSTRUCTION = (
-    "\n\n--- Knowledge Access ---\n"
-    "You have access to a local character wiki file (wiki.md). If you need specific information, "
-    "output the tag '[WIKI_SEARCH: keyword]' and the system will provide the relevant details from the wiki. "
-    "Use this sparingly for deep lore retrieval only."
 )
 GROUP_RULE = (
     "\n\nCRITICAL: You are part of a group chat. Provide a unique response to the user's input. "
@@ -533,7 +526,6 @@ class Engine:
         self.summary_text = ""
         self.summary_covered = 0           # how many messages from the start the summary already covers
         self._load_summary()
-        self.wiki_file = os.path.join(ai_dir, WIKI_NAME)
         self.group_config_file = os.path.join(ai_dir, "group_config.json")
         # per account and character, next to memory.json; only when the character's flag is on
         self.sandbox_root = sandbox.root_for(self.state_dir) if sandbox.is_enabled(ai_dir) else None
@@ -745,10 +737,6 @@ class Engine:
             except Exception as e:
                 self.log(f"[yellow]Could not load context.md: {e}[/yellow]")
 
-        if os.path.exists(self.wiki_file):
-            prompt += WIKI_INSTRUCTION
-            self.log(f"[cyan]✨ Knowledge Access enabled: wiki.md found for {self.character_name}! ✨[/cyan]")
-
         if os.path.exists(self.memory_bank_file):
             try:
                 mb_content = _read_text(self.memory_bank_file)
@@ -801,18 +789,7 @@ class Engine:
         return text
 
     def prepare_input(self, user_input):
-        # Expand [WIKI_SEARCH: x] tags, then apply safe-word substitutions.
-        processed = user_input
-        if "[WIKI_SEARCH:" in processed:
-            match = re.search(r"\[WIKI_SEARCH:\s*(.*?)\]", processed)
-            if match and os.path.exists(self.wiki_file):
-                keyword = match.group(1).strip()
-                self.log(f"[dim blue]🔍 Searching wiki for: {keyword}[/dim blue]")
-                found = [line for line in _read_text(self.wiki_file).split("\n") if keyword.lower() in line.lower()]
-                snippet = "\n".join(found[:5]) if found else "No specific details found."
-                processed = (f"Context from {self.character_name}'s Wiki about '{keyword}':\n{snippet}\n\n"
-                             f"User Question: {processed.replace(match.group(0), '')}")
-        return self.safe_text(processed)
+        return self.safe_text(user_input)
 
     # ---- model selection
 
