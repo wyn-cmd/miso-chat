@@ -48,13 +48,6 @@ def folder_of(root, name):
     return path
 
 
-def valid_colour(value):
-    value = (value or "").strip()
-    if not COLOUR_RE.match(value):
-        raise EditorError("Colour must be a hex code such as #c0392b.")
-    return value.lower()
-
-
 def read_card(root, name):
     path = folder_of(root, name)
     if not os.path.isfile(os.path.join(path, "character.md")):
