@@ -89,10 +89,6 @@ DEFAULT_FALLBACKS = [
 PRIORITY_MODELS = ["gemini-3.8-flash", "gemma-4-31b-it"]
 MEMORY_MODELS_HEAD = ["gemini-3.8-flash", "gemma-4-31b-it"]
 MEMORY_MODELS_TAIL = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
-EXCLUDED_MODEL_WORDS = [
-    "tts", "image", "embed", "audio", "transcribe", "veo", "lyria",
-    "robotics", "omni", "preview",
-]
 
 # Starts empty. Words are added through substitutions.json in the project root.
 DEFAULT_SUBSTITUTIONS = {}
