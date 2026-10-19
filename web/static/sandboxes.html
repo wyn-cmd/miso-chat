@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Miso Chat">
+  <title>Sandboxes · Miso Chat</title>
+  <script src="/static/theme-init.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#020307">
+</head>
+<body>
+  <header>
+    <span class="brand">Character sandboxes</span>
+    <span class="spacer"></span>
+    <a href="/admin">Admin</a>
+    <a href="/">Back to chat</a>
+    <button id="themeBtn" class="icon-btn" type="button" aria-label="Switch to light theme"></button>
+  </header>
+  <main>
+    <p id="err" class="error"></p>
+    <section>
+      <h2>Pick a character</h2>
+      <p class="muted">Read-only. You can see what the model has saved, but you can't change it from here.</p>
+      <label>Character <select id="charPick"></select></label>
+    </section>
+    <section id="accountsSection" hidden>
+      <h2 id="accountsTitle"></h2>
+      <p id="flagNote" class="muted"></p>
+      <table>
+        <thead>
+          <tr><th>Account</th><th>Files</th><th>Size</th><th>Browse</th></tr>
+        </thead>
+        <tbody id="accounts"></tbody>
+      </table>
+    </section>
+    <section id="browseSection" hidden>
+      <h2 id="browseTitle"></h2>
+      <p class="muted">Path: <code id="browsePath">/</code></p>
+      <div class="row">
+        <button id="browseUp" class="ghost small" type="button">Up one folder</button>
+      </div>
+      <ul id="listing" class="sandbox-list"></ul>
+      <h2 id="fileTitle" hidden></h2>
+      <pre id="fileText" class="sandbox-file" hidden></pre>
+      <p id="fileNote" class="muted"></p>
+    </section>
+  </main>
+  <script src="/static/common.js"></script>
+  <script src="/static/sandboxes.js"></script>
+</body>
+</html>

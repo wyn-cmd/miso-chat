@@ -1,32 +1,60 @@
+@font-face { font-family: "Inter"; src: url("/static/fonts/inter-latin-variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("/static/fonts/jetbrains-mono-latin-variable.woff2") format("woff2"); font-weight: 100 800; font-style: normal; font-display: swap; }
+
+/* Portfolio design tokens (dark is the default; [data-theme="light"] is set by theme-init.js / common.js). */
 :root {
   color-scheme: dark;
-  --bg:#14110f; --ink:#ece5dd; --muted:#a1978f; --accent:#e8836a; --line:#3a332e;
-  --card:#1e1a17; --mine:#2d2620; --theirs:#1e1a17; --input:#2a2521;
-  --error:#ff8f8f; --on-accent:#14110f;
+  --bg:#020307; --bg-soft:#0d1220; --card:#111827; --surface:#111827; --surface-2:#16203a;
+  --ink:#e9eff9; --text:#e9eff9; --text-soft:#b6c2d6; --muted:#8494ad;
+  --line:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.18);
+  --accent:#4cc4ff; --accent-2:#9b8cff; --accent-3:#4ade80;
+  --accent-soft:color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-glow:color-mix(in srgb, var(--accent) 38%, transparent);
+  --mine:color-mix(in srgb, var(--accent) 11%, var(--surface)); --theirs:var(--surface);
+  --input:var(--bg-soft); --chip:var(--surface-2);
+  --char-bg:#030509; --char-hover:#0a0f1c; --char-line:rgba(233,239,249,.55);
+  --char-active-bg:color-mix(in srgb, var(--accent) 9%, #030509); --char-active-line:rgba(233,239,249,.92);
+  --error:#ff8a8a; --on-accent:#04121f; --em:#c3cde0;
+  --radius:16px; --radius-sm:10px; --shadow:0 18px 45px rgba(0,0,0,.45);
+  --font-sans:"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+[data-theme="light"] {
+  color-scheme: light;
+  --bg:#f6f8fc; --bg-soft:#ffffff; --card:#ffffff; --surface:#ffffff; --surface-2:#eef2f9;
+  --ink:#0d1728; --text:#0d1728; --text-soft:#33445e; --muted:#5d6e88;
+  --line:rgba(9,20,40,.1); --border-strong:rgba(9,20,40,.2);
+  --accent:#0b7fd4; --accent-2:#6a4ce0; --accent-3:#14884a;
+  --error:#c0392b; --on-accent:#ffffff; --em:#3d4f68;
+  --shadow:0 16px 38px rgba(15,30,60,.12);
+  --input:#ffffff; --chip:#eef2f9;
+  --char-bg:transparent; --char-hover:var(--input); --char-line:transparent;
+  --char-active-bg:var(--accent-soft); --char-active-line:var(--accent-glow);
 }
 * { box-sizing: border-box; }
-body { margin:0; font: 15px/1.5 system-ui, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+body { margin:0; font: 15px/1.6 var(--font-sans); background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; }
 body.centered { display:flex; min-height:100vh; align-items:center; justify-content:center; }
 header { display:flex; gap:10px; align-items:center; height:52px; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--card); }
 header a, header button { font: inherit; }
 main { max-width: 960px; margin: 0 auto; padding: 16px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:24px; width:min(360px, 92vw); }
 h1 { margin:0 0 12px; font-size:22px; } h2 { font-size:18px; margin:18px 0 8px; }
-.brand { font-weight:700; color:var(--accent); }
+.brand { font-weight:700; color:var(--ink); letter-spacing:-0.01em; }
 .muted { color:var(--muted); font-size:13px; }
 .error { color:var(--error); min-height:1.2em; margin:6px 0 0; }
 .spacer { flex:1; }
 .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
-select, input, textarea { font: inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--input); color:var(--ink); }
+select, input, textarea { font: inherit; padding:8px 11px; border:1px solid var(--line); border-radius:10px; background:var(--input); color:var(--ink); transition: border-color .15s, box-shadow .15s; }
+select:focus, input:focus, textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
 input[type=number].cap { width:90px; }
 label { display:flex; flex-direction:column; gap:4px; font-size:14px; }
 label.inline { flex-direction:row; align-items:center; gap:8px; }
 .stack { display:flex; flex-direction:column; gap:12px; }
 .narrow { max-width:420px; }
 .row { display:flex; gap:8px; align-items:center; }
-button { font: inherit; padding:8px 14px; border:1px solid var(--accent); background:var(--accent); color:var(--on-accent); border-radius:6px; cursor:pointer; }
+button { font: inherit; font-weight:600; padding:9px 16px; border:1px solid transparent; background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:var(--on-accent); border-radius:10px; cursor:pointer; }
 button:disabled { opacity:.5; cursor:default; }
-button.ghost { background:transparent; color:var(--accent); }
+button.ghost { background:var(--surface); color:var(--text-soft); border:1px solid var(--line); font-weight:500; }
 button.small { padding:3px 8px; font-size:13px; margin:0 2px; }
 a { color:var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -51,8 +79,8 @@ th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); 
 .sidebar { width: 240px; flex: none; overflow-y: auto; background: var(--card); border-right: 1px solid var(--line); padding: 4px 12px 16px; }
 .sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 4px 6px; }
 .char-list { display: flex; flex-direction: column; gap: 2px; }
-.char-item { text-align: left; background: transparent; color: var(--ink); border: 1px solid transparent; padding: 7px 10px; border-radius: 6px; }
-.char-item:hover:not(:disabled) { background: var(--input); }
+.char-item { text-align: left; background: var(--char-bg); color: var(--ink); border: 1px solid var(--char-line); padding: 7px 10px; border-radius: 6px; }
+.char-item:hover:not(:disabled) { background: var(--char-hover); }
 .char-item.active { background: var(--mine); border-color: var(--accent); font-weight: 700; }
 .content { flex: 1; min-width: 0; margin: 0; max-width: none; overflow-y: auto; display: flex; flex-direction: column; padding: 14px 18px; }
 #chatSection { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; max-width: 1120px; margin: 0 auto; }
@@ -100,7 +128,7 @@ body.locked .sidebar, body.locked .menu-btn { display: none; }
 /* ---- chat fonts: picked per browser from the bar above the chat (Merriweather is self-hosted, OFL) */
 @font-face { font-family: "Merriweather"; src: url("/static/fonts/merriweather-latin-wght-normal.woff2") format("woff2"); font-weight: 300 900; font-style: normal; font-display: swap; }
 @font-face { font-family: "Merriweather"; src: url("/static/fonts/merriweather-latin-wght-italic.woff2") format("woff2"); font-weight: 300 900; font-style: italic; font-display: swap; }
-body { --chat-font: system-ui, "Segoe UI", sans-serif; --chat-size: 15px; }
+body { --chat-font: var(--font-sans); --chat-size: 15px; }
 body.font-serif { --chat-font: "Merriweather", Georgia, serif; }
 body.font-mono { --chat-font: ui-monospace, Consolas, "Cascadia Mono", monospace; }
 .log, #msg { font-family: var(--chat-font); font-size: var(--chat-size); }
@@ -110,7 +138,6 @@ body.font-mono { --chat-font: ui-monospace, Consolas, "Cascadia Mono", monospace
 .font-select { padding: 4px 8px; font-size: 13px; }
 
 /* ---- italics: a shade greyer than the body text, so emphasis reads without changing the font */
-:root { --em: #cbc2b9; }
 .text em { color: var(--em); }
 
 /* ---- character colours (from each character.md Colour: line) */
@@ -306,10 +333,9 @@ header { font-size: clamp(10px, calc(var(--chat-size) * 0.87), 16px); }
 .sheet .char-list { display: flex; flex-direction: column; gap: 4px; }
 .sheet .char-item { padding: 8px 10px; font-size: 14px; }
 
-/* ---- highlight colour and a more modern surface. --accent is set from Settings (see common.js). */
-:root { --radius: 14px; --shadow: 0 8px 28px rgba(0, 0, 0, .35); --surface: #1a1613; }
-body { background: radial-gradient(900px 480px at 0% -10%, var(--accent-soft), transparent 70%), var(--bg); background-attachment: fixed; }
-header { position: sticky; top: 0; z-index: 10; background: rgba(30, 26, 23, .82); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 1px 0 var(--line), 0 6px 18px rgba(0, 0, 0, .25); }
+/* ---- highlight colour and surface. --accent is set from Settings (see common.js); the theme tokens live at the top. */
+body { background: radial-gradient(900px 480px at 0% -10%, var(--accent-soft), transparent 70%), radial-gradient(700px 420px at 100% -6%, color-mix(in srgb, var(--accent-2) 13%, transparent), transparent 70%), var(--bg); background-attachment: fixed; }
+header { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--card) 82%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 1px 0 var(--line), 0 6px 18px rgba(0, 0, 0, .25); }
 .brand { letter-spacing: .01em; }
 .card { border-radius: var(--radius); box-shadow: var(--shadow); }
 table { border-radius: 10px; overflow: hidden; }
@@ -319,7 +345,7 @@ button:not(:disabled):not(.ghost):hover { box-shadow: 0 0 0 3px var(--accent-sof
 button:not(:disabled):active { transform: translateY(1px); }
 button.ghost:not(:disabled):hover { background: var(--accent-soft); }
 /* filled buttons sit a shade off the page background, nudged toward the highlight colour */
-button:not(.ghost) { background: var(--btn-bg); color: var(--ink); border-color: var(--accent-glow); }
+button:not(.ghost) { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--on-accent); border-color: transparent; }
 select, input, textarea { border-radius: 10px; transition: border-color .15s, box-shadow .15s; }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .log { border-radius: var(--radius); border: 1px solid var(--accent); background: var(--card); box-shadow: 0 0 0 1px var(--accent-soft), 0 12px 32px rgba(0, 0, 0, .3); }
@@ -328,8 +354,8 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 #msg { border: 1px solid var(--accent); border-radius: var(--radius); }
 .sidebar { background: var(--card); }
 .char-item { border-radius: 10px; }
-.char-item.active { background: var(--accent-soft); border-color: var(--accent-glow); box-shadow: inset 3px 0 0 var(--accent); }
-.char-item:hover:not(:disabled) { background: var(--input); }
+.char-item.active { background: var(--char-active-bg); border-color: var(--char-active-line); box-shadow: inset 3px 0 0 var(--accent); }
+.char-item:hover:not(:disabled) { background: var(--char-hover); }
 a { text-decoration-color: var(--accent-glow); text-underline-offset: 3px; }
 .brand { letter-spacing: .01em; }
 .card { border-radius: var(--radius); box-shadow: var(--shadow); }
@@ -347,8 +373,8 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 #msg { border: 1px solid var(--accent); border-radius: var(--radius); }
 .sidebar { background: linear-gradient(180deg, var(--card), var(--bg)); }
 .char-item { border-radius: 10px; }
-.char-item.active { background: var(--accent-soft); border-color: var(--accent-glow); box-shadow: inset 3px 0 0 var(--accent); }
-.char-item:hover:not(:disabled) { background: var(--input); }
+.char-item.active { background: var(--char-active-bg); border-color: var(--char-active-line); box-shadow: inset 3px 0 0 var(--accent); }
+.char-item:hover:not(:disabled) { background: var(--char-hover); }
 a { text-decoration-color: var(--accent-glow); text-underline-offset: 3px; }
 
 /* ---- Settings: a centred dialog on desktop (the bottom sheet stays on phones). The Settings button shows on desktop too. */
@@ -390,3 +416,69 @@ a { text-decoration-color: var(--accent-glow); text-underline-offset: 3px; }
   .dice-btn { width: 26px; height: 26px; right: 6px; bottom: 6px; }
   .msg-wrap textarea { padding-right: 38px; }
 }
+
+/* ---- sandboxes: the editor's checkbox row and the admin browser */
+.check-row { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+.check-row input { width: auto; }
+.sandbox-list { list-style: none; padding: 0; margin: 8px 0; }
+.sandbox-list li { padding: 6px 8px; border-bottom: 1px solid var(--line); cursor: pointer; font-family: ui-monospace, Consolas, monospace; font-size: 14px; }
+.sandbox-list li:hover, .sandbox-list li:focus { background: var(--surface-2); outline: none; }
+.sandbox-list li.muted { cursor: default; }
+.sandbox-file { white-space: pre-wrap; word-break: break-word; max-height: 60vh; overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 13px; }
+.turn-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: 0.2rem 0 0.8rem; }
+.turn-tools .turn-count { min-width: 3.5em; text-align: center; }
+
+/* ---- phones, final say: the header row reads icon, name, Undo, Roll, then the Settings gear on the far right.
+   The chat bar keeps only the usage line. Written last so it wins over the older phone rules above. */
+#headerChat .settings-btn { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; }
+#headerChat .settings-btn svg { width: 20px; height: 20px; }
+@media (max-width: 760px) {
+  #headerChat { gap: 6px; }
+  header > .spacer { display: none; }   /* otherwise it takes the leftover width and pushes the gear off the right edge */
+  #headerChat > .chat-title { flex: 1 1 0; }
+  #headerChat > #undoBtn, #headerChat > #rollBtn { flex: none; padding: 3px 8px; font-size: 13px; }
+  #chatSection .bar { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
+  #chatSection .bar > #usage { order: 0; flex: 1 1 auto; min-width: 0; }
+}
+
+/* ---- Send is an up arrow on every screen; on phones the header row has no Roll button (Roll stays in the chat bar on desktop). */
+#sendBtn { display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; min-width: 48px; }
+#sendBtn svg { width: 20px; height: 20px; }
+@media (max-width: 760px) {
+  #sendBtn { min-width: 44px; padding: 0 10px; }
+  #headerChat > #rollBtn { display: none; }
+}
+
+/* ---- settings sliders, edit-in-place for saved messages */
+.slider-row { flex-wrap: wrap; gap: 6px; }
+.slider-ctl { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.slider-ctl input[type=range] { width: 150px; max-width: 100%; }
+.edit-btn { margin-top: 4px; font-size: 12px; opacity: .7; }
+.edit-btn:hover, .edit-btn:focus-visible { opacity: 1; }
+.edit-box { width: 100%; box-sizing: border-box; font: inherit; margin-top: 4px; min-height: 72px; }
+.edit-bar { display: flex; gap: 6px; margin-top: 4px; }
+
+/* ---- portfolio polish: brand mark, icon buttons, theme toggle */
+header .brand { display: inline-flex; align-items: center; gap: 9px; }
+header .brand::before {
+  content: ""; display: inline-block; width: 28px; height: 28px; flex: 0 0 28px;
+  background: url("/static/icon.svg") center / contain no-repeat;
+}
+.icon-btn { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text-soft); cursor: pointer; }
+.icon-btn:hover { border-color: var(--border-strong); color: var(--ink); }
+.icon-btn svg { width: 17px; height: 17px; }
+.theme-float { position: fixed; top: 14px; right: 14px; z-index: 30; }
+header .icon-btn { flex: 0 0 36px; }
+
+/* ---- dark mode only: a touch darker buttons (the page background is set in the tokens at the top) */
+:root:not([data-theme="light"]) button:not(.ghost) {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 86%, #000), color-mix(in srgb, var(--accent-2) 86%, #000));
+}
+:root:not([data-theme="light"]) button.ghost { background: color-mix(in srgb, var(--surface) 86%, #000); }
+
+/* ---- dark mode: sidebar characters are dark cards with a light outline. The global button:not(.ghost) gradient
+   is more specific than .char-item, so these rules repeat the selector with the same extra specificity. */
+:root:not([data-theme="light"]) button:not(.ghost).char-item { background: var(--char-bg); color: var(--ink); border-color: var(--char-line); }
+:root:not([data-theme="light"]) button:not(.ghost).char-item:hover:not(:disabled) { background: var(--char-hover); }
+:root:not([data-theme="light"]) button:not(.ghost).char-item.active { background: var(--char-active-bg); border-color: var(--char-active-line); }

@@ -9,6 +9,7 @@ import re
 
 from PIL import Image, ImageOps
 
+import sandbox
 from charname import check_display, folder_for
 
 COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -67,10 +68,10 @@ def read_card(root, name):
     m = re.search(r"^\s*[-*]?\s*colou?r\s*:\s*(.+)$", card, re.I | re.M)
     colour = m.group(1).split("/")[0].strip() if m else ""
     return {"name": name, "card": card, "context": context, "colour": colour,
-            "has_icon": icon_path(root, name) is not None}
+            "has_icon": icon_path(root, name) is not None, "sandbox": sandbox.is_enabled(path)}
 
 
-def write_card(root, name, card, context, colour_hex, creating):
+def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None):
     path = folder_of(root, name)
     if creating and os.path.exists(path):
         raise EditorError("A character with that name already exists.")
@@ -88,6 +89,8 @@ def write_card(root, name, card, context, colour_hex, creating):
     # on an existing character, a colour name such as 'Crimson' is kept as it is in the card
     os.makedirs(path, exist_ok=True)
     _atomic_write(os.path.join(path, "character.md"), card)
+    if sandbox_on is not None:      # None leaves the flag as it is
+        sandbox.set_enabled(path, sandbox_on)
     context_path = os.path.join(path, "context.md")
     if (context or "").strip():
         _atomic_write(context_path, context.strip() + "\n")
