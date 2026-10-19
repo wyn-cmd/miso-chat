@@ -2,6 +2,12 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## Unreleased
+
+### Added
+
+- Reply length target: a Settings slider, per account, that asks the model to aim for a reply of about the chosen number of tokens, not counting reasoning. The admin sets the allowed range (default 50 to 1000) under Limits, and it applies to the whole site.
+
 ## 1.1.1 - 2026-10-19
 
 A small release. Apart from the wiki removal, nothing changes what the app does.

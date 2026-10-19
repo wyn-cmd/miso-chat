@@ -351,6 +351,7 @@ def _slot(st, user, name, is_group):
     engine.thinking = thinking
     engine.window_override = _pref_int(st.store.get_pref(uid, "window"))
     engine.temperature_override = _pref_float(st.store.get_pref(uid, "temp:" + name))
+    engine.reply_length_override = _reply_target(st, uid)
     chosen = st.store.get_pref(user["id"], "model") or ""
     if chosen and (chosen in engine.fallback_models or chosen in engine.extra_models):
         engine.pin_model(chosen)   # a saved model choice applies to every chat until changed
@@ -565,6 +566,20 @@ def _pref_float(value):
         return float(value) if value not in (None, "") else None
     except (TypeError, ValueError):
         return None
+
+
+def _reply_bounds(store):
+    # The admin's site-wide range for the reply length target, in tokens.
+    return int(store.get_setting("reply_min_tokens")), int(store.get_setting("reply_max_tokens"))
+
+
+def _reply_target(st, uid):
+    # This account's reply length target, kept inside the admin's range. None = no target.
+    raw = _pref_int(st.store.get_pref(uid, "reply_length"))
+    if raw is None:
+        return None
+    lo, hi = _reply_bounds(st.store)
+    return max(lo, min(hi, raw))
 
 
 def _chat_settings_payload(st, user, name, is_group):
@@ -922,6 +937,8 @@ def make_app(client=None, data_dir=None, char_root=None):
                               "cap": int(store.get_setting("global_daily_cap"))}
             info["persona"] = _persona_info(st, user)
             info["thinking"] = _thinking_on(st, user)
+            info["reply_length"] = _reply_target(st, user["id"])
+            info["reply_length_bounds"] = list(_reply_bounds(store))
             info["models"] = {"gemini": "auto", "extra": _extra_models(st)}
             info["model"] = store.get_pref(user["id"], "model") or ""   # the saved choice, so the picker reloads it
             info["personas"] = _persona_list(st)
@@ -1151,12 +1168,30 @@ def make_app(client=None, data_dir=None, char_root=None):
             with st.slots_lock:
                 for k in [k for k in st.slots if k[0] == user["id"]]:
                     st.slots.pop(k, None)
+        if "reply_length" in body:
+            raw = body["reply_length"]
+            if raw in (None, ""):
+                value = ""
+            else:
+                try:
+                    n = int(raw)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, "The reply length must be a whole number of tokens.")
+                lo, hi = _reply_bounds(store)
+                if not lo <= n <= hi:
+                    raise HTTPException(400, f"The reply length must be between {lo} and {hi} tokens.")
+                value = str(n)
+            with st.slots_lock:
+                if any(st.slots[k].lock.locked() for k in st.slots if k[0] == user["id"]):
+                    raise HTTPException(409, "Wait for the current reply to finish before changing the reply length.")
+            store.set_pref(user["id"], "reply_length", value)
         # cached engines hold the old settings; drop them so the next turn picks up the new ones
         with st.slots_lock:
             for k in [k for k in st.slots if k[0] == user["id"]]:
                 st.slots.pop(k, None)
         return {"thinking": _thinking_on(st, user), "model": store.get_pref(user["id"], "model") or "",
-                "window": _pref_int(store.get_pref(user["id"], "window"))}
+                "window": _pref_int(store.get_pref(user["id"], "window")),
+                "reply_length": _reply_target(st, user["id"])}
 
     @app.get("/api/character-settings")
     async def character_settings_get(request: Request, character: str):
@@ -1429,6 +1464,10 @@ def make_app(client=None, data_dir=None, char_root=None):
                 raise HTTPException(400, f"Unknown setting: {key}")
             if not isinstance(val, int) or val < 1:
                 raise HTTPException(400, f"{key} must be a whole number of at least 1.")
+        lo = int(body.get("reply_min_tokens", store.get_setting("reply_min_tokens")))
+        hi = int(body.get("reply_max_tokens", store.get_setting("reply_max_tokens")))
+        if not 10 <= lo <= hi <= 4000:
+            raise HTTPException(400, "Reply length must be between 10 and 4000 tokens, and the shortest cannot be longer than the longest.")
         for key, val in body.items():
             store.set_setting(key, val)
         return store.all_settings()

@@ -518,6 +518,7 @@ class Engine:
         self.pinned_file = os.path.join(self.state_dir, "pinned.md")   # facts the memory refresh never touches
         self.window_override = None        # the user's rolling window size; None = the defaults
         self.temperature_override = None   # the character's creativity; None = the defaults
+        self.reply_length_override = None  # the reply length target in tokens, not counting reasoning; None = no target
         self.summary_file = os.path.join(self.state_dir, "summary.json")
         self.summary_text = ""
         self.summary_covered = 0           # how many messages from the start the summary already covers
@@ -750,6 +751,7 @@ class Engine:
                 self.log(f"[yellow]Could not load pinned.md: {e}[/yellow]")
         if self.summary_text:
             prompt += "\n\n--- Earlier in this chat (running summary) ---\n" + self.summary_text
+        prompt += self.reply_length_clause()
         self.system_prompt = prompt
 
     def _load_history(self):
@@ -1079,7 +1081,7 @@ class Engine:
                         col = parts[1].strip().lower()
                         if col:
                             color = get_safe_color(col, "cyan")
-        return prompt + NARRATIVE_INSTRUCTION + DIALOGUE_INSTRUCTION + FORMAT_INSTRUCTION, color
+        return prompt + NARRATIVE_INSTRUCTION + DIALOGUE_INSTRUCTION + FORMAT_INSTRUCTION + self.reply_length_clause(), color
 
     def _select_members(self, processed):
         # Ask the director model which members speak. Returns (names, note).
@@ -1218,6 +1220,15 @@ class Engine:
             if e.get("role") == "user" and e.get("speaker") != "narrator":
                 return i
         return None
+
+    def reply_length_clause(self):
+        # The user's reply length target, as a guide for the model. The reply is not cut off at it.
+        if self.reply_length_override is None:
+            return ""
+        tokens = int(self.reply_length_override)
+        words = max(1, round(tokens * 0.75))
+        return (f"\n\n--- Reply length ---\nAim for each reply to be about {tokens} tokens (roughly {words} words). "
+                "This is a target, not a hard limit. Reasoning does not count toward it.")
 
     def window_size(self):
         # Messages sent to the model: the user's rolling window if set, else the 1:1 or group default.

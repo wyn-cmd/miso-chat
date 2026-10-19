@@ -339,6 +339,9 @@ $("tempReset").addEventListener("click", () => saveCharSettings({ temperature: n
 $("winSlider").addEventListener("input", () => { $("winVal").textContent = $("winSlider").value; });
 $("winSlider").addEventListener("change", () => saveWindow(Number($("winSlider").value)));
 $("winReset").addEventListener("click", () => saveWindow(null));
+$("replySlider").addEventListener("input", () => { $("replyVal").textContent = `${$("replySlider").value} tokens`; });
+$("replySlider").addEventListener("change", () => saveReplyLength(Number($("replySlider").value)));
+$("replyReset").addEventListener("click", () => saveReplyLength(null));
 $("exportMd").addEventListener("click", () => exportChat("md"));
 $("exportTxt").addEventListener("click", () => exportChat("txt"));
 
@@ -499,6 +502,32 @@ function renderModels() {
   }
   sel.value = (me && me.model) || "";
   $("thinkToggle").checked = !!(me && me.thinking);
+  renderReplyLength();
+}
+
+// The reply length target. The server keeps it inside the admin range; null means no target.
+function renderReplyLength() {
+  const [lo, hi] = (me && me.reply_length_bounds) || [50, 1000];
+  const s = $("replySlider");
+  const v = me ? me.reply_length : null;
+  s.min = lo;
+  s.max = hi;
+  s.value = v == null ? lo : v;
+  $("replyVal").textContent = v == null ? "(no target)" : `${v} tokens`;
+  $("replyReset").disabled = v == null;
+  $("replyNote").textContent = `An aim for how long each reply should be, in tokens, not counting reasoning. The model is guided, not cut off. The server admin sets the range: ${lo} to ${hi} tokens.`;
+}
+
+async function saveReplyLength(value) {
+  try {
+    const data = await api("POST", "/api/settings", { reply_length: value });
+    me.reply_length = data.reply_length;
+    renderReplyLength();
+    $("settingsMsg").textContent = "Saved. Applies from your next message.";
+  } catch (err) {
+    $("settingsMsg").textContent = err.message;
+    renderReplyLength();
+  }
 }
 
 async function saveSettings(patch) {
