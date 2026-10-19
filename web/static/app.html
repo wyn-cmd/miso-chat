@@ -196,6 +196,10 @@
         <span class="slider-ctl"><input id="winSlider" type="range" min="1" max="100" step="1" aria-label="Rolling window in messages"><button id="winReset" class="ghost small" type="button">Default</button></span>
       </div>
       <p id="winNote" class="muted"></p>
+      <div class="sheet-row slider-row"><label for="replySlider">Reply length (tokens) <span id="replyVal" class="muted"></span></label>
+        <span class="slider-ctl"><input id="replySlider" type="range" step="10" aria-label="Reply length target in tokens"><button id="replyReset" class="ghost small" type="button">No target</button></span>
+      </div>
+      <p id="replyNote" class="muted"></p>
       <div class="sheet-row"><span>Export this chat</span>
         <span class="slider-ctl"><button id="exportMd" class="ghost small" type="button">Markdown</button><button id="exportTxt" class="ghost small" type="button">Text</button></span>
       </div>

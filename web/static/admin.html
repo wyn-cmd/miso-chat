@@ -53,6 +53,8 @@
         <label>Requests per user per day <input id="s_user_daily_cap" type="number" min="1" required></label>
         <label>Requests for all web users per day <input id="s_global_daily_cap" type="number" min="1" required></label>
         <label>Requests per minute for all web users <input id="s_rpm_limit" type="number" min="1" required></label>
+        <label>Shortest reply length users can pick (tokens) <input id="s_reply_min_tokens" type="number" min="10" max="4000" required></label>
+        <label>Longest reply length users can pick (tokens) <input id="s_reply_max_tokens" type="number" min="10" max="4000" required></label>
         <button type="submit">Save limits</button>
         <p id="settingsMsg" class="muted"></p>
       </form>

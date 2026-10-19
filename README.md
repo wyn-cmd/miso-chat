@@ -52,6 +52,7 @@ What the web app can do:
 - Regenerate a reply and swipe between the saved versions.
 - Keep a rolling window of recent messages (1 to 100, set in Settings). Older messages are folded into a running summary during the memory refresh. The summary is shown in the Memory panel and can be edited there.
 - Set a creativity (temperature) value for each character in Settings, from 0 to 1.5.
+- Set a reply length target in Settings, in tokens. It is a guide for the model and does not count reasoning. The admin sets the allowed range (default 50 to 1000) under Limits, and it applies to every account.
 - Export a chat as Markdown or plain text.
 - Turn on a character sandbox, a private folder the model can read and write through a few file tools. It is off by default. Turn it on by putting `{"enabled": true}` in a `sandbox.json` file in the character folder. Admins can browse sandboxes read-only.
 - Switch between a dark theme (the default) and a light theme with the toggle in the header.

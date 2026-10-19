@@ -66,6 +66,8 @@ DEFAULT_SETTINGS = {
     "user_daily_cap": "100",     # Gemini calls per user per Pacific day
     "global_daily_cap": "800",   # all web users together, per Pacific day
     "rpm_limit": "25",           # all web users together, per minute (key is 30 RPM)
+    "reply_min_tokens": "50",    # shortest reply length a user can pick, in tokens
+    "reply_max_tokens": "1000",  # longest reply length a user can pick, in tokens
 }
 
 
