@@ -59,7 +59,7 @@ function hexToRgb(hex) {
 // mid-dark colours like purple still take white text, as wanted.
 function readableText(hex) {
   const rgb = hexToRgb(hex);
-  if (!rgb) return "#ece5dd";
+  if (!rgb) return "#e9eff9";
   const [r, g, b] = rgb.map((v) => {
     const c = v / 255;
     return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
@@ -96,12 +96,15 @@ function setBusy(on) {
   $("rollBtn").disabled = on;
   $("undoBtn").disabled = on;
   for (const b of document.querySelectorAll(".char-item")) b.disabled = on;
+  for (const b of document.querySelectorAll(".turn-tools button")) b.disabled = on;
+  $("memBtn").disabled = on;
 }
 
 function showPassword(note) {
   closeSidebar();
   document.body.classList.add("locked");
   $("chatSection").hidden = true;
+  $("memSection").hidden = true;
   $("pwSection").hidden = false;
   $("pwNote").textContent = note || "";
   $("backBtn").hidden = !!(me && me.must_change);
@@ -216,11 +219,161 @@ function renderHistory(messages) {
       const isEvent = m.speaker === "Narrator";   // random events are saved as user-side entries, shown as notes
       const box = addLine(m.speaker, m.text, isEvent ? "note event" : (m.role === "user" ? "mine" : "theirs"), m.time);
       box.dataset.idx = String(i);   // position in the saved chat, used to place the context marker
+      addEditButton(box, i, m);
       if (m.role === "user" && !isEvent && me && me.persona) colourLine(box, me.persona.name);
       if (m.thinking) setThinking(box, m.thinking);
     });
   }
+  placeTurnTools(messages);
   refreshContext();
+}
+
+// Editing a saved message: the text opens in a box with Save and Cancel. Saving changes the saved chat only; no model call.
+function addEditButton(box, i, m) {
+  const btn = el("button", "Edit", "ghost small edit-btn");
+  btn.type = "button";
+  btn.setAttribute("aria-label", "Edit this message");
+  btn.addEventListener("click", () => startEdit(box, i, m));
+  box.appendChild(btn);
+}
+
+function startEdit(box, i, m) {
+  if (busy || !current) return;
+  const who = current;
+  const body = box.querySelector(".text");
+  const area = el("textarea", null, "edit-box");
+  area.value = m.text;
+  area.rows = 4;
+  area.maxLength = 4000;
+  const bar = el("div", null, "edit-bar");
+  const save = el("button", "Save", null);
+  save.type = "button";
+  const cancel = el("button", "Cancel", "ghost small");
+  cancel.type = "button";
+  bar.append(save, cancel);
+  body.hidden = true;
+  box.querySelector(".edit-btn").hidden = true;
+  box.insertBefore(area, body.nextSibling);
+  box.insertBefore(bar, area.nextSibling);
+  area.focus();
+  cancel.addEventListener("click", () => { if (who === current) loadHistory().catch(() => {}); });
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      const data = await api("POST", "/api/edit", { character: who, index: i, text: area.value });
+      if (who === current) renderHistory(data.messages);
+    } catch (err) {
+      save.disabled = false;
+      $("chatErr").textContent = err.message;
+    }
+  });
+}
+
+// Settings sheet: this character's creativity, the rolling window, and export.
+function loadCharSettings() {
+  $("charSettings").hidden = !current;
+  for (const id of ["tempSlider", "tempReset", "winSlider", "winReset", "exportMd", "exportTxt"]) $(id).disabled = !current;
+  $("charMsg").textContent = "";
+  if (!current) return;
+  api("GET", "/api/character-settings?character=" + encodeURIComponent(current))
+    .then((d) => applyCharSettings(d))
+    .catch((err) => { $("charMsg").textContent = err.message; });
+}
+
+function applyCharSettings(d) {
+  const t = d.temperature == null ? d.temperature_default : d.temperature;
+  $("tempSlider").value = t;
+  $("tempVal").textContent = Number(t).toFixed(2) + (d.temperature == null ? " (default)" : "");
+  $("tempReset").disabled = d.temperature == null;
+  const w = d.window == null ? d.window_default : d.window;
+  $("winSlider").value = w;
+  $("winVal").textContent = w + (d.window == null ? " (default)" : "");
+  $("winReset").disabled = d.window == null;
+  $("winNote").textContent = `Messages from the chat sent to the model with each reply. Default: ${d.window_defaults.solo} for 1:1 chats, ${d.window_defaults.group} for group chats.`;
+}
+
+async function saveCharSettings(patch) {
+  if (!current) return;
+  try {
+    applyCharSettings(await api("POST", "/api/character-settings", { character: current, ...patch }));
+    $("charMsg").textContent = "Saved. Applies from your next message.";
+  } catch (err) {
+    $("charMsg").textContent = err.message;
+    loadCharSettings();
+  }
+}
+
+async function saveWindow(value) {
+  try {
+    await api("POST", "/api/settings", { window: value });
+    loadCharSettings();
+    $("charMsg").textContent = "Saved. Applies from your next message.";
+  } catch (err) {
+    $("charMsg").textContent = err.message;
+  }
+}
+
+async function exportChat(fmt) {
+  if (!current) return;
+  $("charMsg").textContent = "";
+  try {
+    const r = await fetch("/api/export?character=" + encodeURIComponent(current) + "&format=" + fmt, { credentials: "same-origin" });
+    if (!r.ok) throw new Error("Export failed (" + r.status + ").");
+    const blob = await r.blob();
+    const named = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") || "");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = named ? named[1] : "chat." + fmt;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (err) {
+    $("charMsg").textContent = err.message;
+  }
+}
+
+$("tempSlider").addEventListener("input", () => { $("tempVal").textContent = Number($("tempSlider").value).toFixed(2); });
+$("tempSlider").addEventListener("change", () => saveCharSettings({ temperature: Number($("tempSlider").value) }));
+$("tempReset").addEventListener("click", () => saveCharSettings({ temperature: null }));
+$("winSlider").addEventListener("input", () => { $("winVal").textContent = $("winSlider").value; });
+$("winSlider").addEventListener("change", () => saveWindow(Number($("winSlider").value)));
+$("winReset").addEventListener("click", () => saveWindow(null));
+$("exportMd").addEventListener("click", () => exportChat("md"));
+$("exportTxt").addEventListener("click", () => exportChat("txt"));
+
+// Regenerate and swipe. The last exchange's reply can be written again; saved alternatives are shown with ◀ ▶.
+function removeTurnTools() {
+  for (const n of document.querySelectorAll(".turn-tools")) n.remove();
+}
+
+function placeTurnTools(messages) {
+  removeTurnTools();
+  let last = -1;
+  messages.forEach((m, i) => { if (m.role === "user" && m.speaker !== "Narrator") last = i; });
+  if (last < 0 || !messages.slice(last + 1).some((m) => m.role !== "user")) return;
+  const v = messages[last].variant || { index: 1, count: 1, limit: 30 };
+  const bar = el("div", null, "turn-tools");
+  const prev = el("button", "\u25C0", "ghost small");
+  prev.type = "button";
+  prev.setAttribute("aria-label", "Previous reply");
+  prev.disabled = busy || v.index <= 1;
+  prev.addEventListener("click", () => swipe(-1));
+  const count = el("span", `${v.index} / ${v.count}`, "muted turn-count");
+  const next = el("button", "\u25B6", "ghost small");
+  next.type = "button";
+  next.setAttribute("aria-label", "Next reply");
+  next.disabled = busy || v.index >= v.count;
+  next.addEventListener("click", () => swipe(1));
+  const regen = el("button", "\u21BB Regenerate", "ghost small");
+  regen.type = "button";
+  const atLimit = v.count - 1 >= v.limit;
+  regen.title = atLimit ? "This message has reached its regeneration limit."
+    : "Write a new reply to your last message. The current reply is kept; swipe back to it any time.";
+  regen.disabled = busy || atLimit;
+  regen.addEventListener("click", regenerate);
+  bar.append(prev, count, next, regen);
+  $("log").appendChild(bar);
 }
 
 // Context marker: "context window ends here" sits above the oldest message the next prompt will include,
@@ -411,6 +564,7 @@ async function pickCharacter(name) {
   localStorage.setItem("rp_character", name);
   markActive();
   closeSidebar();
+  showMemory(false);
   $("chatErr").textContent = "";
   await loadHistory();
 }
@@ -502,6 +656,14 @@ async function send(ev) {
   const mine = me && me.persona ? me.persona.name : "You";
   const mineBox = addLine(mine, text, "mine", new Date().toISOString());
   if (me && me.persona) colourLine(mineBox, me.persona.name);
+  await streamTurn("/api/chat", { character: who, message: text }, who);
+}
+
+// Stream one turn (a new message, or a regenerated reply) into the log, then reload the saved chat.
+async function streamTurn(path, body, who) {
+  setBusy(true);
+  $("chatErr").textContent = "";
+  removeTurnTools();
 
   // one streaming bubble per speaker; a reset (empty text) means a retry started, so the text clears
   const bubbles = {};
@@ -528,10 +690,9 @@ async function send(ev) {
     dropThinking();
   };
 
-  let ok = false;
   let flushing = Promise.resolve();
   try {
-    await streamChat({ character: who, message: text }, {
+    await streamChat(body, {
       delta(p) { if (who === current) show(p.speaker, p.text); },
       thinking(p) {
         if (who !== current) return;
@@ -541,7 +702,6 @@ async function send(ev) {
         $("log").scrollTop = $("log").scrollHeight;
       },
       done(data) {
-        ok = true;
         flushing = Promise.all(Object.keys(reveals).map((k) => reveals[k].finish())).then(() => {
           clearBubbles();
           if (who !== current) return;
@@ -553,7 +713,6 @@ async function send(ev) {
         });
       },
       command(c) {
-        ok = true;
         clearBubbles();
         if (who !== current) return;
         if (c.notice) addLine("", c.notice, "note");
@@ -565,7 +724,7 @@ async function send(ev) {
         $("chatErr").textContent = err.message;
         if (err.code === "password_change_required") showPassword(err.message);
       },
-    });
+    }, path);
   } catch (err) {
     clearBubbles();
     $("chatErr").textContent = err.message;
@@ -575,6 +734,32 @@ async function send(ev) {
     if (who === current) await loadHistory().catch(() => {});   // reload so positions and the marker match the saved chat
     setBusy(false);
     $("msg").focus();
+  }
+}
+
+// Regenerate: drop the old reply from the view (the server keeps it as an alternative) and stream a new one.
+async function regenerate() {
+  if (busy || !current) return;
+  let anchor = null;
+  for (const n of $("log").children) if (n.classList.contains("mine")) anchor = n;
+  if (!anchor) { $("chatErr").textContent = "Nothing to regenerate yet."; return; }
+  while (anchor.nextSibling) anchor.nextSibling.remove();
+  await streamTurn("/api/regenerate", { character: current }, current);
+}
+
+// Swipe: show the previous (-1) or next (+1) saved reply to the last message.
+async function swipe(direction) {
+  if (busy || !current) return;
+  const who = current;
+  setBusy(true);
+  $("chatErr").textContent = "";
+  try {
+    const data = await api("POST", "/api/swipe", { character: who, direction });
+    if (who === current) renderHistory(data.messages);
+  } catch (err) {
+    if (who === current) $("chatErr").textContent = err.message;
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -616,6 +801,7 @@ async function init() {
   $("menuBtn").setAttribute("aria-expanded", String(!mobileNav()));
   if (me.is_admin) {
     $("adminLink").hidden = false;
+    $("sandboxLink").hidden = false;
     $("editBox").hidden = false;
   }
   renderModels();
@@ -740,6 +926,77 @@ $("logoutBtn").addEventListener("click", async () => {
   try { await api("POST", "/api/logout"); } catch (e) { /* ignore */ }
   location.href = "/login";
 });
+// Memory: the character's memory bank and pinned facts, editable here. Saving takes effect on the next reply.
+let memFor = null;
+let memLoaded = { memory: "", pinned: "" };
+
+function showMemory(on) {
+  if (on && !$("settingsSheet").hidden) $("sheetClose").click();   // on phones, Memory is opened from the Settings sheet
+  $("memSection").hidden = !on;
+  $("chatSection").hidden = on;
+}
+
+async function openMemory() {
+  if (busy || !current) return;
+  const who = current;
+  $("chatErr").textContent = "";
+  try {
+    const data = await api("GET", "/api/memory?character=" + encodeURIComponent(who));
+    memFor = who;
+    memLoaded = { memory: data.memory, pinned: data.pinned, summary: data.summary || "" };
+    $("memText").value = data.memory;
+    $("sumText").value = data.summary || "";
+    $("pinText").value = data.pinned;
+    $("memTitle").textContent = "Memory: " + who;
+    $("memErr").textContent = "";
+    $("memOk").textContent = "";
+    showMemory(true);
+  } catch (err) {
+    $("chatErr").textContent = err.message;
+  }
+}
+
+async function saveMemory() {
+  if (!memFor) return;
+  $("memErr").textContent = "";
+  $("memOk").textContent = "";
+  try {
+    const data = await api("POST", "/api/memory", {
+      character: memFor, memory: $("memText").value, pinned: $("pinText").value, summary: $("sumText").value,
+    });
+    memLoaded = { memory: data.memory, pinned: data.pinned, summary: data.summary };
+    $("memOk").textContent = "Saved. The next reply uses this.";
+  } catch (err) {
+    $("memErr").textContent = err.message;
+  }
+}
+
+async function refreshMemory() {
+  if (!memFor || busy) return;
+  if ($("memText").value !== memLoaded.memory || $("pinText").value !== memLoaded.pinned || $("sumText").value !== memLoaded.summary) {
+    $("memErr").textContent = "Save your edits first, then refresh.";
+    return;
+  }
+  $("memErr").textContent = "";
+  $("memOk").textContent = "Refreshing from the chat…";
+  try {
+    const data = await api("POST", "/api/chat", { character: memFor, message: "/save" });
+    const r = await api("GET", "/api/memory?character=" + encodeURIComponent(memFor));
+    memLoaded = { memory: r.memory, pinned: r.pinned, summary: r.summary };
+    $("memText").value = r.memory;
+    $("sumText").value = r.summary || "";
+    $("memOk").textContent = (data.command && data.command.notice) || "Refreshed.";
+  } catch (err) {
+    $("memErr").textContent = err.message;
+    $("memOk").textContent = "";
+  }
+}
+
+$("memBtn").addEventListener("click", openMemory);
+$("memBack").addEventListener("click", () => showMemory(false));
+$("memSave").addEventListener("click", saveMemory);
+$("memRefresh").addEventListener("click", refreshMemory);
+
 init();
 
 // Highlight colour picker in the Settings sheet. Saved in this browser only.
@@ -765,7 +1022,7 @@ init();
   const btn = document.getElementById("settingsBtn");
   const closeBtn = document.getElementById("sheetClose");
   const parts = [["fontSelect", "font"], ["bubbleSelect", "badge"], ["sizeCtl", "size"],
-                 ["modelSection", "model"], ["editBox", "characters"], ["personaBox", "persona"]].map(([id, slot]) => {
+                 ["modelSection", "model"], ["editBox", "characters"], ["personaBox", "persona"], ["memBtn", "memory"]].map(([id, slot]) => {
     const node = document.getElementById(id);
     const home = document.createComment("home:" + id);   // stays where the control belongs on desktop
     node.parentNode.insertBefore(home, node);
@@ -775,6 +1032,7 @@ init();
   function open() {
     sheet.hidden = false;
     btn.setAttribute("aria-expanded", "true");
+    loadCharSettings();
     closeBtn.focus();
   }
   function close(refocus) {
@@ -841,7 +1099,7 @@ init();
   const headerChat = document.getElementById("headerChat");
   const accountSlot = document.getElementById("accountSlot");
   const section = document.getElementById("chatSection");
-  const parts = [["chatIcon", "chat"], ["chatTitle", "chat"], ["settingsBtn", "chat"], ["adminLink", "account"], ["pwBtn", "account"], ["logoutBtn", "account"]]
+  const parts = [["chatIcon", "chat"], ["chatTitle", "chat"], ["undoBtn", "chat"], ["rollBtn", "chat"], ["settingsBtn", "chat"], ["adminLink", "account"], ["pwBtn", "account"], ["logoutBtn", "account"]]
     .map(([id, group]) => {
       const node = document.getElementById(id);
       const home = document.createComment("home:" + id);   // where the control belongs on desktop
@@ -862,10 +1120,13 @@ init();
       }
     }
   }
+  const gear = document.getElementById("settingsBtn");
+  const placeGear = () => { if (phone.matches) headerChat.appendChild(gear); };
   const sync = () => document.body.classList.toggle("chat-open", !section.hidden);
   new MutationObserver(sync).observe(section, { attributes: true, attributeFilter: ["hidden"] });
-  new MutationObserver(place).observe(document.body, { attributes: true, attributeFilter: ["class"] });
-  if (phone.addEventListener) phone.addEventListener("change", place); else phone.addListener(place);
+  const placeAll = () => { place(); placeGear(); };
+  new MutationObserver(placeAll).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  if (phone.addEventListener) phone.addEventListener("change", placeAll); else phone.addListener(placeAll);
   sync();
-  place();
+  placeAll();
 })();

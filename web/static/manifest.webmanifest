@@ -3,8 +3,8 @@
   "short_name": "Miso Chat",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#14110f",
-  "theme_color": "#14110f",
+  "background_color": "#020307",
+  "theme_color": "#020307",
   "icons": [
     {
       "src": "/static/icon-192.png",

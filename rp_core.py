@@ -13,6 +13,7 @@ import re
 import json
 import time
 import random
+import copy
 import shutil
 import threading
 import datetime
@@ -22,6 +23,7 @@ from types import SimpleNamespace
 import pytz
 from google.genai import types
 from charname import display_for
+import sandbox
 
 
 def _mk(text):
@@ -33,13 +35,22 @@ CONFIG_FILE = "config.json"
 REQUEST_TRACKER_FILE = "request_tracker.json"
 TOKEN_TRACKER_FILE = "token_tracker.json"
 GLOBAL_SUBS_FILE = "substitutions.json"
-TMP_SUFFIX = ".tmp"
+WIKI_NAME = "wiki.md"
+TMP_SUFFIX = ".p2ptmp"
 
 REQUEST_LIMIT = 14400
 TOKEN_LIMIT = 1000000
 SOLO_WINDOW = 25        # messages sent to the model in 1:1 chats
 GROUP_WINDOW = 40       # messages sent to each group member
 SELECTOR_WINDOW = 60    # messages the group director reads
+MAX_TOOL_ROUNDS = 8     # file-tool round trips allowed in one solo reply
+SANDBOX_NOTE = (
+    "\n\n--- Your sandbox ---\n"
+    "You have a private folder of your own. Its top level is '/'. Using the file tools you can list, read, "
+    "write, copy, move and delete files there, and make folders. Nothing outside it is yours to use. "
+    "Use it when it helps, for example to keep notes between conversations. "
+    "Don't mention the tools unless it fits the scene."
+)
 
 AUTOFILL_SYSTEM = (
     "You write the next message the user would send in this roleplay chat. Write it as the user, in first person, "
@@ -62,6 +73,10 @@ def _clean_plain(text):
     return t[:1000]
 MEMORY_EVERY = 18       # refresh memory.md every N messages
 MEMORY_SNIPPET = 30     # messages fed into a memory.md refresh
+SOLO_TEMPERATURE = 0.85     # creativity for 1:1 chats unless the user sets their own
+GROUP_TEMPERATURE = 0.7     # group members and the group director
+SUMMARY_MAX_MESSAGES = 60   # most messages folded into the running summary in one refresh
+MAX_REGENERATIONS = 30  # regenerations allowed per message; the original reply is kept too, so 31 replies at most
 
 # Every model id the app may use. Older Gemini ids are retired and are dropped from the chain, the picker and any saved
 # last model. Flash is 3.8 only; flash-lite is 3.5 and 3.1; Gemma 4 31B is unchanged. Add an id here to bring it back.
@@ -80,6 +95,7 @@ EXCLUDED_MODEL_WORDS = [
     "robotics", "omni", "preview",
 ]
 
+# Starts empty. Words are added through substitutions.json in the project root.
 DEFAULT_SUBSTITUTIONS = {}
 
 NARRATIVE_INSTRUCTION = (
@@ -100,6 +116,12 @@ FORMAT_INSTRUCTION = (
     "Put speech and dialogue in double quotation marks, like \"this\". Show emphasis in **bold**. "
     "Dialogue may also be in *italics* when it is a whisper, a thought, or a line that must stand apart. "
     "Put the asterisks directly against the words with no space inside them, and close every marker you open."
+)
+WIKI_INSTRUCTION = (
+    "\n\n--- Knowledge Access ---\n"
+    "You have access to a local character wiki file (wiki.md). If you need specific information, "
+    "output the tag '[WIKI_SEARCH: keyword]' and the system will provide the relevant details from the wiki. "
+    "Use this sparingly for deep lore retrieval only."
 )
 GROUP_RULE = (
     "\n\nCRITICAL: You are part of a group chat. Provide a unique response to the user's input. "
@@ -254,13 +276,13 @@ def _entry_key(item):
         return repr(item)
 
 
-def merge_memory(local_data, other_data):
+def merge_memory(local_data, peer_data):
     # Union two chat histories: nothing either device wrote is dropped.
-    if not isinstance(local_data, list) or not isinstance(other_data, list):
+    if not isinstance(local_data, list) or not isinstance(peer_data, list):
         return None
     merged = list(local_data)
     have = {_entry_key(i) for i in local_data}
-    for item in other_data:
+    for item in peer_data:
         if _entry_key(item) not in have:
             merged.append(item)
     return merged
@@ -278,6 +300,15 @@ def save_history(path, history):
         json.dump(merged, f, indent=2, ensure_ascii=False)
     os.replace(tmp, path)
     return merged
+
+
+def _write_history(path, history):
+    # Write the history as it is, with no merge. Regenerate and swipe remove turns in memory on purpose,
+    # and a merge with the copy on disk would bring them back.
+    tmp = path + TMP_SUFFIX
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
 
 
 # ---------------------------------------------------------------- trackers
@@ -455,6 +486,21 @@ def _run_with_limit(fn, progress, *args):
 
 # ---------------------------------------------------------------- engine
 
+def _sandbox_tools():
+    declarations = []
+    for spec in sandbox.TOOLS:
+        props = {key: types.Schema(type="STRING", description=desc) for key, (_, desc) in spec["params"].items()}
+        declarations.append(types.FunctionDeclaration(
+            name=spec["name"], description=spec["description"],
+            parameters=types.Schema(type="OBJECT", properties=props, required=spec["required"])))
+    return [types.Tool(function_declarations=declarations)]
+
+
+def _function_calls(resp):
+    calls = getattr(resp, "function_calls", None)
+    return list(calls) if calls else []
+
+
 class Engine:
     # One chat session: a character (or group) plus an optional user persona.
 
@@ -480,7 +526,17 @@ class Engine:
         self.character_file = os.path.join(ai_dir, "character.md")
         self.memory_file = os.path.join(self.state_dir, "memory.json")
         self.memory_bank_file = os.path.join(self.state_dir, "memory.md")
+        self.pinned_file = os.path.join(self.state_dir, "pinned.md")   # facts the memory refresh never touches
+        self.window_override = None        # the user's rolling window size; None = the defaults
+        self.temperature_override = None   # the character's creativity; None = the defaults
+        self.summary_file = os.path.join(self.state_dir, "summary.json")
+        self.summary_text = ""
+        self.summary_covered = 0           # how many messages from the start the summary already covers
+        self._load_summary()
+        self.wiki_file = os.path.join(ai_dir, WIKI_NAME)
         self.group_config_file = os.path.join(ai_dir, "group_config.json")
+        # per account and character, next to memory.json; only when the character's flag is on
+        self.sandbox_root = sandbox.root_for(self.state_dir) if sandbox.is_enabled(ai_dir) else None
 
         self.fallback_models = []
         self.group_models = []
@@ -490,6 +546,7 @@ class Engine:
         self.thinking = False          # reasoning shown and enabled (off by default)
 
         self.full_history = []
+        self.regen_stash = None        # set while a regenerate runs: the exchange it took out of memory
         self.spicy_to_safe = {}
         self.safe_to_spicy = {}
 
@@ -688,6 +745,10 @@ class Engine:
             except Exception as e:
                 self.log(f"[yellow]Could not load context.md: {e}[/yellow]")
 
+        if os.path.exists(self.wiki_file):
+            prompt += WIKI_INSTRUCTION
+            self.log(f"[cyan]✨ Knowledge Access enabled: wiki.md found for {self.character_name}! ✨[/cyan]")
+
         if os.path.exists(self.memory_bank_file):
             try:
                 mb_content = _read_text(self.memory_bank_file)
@@ -696,6 +757,15 @@ class Engine:
                 self.log(f"[cyan]Loaded memory bank from {self.memory_bank_file} ✨[/cyan]")
             except Exception as e:
                 self.log(f"[yellow]Could not load memory.md: {e}[/yellow]")
+        if os.path.exists(self.pinned_file):
+            try:
+                pinned = _read_text(self.pinned_file).strip()
+                if pinned:
+                    prompt += ("\n\n--- Pinned facts (kept as written; the memory refresh never changes them) ---\n" + pinned)
+            except Exception as e:
+                self.log(f"[yellow]Could not load pinned.md: {e}[/yellow]")
+        if self.summary_text:
+            prompt += "\n\n--- Earlier in this chat (running summary) ---\n" + self.summary_text
         self.system_prompt = prompt
 
     def _load_history(self):
@@ -731,8 +801,18 @@ class Engine:
         return text
 
     def prepare_input(self, user_input):
-        # Apply safe-word substitutions before the text goes to the model.
-        return self.safe_text(user_input)
+        # Expand [WIKI_SEARCH: x] tags, then apply safe-word substitutions.
+        processed = user_input
+        if "[WIKI_SEARCH:" in processed:
+            match = re.search(r"\[WIKI_SEARCH:\s*(.*?)\]", processed)
+            if match and os.path.exists(self.wiki_file):
+                keyword = match.group(1).strip()
+                self.log(f"[dim blue]🔍 Searching wiki for: {keyword}[/dim blue]")
+                found = [line for line in _read_text(self.wiki_file).split("\n") if keyword.lower() in line.lower()]
+                snippet = "\n".join(found[:5]) if found else "No specific details found."
+                processed = (f"Context from {self.character_name}'s Wiki about '{keyword}':\n{snippet}\n\n"
+                             f"User Question: {processed.replace(match.group(0), '')}")
+        return self.safe_text(processed)
 
     # ---- model selection
 
@@ -789,16 +869,21 @@ class Engine:
         result.memory_due = len(self.full_history) > 0 and len(self.full_history) % MEMORY_EVERY == 0
         return result
 
+    def sandbox_active(self):
+        return self.sandbox_root is not None and not self.is_group
+
     def create_chat_session(self, model_name):
-        contents = self._window(SOLO_WINDOW, labelled=False)
+        contents = self._window(self.window_size(), labelled=False)
+        active = self.sandbox_active()
         return self.client.chats.create(
             model=model_name,
             history=contents if contents else None,
             config=types.GenerateContentConfig(
-                system_instruction=self.system_prompt,
-                temperature=0.85,
+                system_instruction=self.system_prompt + (SANDBOX_NOTE if active else ""),
+                temperature=self.temperature_value(),
                 safety_settings=safety_settings(),
                 thinking_config=thinking_config_for(model_name, self.thinking),
+                tools=_sandbox_tools() if active else None,
             ),
         )
 
@@ -814,7 +899,7 @@ class Engine:
         # about to send becomes the last one in it, so the window starts at total + 1 - size. This returns that
         # index (window_start), the estimated system prompt, and the stored messages the window will include.
         # Text still in the input box is not known here; the page adds it. Reads only: no model call, no request.
-        size = GROUP_WINDOW if self.is_group else SOLO_WINDOW
+        size = self.window_size()
         total = len(self.full_history)
         start = max(0, total + 1 - size)
         window_tokens = 0
@@ -847,6 +932,8 @@ class Engine:
         # Send one message. With on_delta, stream the reply and call on_delta(speaker, text_so_far)
         # as each chunk arrives. With on_think, reasoning streams the same way. Returns an object with
         # .text, .thought and .usage_metadata, like a normal response.
+        if self.sandbox_active():
+            return self._call_with_tools(chat, text, speaker, on_delta)
         if on_delta is None and on_think is None:
             resp = chat.send_message(text)
             return SimpleNamespace(text=_text(resp), thought=_thought_text(resp) or "",
@@ -868,6 +955,33 @@ class Engine:
                 usage = found
         return SimpleNamespace(text="".join(pieces) or None, thought="".join(thoughts),
                                usage_metadata=usage)
+
+    def _call_with_tools(self, chat, message, speaker, on_delta):
+        # Run file-tool round trips until the model answers in text. Replies are not streamed here: the whole
+        # answer is passed to on_delta once it is finished. The first model call is counted by _send_solo;
+        # every later call is counted here, just before it is sent, so each Gemini call counts once.
+        totals = {"prompt_token_count": 0, "candidates_token_count": 0, "total_token_count": 0}
+        response = None
+        for rnd in range(MAX_TOOL_ROUNDS + 1):
+            if rnd > 0:
+                self._count_request()
+            response = chat.send_message(message)
+            usage = getattr(response, "usage_metadata", None)
+            for key in totals:
+                value = _usage(usage, key)
+                if isinstance(value, int):
+                    totals[key] += value
+            calls = _function_calls(response)
+            if not calls:
+                break
+            message = [types.Part.from_function_response(
+                           name=c.name,
+                           response=sandbox.run_tool(self.sandbox_root, c.name, dict(c.args or {})))
+                       for c in calls]
+        answer = _text(response) if response is not None else None
+        if on_delta and answer:
+            on_delta(speaker, answer)
+        return SimpleNamespace(text=answer or None, thought="", usage_metadata=SimpleNamespace(**totals))
 
     def _send_solo(self, processed, on_delta=None, on_think=None):
         result = TurnResult()
@@ -927,7 +1041,7 @@ class Engine:
             label = display_for(name)
             self._count_request()
             prompt, color = self._member_prompt(name)
-            contents = self._window(GROUP_WINDOW, labelled=True)
+            contents = self._window(self.window_size(), labelled=True)
             resp = None
             for model in self.ordered_models(self.group_models):
                 if on_delta:
@@ -939,7 +1053,7 @@ class Engine:
                     chat = self.client.chats.create(
                         model=model,
                         history=contents if contents else None,
-                        config=types.GenerateContentConfig(system_instruction=prompt, temperature=0.7,
+                        config=types.GenerateContentConfig(system_instruction=prompt, temperature=self.temperature_value(),
                                                            thinking_config=thinking_config_for(model, self.thinking)),
                     )
                     resp = _run_with_limit(self._call, progress, chat, f"[{label} respond to the group]: {processed}", label,
@@ -1055,6 +1169,10 @@ class Engine:
     # ---- saving, undo, memory
 
     def save(self):
+        if self.regen_stash is not None:
+            # A regenerate has taken the old exchange out of memory. Write nothing until it finishes, so disk keeps
+            # the saved exchange; finish_regenerate writes the result, and a failed attempt leaves disk as it was.
+            return self.full_history
         self.full_history = save_history(self.memory_file, self.full_history)
         return self.full_history
 
@@ -1084,7 +1202,7 @@ class Engine:
 
     def _one_shot(self, system, final_prompt):
         # One model call that is not saved to the chat. Counted like any other request. Returns (text, model).
-        contents = self._window(GROUP_WINDOW if self.is_group else SOLO_WINDOW, labelled=True)
+        contents = self._window(self.window_size(), labelled=True)
         models = self.group_models if (self.is_group and self.group_models) else self.fallback_models
         last_err = None
         for model in self.ordered_models(models):
@@ -1120,6 +1238,127 @@ class Engine:
         self.save()
         return text
 
+    def _exchange_start(self):
+        # Index of the last user line that is not a narrator event, or None.
+        for i in range(len(self.full_history) - 1, -1, -1):
+            e = self.full_history[i]
+            if e.get("role") == "user" and e.get("speaker") != "narrator":
+                return i
+        return None
+
+    def window_size(self):
+        # Messages sent to the model: the user's rolling window if set, else the 1:1 or group default.
+        if self.window_override:
+            return self.window_override
+        return GROUP_WINDOW if self.is_group else SOLO_WINDOW
+
+    def temperature_value(self):
+        if self.temperature_override is not None:
+            return self.temperature_override
+        return GROUP_TEMPERATURE if self.is_group else SOLO_TEMPERATURE
+
+    def _load_summary(self):
+        data = _read_json(self.summary_file, {})
+        if isinstance(data, dict):
+            self.summary_text = str(data.get("text") or "").strip()
+            try:
+                self.summary_covered = max(0, int(data.get("covered", 0)))
+            except (TypeError, ValueError):
+                self.summary_covered = 0
+
+    def _save_summary(self, text, covered):
+        self.summary_text = text
+        self.summary_covered = covered
+        _write_json(self.summary_file, {"text": text, "covered": covered})
+
+    def edit_message(self, index, text):
+        # Replace the wording of one saved message (user line, reply or narrator event). No model call.
+        if not 0 <= index < len(self.full_history):
+            return False
+        stored = self.safe_text(text)
+        entry = self.full_history[index]
+        entry["text"] = stored
+        entry["edited"] = _now_iso()
+        i = self._exchange_start()
+        if i is not None and index > i and entry.get("role") == "model":
+            # keep the saved alternative in step, so swiping back shows the edit
+            user = self.full_history[i]
+            variants = user.get("variants") or []
+            if variants:
+                cur = min(max(int(user.get("variant", len(variants) - 1)), 0), len(variants) - 1)
+                k = sum(1 for e in self.full_history[i + 1:index] if e.get("role") == "model")
+                if k < len(variants[cur]):
+                    variants[cur][k]["text"] = stored
+        _write_history(self.memory_file, self.full_history)
+        return True
+
+    def regen_count(self):
+        # Regenerations already made for the last message (the original reply is not counted).
+        i = self._exchange_start()
+        if i is None:
+            return 0
+        return max(len(self.full_history[i].get("variants") or []) - 1, 0)
+
+    def begin_regenerate(self):
+        # Take the last exchange out of memory and return its user text, for a new turn to answer. Disk is not
+        # written here: a failed attempt leaves the saved exchange as it was.
+        i = self._exchange_start()
+        if i is None:
+            return None
+        tail = self.full_history[i + 1:]
+        if not any(e.get("speaker") != "narrator" for e in tail):
+            return None
+        user = self.full_history[i]
+        replies = [copy.deepcopy(e) for e in tail if e.get("speaker") != "narrator"]
+        variants = [copy.deepcopy(v) for v in (user.get("variants") or [])]
+        if variants:
+            cur = min(max(int(user.get("variant", 0)), 0), len(variants) - 1)
+            variants[cur] = replies
+        else:
+            variants = [replies]
+        self.regen_stash = {"user": copy.deepcopy(user), "variants": variants,
+                            "narrator": [copy.deepcopy(e) for e in tail if e.get("speaker") == "narrator"]}
+        del self.full_history[i:]
+        return user.get("text")
+
+    def finish_regenerate(self):
+        # After the new turn saved: keep the old replies as an alternative, and put back the narrator events
+        # that came after them.
+        stash = self.regen_stash
+        if stash is None:
+            return
+        self.regen_stash = None
+        i = self._exchange_start()
+        if i is None:
+            return
+        user = self.full_history[i]
+        fresh = [copy.deepcopy(e) for e in self.full_history[i + 1:] if e.get("speaker") != "narrator"]
+        variants = stash["variants"] + [fresh]
+        user["ts"] = stash["user"].get("ts", user.get("ts"))
+        user["variants"] = variants
+        user["variant"] = len(variants) - 1
+        self.full_history.extend(stash["narrator"])
+        _write_history(self.memory_file, self.full_history)
+
+    def swipe(self, delta):
+        # Show the previous (-1) or next (+1) saved reply to the last exchange. False when there is none.
+        i = self._exchange_start()
+        if i is None:
+            return False
+        user = self.full_history[i]
+        variants = user.get("variants") or []
+        if len(variants) < 2:
+            return False
+        cur = min(max(int(user.get("variant", len(variants) - 1)), 0), len(variants) - 1)
+        new = cur + delta
+        if not 0 <= new < len(variants):
+            return False
+        narrator = [e for e in self.full_history[i + 1:] if e.get("speaker") == "narrator"]
+        self.full_history[i + 1:] = [copy.deepcopy(e) for e in variants[new]] + narrator
+        user["variant"] = new
+        _write_history(self.memory_file, self.full_history)
+        return True
+
     def update_memory_bank(self):
         # Rewrite memory.md from the recent history, trying models in order.
         if not self.full_history:
@@ -1130,6 +1369,13 @@ class Engine:
         for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
             if m and m not in models:
                 models.append(m)
+
+        window = self.window_size()
+        cutoff = max(0, len(self.full_history) - window)
+        start = max(min(self.summary_covered, cutoff), cutoff - SUMMARY_MAX_MESSAGES)
+        pending = self.full_history[start:cutoff]        # messages that have left the window since the last summary
+        want_summary = bool(pending)
+        summary_turns = "\n".join(f"{e.get('speaker') or e.get('role', 'user')}: {e.get('text', '')[:300]}" for e in pending)
 
         for m in models:
             try:
@@ -1151,6 +1397,12 @@ class Engine:
                 if existing:
                     prompt += f"\n\nExisting Memory Bank (memory.md):\n{existing}"
                 prompt += f"\n\nNew History Snippet to Analyze:\n{snippet}"
+                if want_summary:
+                    prompt += (f"\n\nRunning summary so far (earlier in this chat):\n{self.summary_text or '(none yet)'}"
+                               f"\n\nMessages that have just left the recent window, oldest first:\n{self.safe_text(summary_turns)}"
+                               "\n\nAfter the memory bank, on its own line write === SUMMARY ===, then the updated running summary: "
+                               "plain prose under 250 words covering what happened, decisions made and facts now established. "
+                               "Keep the points from the existing summary that still matter.")
 
                 chat = self.client.chats.create(
                     model=m,
@@ -1168,6 +1420,11 @@ class Engine:
                 text = re.sub(r"^```\s*", "", text)
                 text = re.sub(r"\s*```$", "", text)
                 text = text.strip()
+                summary_text = None
+                if want_summary and "=== SUMMARY ===" in text:
+                    text, _, tail = text.partition("=== SUMMARY ===")
+                    summary_text = tail.strip()
+                    text = text.strip()
 
                 if not text:
                     self.log(f"[yellow]Model {m} returned empty response. Skipping update.[/yellow]")
@@ -1175,6 +1432,9 @@ class Engine:
 
                 with open(self.memory_bank_file, "w", encoding="utf-8") as f:
                     f.write(text)
+                if summary_text:
+                    self._save_summary(summary_text, cutoff)
+                self._build_system_prompt()
                 self.log("[dim green]✨ Successfully updated memory.md! ✨[/dim green]")
                 return
             except Exception as e:
