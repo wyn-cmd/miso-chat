@@ -6,6 +6,7 @@ let loadedColour = ""; // colour as it was loaded (may be a name such as 'Crimso
 function showEditor(show) {
   $("editorSection").hidden = !show;
   $("chatSection").hidden = show;
+  $("memSection").hidden = true;
   $("pwSection").hidden = true;
 }
 
@@ -33,6 +34,7 @@ async function openEditor(name) {
     loadedColour = data.colour || "";
     $("edColourText").value = loadedColour;
     $("edColour").value = /^#[0-9a-fA-F]{6}$/.test(data.colour || "") ? data.colour.toLowerCase() : "#808080";
+    $("edSandbox").checked = !!data.sandbox;
     setIconPreview(name, data.has_icon);
   } else {
     $("editorTitle").textContent = "New character";
@@ -42,6 +44,7 @@ async function openEditor(name) {
     $("edContext").value = "";
     $("edColour").value = "#808080";
     $("edColourText").value = "#808080";
+    $("edSandbox").checked = false;
     setIconPreview(null, false);
   }
   $("edColourText").classList.remove("invalid");
@@ -86,6 +89,7 @@ async function saveCharacter(ev) {
     card: $("edCard").value,
     context: $("edContext").value,
     colour: typed || $("edColour").value,
+    sandbox: $("edSandbox").checked,
   };
   try {
     let saved;
