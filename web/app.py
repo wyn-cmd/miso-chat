@@ -754,7 +754,7 @@ def _run_command(st, user, name, is_group, word, arg):
 def make_app(client=None, data_dir=None, char_root=None):
     char_root = char_root or CHAR_ROOT
     data_dir = data_dir or DATA_DIR
-    os.chdir(char_root)  # engine paths (character folders, wiki, group configs) are relative
+    os.chdir(char_root)  # engine paths (character folders, group configs) are relative
     if client is None:
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
