@@ -19,13 +19,14 @@ import time
 from dataclasses import dataclass
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from google import genai
-from rp_core import Engine
+from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_TEMPERATURE, GROUP_TEMPERATURE
 from charname import display_for, folder_for
+import sandbox
 import llm_backends
 from web import providers, editor
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, budget_days, recent_days, verify_password
@@ -45,6 +46,7 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{2,32}$")
 LOGIN_WINDOW = 900        # seconds
 LOGIN_MAX_FAILS = 10
 TOKEN_DISPLAY_LIMIT = 1_000_000
+MEMORY_LIMIT = 20_000        # characters allowed in memory.md or pinned.md
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
        "base-uri 'none'; form-action 'self'")
@@ -299,6 +301,16 @@ def _check_caps(st, user):
                                   "message": "Too many requests right now. Wait a few seconds."})
 
 
+def _admin_sandbox_root(st, name, uid):
+    # The sandbox folder one account has for one solo character. Admin views use this; nothing is created.
+    folder, is_group = _resolve_profile(st, name)
+    if is_group:
+        raise HTTPException(404, "Groups have no sandbox.")
+    if st.store.get_user(uid) is None:
+        raise HTTPException(404, "Unknown account.")
+    return sandbox.root_for(os.path.join(st.data_dir, "users", str(uid), folder))
+
+
 def _resolve_profile(st, name):
     # Client names are display names; the folder name is the ID used on disk and in the engine.
     name = folder_for(str(name))
@@ -337,6 +349,8 @@ def _slot(st, user, name, is_group):
     engine.extra_models = _extra_models(st)
     engine.discover_models()
     engine.thinking = thinking
+    engine.window_override = _pref_int(st.store.get_pref(uid, "window"))
+    engine.temperature_override = _pref_float(st.store.get_pref(uid, "temp:" + name))
     chosen = st.store.get_pref(user["id"], "model") or ""
     if chosen and (chosen in engine.fallback_models or chosen in engine.extra_models):
         engine.pin_model(chosen)   # a saved model choice applies to every chat until changed
@@ -454,6 +468,10 @@ def _history(engine):
         item = {"speaker": speaker, "role": role, "text": engine.restore(e.get("text", ""))}
         if e.get("thinking"):
             item["thinking"] = e["thinking"]
+        if e.get("role") == "user" and e.get("speaker") != "narrator":
+            variants = e.get("variants") or []
+            item["variant"] = {"index": int(e.get("variant", len(variants) - 1)) + 1 if variants else 1,
+                               "count": max(len(variants), 1), "limit": MAX_REGENERATIONS}
         if e.get("ts"):
             item["time"] = e["ts"]
         out.append(item)
@@ -482,7 +500,104 @@ def _undo_now(st, user, name, is_group):
         return {"messages": _history(slot.engine)}
 
 
-def _run_turn(st, user, name, slot, message):
+def _swipe_now(st, user, name, is_group, delta):
+    slot = _slot(st, user, name, is_group)
+    with slot.lock:
+        if not slot.engine.swipe(delta):
+            raise HTTPException(400, "No other reply to show.")
+        return {"messages": _history(slot.engine)}
+
+
+def _memory_files(st, user, name):
+    # This account's memory bank and pinned facts, next to memory.json.
+    state_dir = os.path.join(st.data_dir, "users", str(user["id"]), name)
+    return os.path.join(state_dir, "memory.md"), os.path.join(state_dir, "pinned.md")
+
+
+def _read_or_empty(path):
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def _write_text(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def _summary_path(st, user, name):
+    return os.path.join(st.data_dir, "users", str(user["id"]), name, "summary.json")
+
+
+def _read_summary(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    return str(data.get("text") or "") if isinstance(data, dict) else ""
+
+
+def _write_summary(path, text):
+    # Edit the summary text only; keep the count of messages it covers.
+    covered = 0
+    try:
+        with open(path, encoding="utf-8") as f:
+            covered = max(0, int(json.load(f).get("covered", 0)))
+    except (OSError, ValueError, TypeError, AttributeError):
+        covered = 0
+    _write_text(path, json.dumps({"text": text, "covered": covered}, ensure_ascii=False, indent=2))
+
+
+def _pref_int(value):
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _pref_float(value):
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _chat_settings_payload(st, user, name, is_group):
+    return {"character": display_for(name), "is_group": bool(is_group),
+            "temperature": _pref_float(st.store.get_pref(user["id"], "temp:" + name)),
+            "temperature_default": GROUP_TEMPERATURE if is_group else SOLO_TEMPERATURE,
+            "window": _pref_int(st.store.get_pref(user["id"], "window")),
+            "window_default": GROUP_WINDOW if is_group else SOLO_WINDOW,
+            "window_defaults": {"solo": SOLO_WINDOW, "group": GROUP_WINDOW}}
+
+
+def _export_text(messages, title, fmt, when):
+    if fmt == "md":
+        lines = [f"# {title}", "", f"Exported {when}", ""]
+        for m in messages:
+            stamp = f" - {m['time']}" if m.get("time") else ""
+            lines += [f"**{m['speaker']}**{stamp}", "", m["text"], ""]
+    else:
+        lines = [title, f"Exported {when}", ""]
+        for m in messages:
+            stamp = f" ({m['time']})" if m.get("time") else ""
+            lines += [f"{m['speaker']}{stamp}:", m["text"], ""]
+    return "\n".join(lines) + "\n"
+
+
+def _export_now(st, user, name, is_group, fmt):
+    slot = _slot(st, user, name, is_group)
+    with slot.lock:
+        messages = _history(slot.engine)
+    return _export_text(messages, display_for(name), fmt, time.strftime("%Y-%m-%d %H:%M"))
+
+
+def _run_turn(st, user, name, slot, message, regen=False):
     # Run one turn on a worker thread and yield SSE events.
     #
     # Gemini calls block, so they never run on the event loop. Events, in order:
@@ -511,9 +626,22 @@ def _run_turn(st, user, name, slot, message):
                 if blocked:
                     events.put(("error", {"code": "budget_reached", "message": blocked}))
                     return
+                if regen and slot.engine.regen_count() >= MAX_REGENERATIONS:
+                    events.put(("error", {"code": "regen_limit",
+                                          "message": f"This message already has {MAX_REGENERATIONS} regenerations, "
+                                                       "the most allowed. Send a new message to carry on."}))
+                    return
+                if regen:
+                    text = slot.engine.begin_regenerate()
+                    if text is None:
+                        events.put(("error", {"code": "nothing", "message": "There is no reply to regenerate yet."}))
+                        return
                 try:
                     started = time.time()
-                    result = slot.engine.send(slot.engine.prepare_input(message), on_delta=on_delta, on_think=on_think)
+                    processed = text if regen else slot.engine.prepare_input(message)
+                    result = slot.engine.send(processed, on_delta=on_delta, on_think=on_think)
+                    if regen and result.ok:
+                        slot.engine.finish_regenerate()
                     model_used = result.replies[-1].model if result.replies else slot.engine.model_name
                     log(f"turn {name} for user {user['id']}: {time.time() - started:.1f}s, model {model_used}, ok {result.ok}")
                 except Exception as err:
@@ -528,7 +656,7 @@ def _run_turn(st, user, name, slot, message):
                     events.put(("error", {"code": "model_failed", "message": f"No model answered: {detail}"}))
                     return
                 if result.replies:   # the user's message and each reply, for the stats page
-                    st.store.add_usage(user["id"], messages=1 + len(result.replies),
+                    st.store.add_usage(user["id"], messages=(0 if regen else 1) + len(result.replies),
                                        provider=provider_of(result.replies[-1].model))
                 events.put(("done", {
                     "replies": [{"speaker": r.speaker, "color": r.color, "text": r.display, "model": r.model,
@@ -618,6 +746,7 @@ def _run_command(st, user, name, is_group, word, arg):
             if st.store.usage_today(user["id"])["requests"] >= _effective_cap(st, user):
                 return {"notice": "Daily request cap reached, so memory.md was not refreshed."}
             eng.update_memory_bank()
+            _drop_slot(st, user, name)   # the next reply reloads the new memory.md
             return {"notice": "memory.md refreshed."}
     return {"notice": "Nothing to do."}
 
@@ -625,7 +754,7 @@ def _run_command(st, user, name, is_group, word, arg):
 def make_app(client=None, data_dir=None, char_root=None):
     char_root = char_root or CHAR_ROOT
     data_dir = data_dir or DATA_DIR
-    os.chdir(char_root)  # engine paths (character folders, group configs) are relative
+    os.chdir(char_root)  # engine paths (character folders, wiki, group configs) are relative
     if client is None:
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
@@ -672,6 +801,47 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.get("/admin/stats")
     def admin_stats_page():
         return page("stats.html")
+
+    @app.get("/admin/sandboxes")
+    def admin_sandboxes_page():
+        return page("sandboxes.html")
+
+    @app.get("/api/admin/sandboxes/{name}")
+    def admin_sandbox_accounts(name: str, request: Request):
+        # Every account's sandbox for one character: files and bytes held. Admin only.
+        require(request, admin=True)
+        folder, is_group = _resolve_profile(st, name)
+        if is_group:
+            raise HTTPException(404, "Groups have no sandbox.")
+        users = []
+        for u in st.store.list_users():
+            root = sandbox.root_for(os.path.join(st.data_dir, "users", str(u["id"]), folder))
+            files, size = sandbox.usage(root)
+            users.append({"id": u["id"], "username": u["username"], "files": files, "bytes": size})
+        return {"character": display_for(folder),
+                "enabled": sandbox.is_enabled(os.path.join(st.char_root, folder)), "users": users}
+
+    @app.get("/api/admin/sandboxes/{name}/{uid}/list")
+    def admin_sandbox_list(name: str, uid: int, request: Request, path: str = "/"):
+        require(request, admin=True)
+        root = _admin_sandbox_root(st, name, uid)
+        if not os.path.isdir(root):
+            return {"path": "/", "entries": [], "truncated": False}
+        try:
+            return sandbox.list_dir(root, path)
+        except sandbox.SandboxError as err:
+            raise HTTPException(400, str(err))
+
+    @app.get("/api/admin/sandboxes/{name}/{uid}/file")
+    def admin_sandbox_file(name: str, uid: int, request: Request, path: str = "/"):
+        require(request, admin=True)
+        root = _admin_sandbox_root(st, name, uid)
+        if not os.path.isdir(root):
+            raise HTTPException(404, "This account has no sandbox for this character yet.")
+        try:
+            return sandbox.read_file(root, path)
+        except sandbox.SandboxError as err:
+            raise HTTPException(400, str(err))
 
     @app.get("/api/admin/stats")
     def admin_stats(request: Request, days: int = 30, provider: str = "all"):
@@ -868,6 +1038,69 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(502, f"Roll failed: {err}")
         return {"event": {"speaker": "Narrator", "text": text}}
 
+    @app.post("/api/regenerate")
+    async def regenerate(request: Request):
+        # A new reply to the last message. The old reply stays as an alternative (see /api/swipe).
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        _check_caps(st, user)
+        slot = await run_in_threadpool(_slot, st, user, name, is_group)
+        return StreamingResponse(_run_turn(st, user, name, slot, "", regen=True),
+                                 media_type="text/event-stream", headers=SSE_HEADERS)
+
+    @app.post("/api/swipe")
+    async def swipe(request: Request):
+        # Show the previous (-1) or next (+1) saved reply to the last message.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        direction = body.get("direction")
+        if direction not in (-1, 1):
+            raise HTTPException(400, "Direction must be -1 or 1.")
+        return await run_in_threadpool(_swipe_now, st, user, name, is_group, direction)
+
+    @app.get("/api/memory")
+    def memory_get(request: Request, character: str):
+        # The memory bank and pinned facts for this account's copy of a character.
+        user = require(request)
+        name, _ = _resolve_profile(st, character)
+        mem_path, pin_path = _memory_files(st, user, name)
+        return {"memory": _read_or_empty(mem_path), "pinned": _read_or_empty(pin_path), "limit": MEMORY_LIMIT,
+                "summary": _read_summary(_summary_path(st, user, name))}
+
+    @app.post("/api/memory")
+    async def memory_set(request: Request):
+        # Save edits to the memory bank and pinned facts. The next reply loads them.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, _ = _resolve_profile(st, str(body.get("character", "")))
+        memory = str(body.get("memory", ""))
+        pinned = str(body.get("pinned", ""))
+        summary_given = "summary" in body
+        summary = str(body.get("summary") or "")
+        if len(memory) > MEMORY_LIMIT or len(pinned) > MEMORY_LIMIT or len(summary) > MEMORY_LIMIT:
+            raise HTTPException(400, f"Keep each part under {MEMORY_LIMIT} characters.")
+        mem_path, pin_path = _memory_files(st, user, name)
+        sum_path = _summary_path(st, user, name)
+
+        def save_now():
+            with st.slots_lock:
+                mine = [k for k in st.slots if k[0] == user["id"] and k[1] == name]
+                if any(st.slots[k].lock.locked() for k in mine):
+                    raise HTTPException(409, "Wait for the current reply to finish before editing memory.")
+                _write_text(mem_path, memory)
+                _write_text(pin_path, pinned)
+                if summary_given:
+                    _write_summary(sum_path, summary)
+                for k in mine:
+                    st.slots.pop(k, None)
+        await run_in_threadpool(save_now)
+        return {"memory": memory, "pinned": pinned, "summary": _read_summary(sum_path)}
+
     @app.post("/api/persona")
     async def set_persona(request: Request):
         _csrf(request)
@@ -892,6 +1125,22 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
+        if "window" in body:
+            raw = body["window"]
+            if raw in (None, ""):
+                value = ""
+            else:
+                try:
+                    n = int(raw)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, "The window must be a whole number of messages.")
+                if not 1 <= n <= 100:
+                    raise HTTPException(400, "The window must be between 1 and 100 messages.")
+                value = str(n)
+            with st.slots_lock:
+                if any(st.slots[k].lock.locked() for k in st.slots if k[0] == user["id"]):
+                    raise HTTPException(409, "Wait for the current reply to finish before changing the window.")
+            store.set_pref(user["id"], "window", value)
         if "thinking" in body:
             store.set_pref(user["id"], "thinking", "1" if body["thinking"] else "0")
         if "model" in body:
@@ -906,7 +1155,87 @@ def make_app(client=None, data_dir=None, char_root=None):
         with st.slots_lock:
             for k in [k for k in st.slots if k[0] == user["id"]]:
                 st.slots.pop(k, None)
-        return {"thinking": _thinking_on(st, user), "model": store.get_pref(user["id"], "model") or ""}
+        return {"thinking": _thinking_on(st, user), "model": store.get_pref(user["id"], "model") or "",
+                "window": _pref_int(store.get_pref(user["id"], "window"))}
+
+    @app.get("/api/character-settings")
+    async def character_settings_get(request: Request, character: str):
+        user = require(request)
+        name, is_group = _resolve_profile(st, character)
+        return _chat_settings_payload(st, user, name, is_group)
+
+    @app.post("/api/character-settings")
+    async def character_settings_set(request: Request):
+        # This account's creativity (temperature) for one character or group. Null or blank resets it.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        if "temperature" not in body:
+            raise HTTPException(400, "Nothing to save.")
+        raw = body["temperature"]
+        if raw in (None, ""):
+            value = ""
+        else:
+            try:
+                t = float(raw)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "Creativity must be a number.")
+            if not 0.0 <= t <= 1.5:
+                raise HTTPException(400, "Creativity must be between 0 and 1.5.")
+            value = f"{t:.2f}"
+        with st.slots_lock:
+            mine = [k for k in st.slots if k[0] == user["id"] and k[1] == name]
+            if any(st.slots[k].lock.locked() for k in mine):
+                raise HTTPException(409, "Wait for the current reply to finish before changing creativity.")
+            for k in mine:
+                st.slots.pop(k, None)
+        store.set_pref(user["id"], "temp:" + name, value)
+        return _chat_settings_payload(st, user, name, is_group)
+
+    @app.post("/api/edit")
+    async def edit_message(request: Request):
+        # Change the wording of one saved message. No model call, so no request is counted.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        try:
+            index = int(body.get("index"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Pick a message to edit.")
+        text = str(body.get("text", "")).strip()
+        if not text:
+            raise HTTPException(400, "A message cannot be empty.")
+        if len(text) > MAX_MESSAGE:
+            raise HTTPException(400, f"Keep messages under {MAX_MESSAGE} characters.")
+        slot = await run_in_threadpool(_slot, st, user, name, is_group)
+
+        def apply():
+            if not slot.lock.acquire(blocking=False):
+                raise HTTPException(409, "Wait for the current reply to finish before editing.")
+            try:
+                if not slot.engine.edit_message(index, text):
+                    raise HTTPException(400, "That message no longer exists.")
+                return {"messages": _history(slot.engine)}
+            finally:
+                slot.lock.release()
+
+        return await run_in_threadpool(apply)
+
+    @app.get("/api/export")
+    async def export_chat(request: Request, character: str, format: str = "md"):
+        # The chat as a Markdown or plain-text file, saved by the browser.
+        user = require(request)
+        if format not in ("md", "txt"):
+            raise HTTPException(400, "Format must be md or txt.")
+        name, is_group = _resolve_profile(st, character)
+        body = await run_in_threadpool(_export_now, st, user, name, is_group, format)
+        stem = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or "chat"
+        filename = f"{stem}-{time.strftime('%Y-%m-%d')}.{format}"
+        media = "text/markdown; charset=utf-8" if format == "md" else "text/plain; charset=utf-8"
+        return Response(body, media_type=media,
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
 
     @app.post("/api/undo")
     async def undo(request: Request):
@@ -1024,7 +1353,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         body = _read_body(await request.json())
         try:
             out = editor.write_card(st.char_root, str(body.get("name", "")), body.get("card", ""),
-                                    body.get("context", ""), body.get("colour", ""), creating=True)
+                                    body.get("context", ""), body.get("colour", ""), creating=True,
+                                    sandbox_on=(bool(body["sandbox"]) if "sandbox" in body else None))
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         return out
@@ -1036,7 +1366,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         body = _read_body(await request.json())
         try:
             out = editor.write_card(st.char_root, name, body.get("card", ""),
-                                    body.get("context", ""), body.get("colour", ""), creating=False)
+                                    body.get("context", ""), body.get("colour", ""), creating=False,
+                                    sandbox_on=(bool(body["sandbox"]) if "sandbox" in body else None))
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         with st.slots_lock:
