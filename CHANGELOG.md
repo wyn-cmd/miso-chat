@@ -2,11 +2,19 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
-## Unreleased
+## 1.1.1 - 2026-10-19
+
+A small release. Apart from the wiki removal, nothing changes what the app does.
 
 ### Removed
 
 - Wiki lookup: the `[WIKI_SEARCH]` tag, the `wiki.md` file and `scrape_wiki.py`.
+
+### Changed
+
+- The README's word substitutions section has its examples again.
+- Dead code is gone: an unused colour check in the character editor and an unused model list in the engine.
+- The terminal client uses the chat helpers in `rp_core.py` rather than its own copies, so the two can't drift apart.
 
 ## 1.1.0 - 2026-10-19
 

@@ -58,7 +58,6 @@ SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules"}
 SKIP_FILES = {"user_id.json", "device_id.json", "token_tracker.json",
               "request_tracker.json", "config.json", "peers.json"}
 PEERS_FILE = os.path.join(BASE_DIR, "peers.json")
-TMP_SUFFIX = ".p2ptmp"
 BACKUP_SUFFIX = ".p2pbak"
 MAX_PACKET = 256 * 1024 * 1024
 
@@ -254,10 +253,7 @@ _PACKET_DECODER = json.JSONDecoder()
 
 def recv_packet(sock):
     # Read one JSON packet, however many TCP segments it arrives in.
-    #
-    # The old code called recv() once and parsed the result, so any reply larger
-    # than a single segment was quietly discarded. Keeping the plain JSON wire
-    # format also means a device still running the old code can still talk to us.
+    # Plain JSON on the wire, so a device on an older build can still talk to this one.
     data = bytearray()
     while True:
         if data:
@@ -277,33 +273,6 @@ def recv_packet(sock):
 # --- safe writes + history merge ----------------------------------------------
 def is_memory_file(rel_path):
     return os.path.basename(rel_path) == "memory.json"
-
-
-def _load_json_file(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def _entry_key(item):
-    try:
-        return json.dumps(item, sort_keys=True, ensure_ascii=False)
-    except Exception:
-        return repr(item)
-
-
-def merge_memory(local_data, peer_data):
-    # Union two chat histories: nothing either device wrote is dropped.
-    if not isinstance(local_data, list) or not isinstance(peer_data, list):
-        return None
-    merged = list(local_data)
-    have = {_entry_key(i) for i in local_data}
-    for item in peer_data:
-        if _entry_key(item) not in have:
-            merged.append(item)
-    return merged
 
 
 def _atomic_write(path, data):
@@ -663,7 +632,8 @@ console = Console()
 
 # GEMINI_API_KEY is read from the environment or .env (see load_dotenv above)
 
-from rp_core import Engine, get_request_bar, timestamp_now
+from rp_core import (Engine, TMP_SUFFIX, _load_json_file, get_request_bar,
+                     merge_memory, timestamp_now)
 from charname import display_for, resolve_folder
 
 # ---------------------------------------------------------------------------
