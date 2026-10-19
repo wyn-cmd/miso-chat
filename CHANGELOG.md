@@ -2,6 +2,12 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## Unreleased
+
+### Removed
+
+- Wiki lookup: the `[WIKI_SEARCH]` tag, the `wiki.md` file and `scrape_wiki.py`.
+
 ## 1.1.0 - 2026-10-19
 
 This release is mostly about the chat itself: replies can be regenerated and compared, saved messages can be fixed, and the memory is easier to see and shape.
