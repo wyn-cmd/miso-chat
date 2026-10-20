@@ -2,6 +2,29 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.2.1 - 2026-10-20
+
+This release adds group chats and a branch tree view, and changes how chat backgrounds and message bubbles look.
+
+### Added
+
+- Group chats. Any account can create one from the chat sidebar, with two to eight characters. A group is private to the account that made it: other accounts cannot see or change it. An account can have up to 20 groups.
+- A director picks the speakers for each group turn. It reads the message, the chat history, the summary, the memory and the member notes, then returns the speakers in order. Each chosen member replies in that order. If the director cannot be used, one random member replies and the note in the chat says why.
+- Per-member notes for each group. Notes are private to the account. The director and the noted member both read them.
+- A branch tree view, opened from the Tree button in the chat. Each account sees the tree for its own chats. Admins can open any account's tree, read-only.
+
+### Changed
+
+- The chat background covers the whole page, behind the sidebar and the header, not only the chat column. Dark mode darkens it. Light mode shows the image as uploaded.
+- In dark mode the sidebar is nearly opaque, so the background does not show through it.
+- Your messages shrink to fit short text and stay on the right. Character messages sit on the left at the same width.
+- The director uses the same model as the group members, the model picked in the account's settings.
+- New background uploads keep their original colours. Backgrounds uploaded before this release stay as they are until you upload them again.
+
+### Upgrading
+
+Follow `UPDATE.txt`. No data changes are needed. Group and note data is written under each account's folder in `data/`, which the update does not touch.
+
 ## 1.2.0 - 2026-10-19
 
 This release adds a home page, chat branches, character import and export, drafting a character from a file, and the Mind Palace.
@@ -9,7 +32,7 @@ This release adds a home page, chat branches, character import and export, draft
 ### Added
 
 - A home page with character cards, a search box, a tag filter and recommendations based on the tags of the characters you chat with.
-- Chat branches. Each saved message has a Branch button that copies the chat up to that message into a new branch. You can switch between branches and delete one. A chat can have up to 12 branches, and groups work the same way.
+- Chat branches. Each saved message has a Branch button that copies the chat up to that message into a new branch. You can switch between branches and delete one. A chat can have up to 12 branches.
 - Character import and export as zip files. The export can include this account's chat history and memory.
 - Chat backgrounds. An admin uploads one per character. It is darkened and shown on the character's home card and behind its chat.
 - Creators. A new character is credited to the account that created it. Existing characters are credited to admin.
@@ -25,12 +48,6 @@ This release adds a home page, chat branches, character import and export, draft
 - The chat window and message bubbles are more transparent, and the bubbles have a shadow.
 - The top bar on every page stays on one row, including on phones.
 - requirements.txt adds pymupdf and python-docx.
-
-### Removed
-
-- The peer-to-peer sync that copied character folders between two machines on a local network, with its `.p2pbak` and `.p2ptmp` files.
-- The terminal chat, `roleplay.py` and `run.bash`. It now lives in its own repository.
-- A hard-coded LAN address in the terminal chat.
 
 ### Upgrading
 
