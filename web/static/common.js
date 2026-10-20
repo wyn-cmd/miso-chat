@@ -48,6 +48,14 @@ function applyTheme(theme) {
   }
 }
 
+// Icon shape is per account, but it is also cached so theme-init.js can set it before the first paint.
+const AVATAR_KEY = "rp_avatar";
+function applyAvatarShape(shape) {
+  const circle = shape === "circle";
+  document.documentElement.dataset.avatar = circle ? "circle" : "squircle";
+  try { localStorage.setItem(AVATAR_KEY, circle ? "circle" : "squircle"); } catch (e) { /* storage blocked */ }
+}
+
 function toggleTheme() {
   const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
   try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* private mode: applies for this page only */ }

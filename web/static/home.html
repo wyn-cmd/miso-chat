@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Miso Chat">
+  <meta name="apple-mobile-web-app-title" content="Miso Chat">
+  <title>Miso Chat</title>
+  <script src="/static/theme-init.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#020307">
+</head>
+<body>
+  <header>
+    <button id="menuBtn" class="ghost menu-btn" type="button" aria-label="Open character list" aria-controls="sidebar" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+    </button>
+    <a class="brand" href="/">Miso Chat</a>
+    <span id="who" class="muted"></span>
+    <span class="spacer home-spacer"></span>
+    <a id="adminLink" href="/admin" hidden>Admin</a>
+    <button id="logoutBtn" class="ghost" type="button">Log out</button>
+    <button id="themeBtn" class="icon-btn" type="button" aria-label="Switch to light theme"></button>
+  </header>
+  <div class="shell">
+    <aside id="sidebar" class="sidebar" aria-label="Characters">
+      <h2>Characters</h2>
+      <div id="charList" class="char-list"></div>
+      <div id="groupBox" hidden>
+        <h2>Group chats</h2>
+        <div id="groupList" class="char-list"></div>
+      </div>
+    </aside>
+    <div id="scrim" class="scrim" hidden></div>
+  <main class="content home-main">
+    <h1>Choose a character</h1>
+    <p class="muted">Pick someone to start chatting with. Tap the i for more about them.</p>
+    <div class="home-search">
+      <input id="homeSearch" type="search" placeholder="Search name, creator, headline or summary" aria-label="Search characters" autocomplete="off">
+      <button id="tagFilterBtn" class="icon-btn" type="button" aria-label="Filter by tags" aria-expanded="false" aria-controls="tagPanel" title="Filter by tags">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+      </button>
+    </div>
+    <section id="tagPanel" class="tag-panel" hidden>
+      <div class="tag-panel-head"><span id="tagPanelNote" class="muted"></span><button id="tagClear" class="ghost small" type="button">Clear tags</button></div>
+      <div id="tagChips" class="tag-chips"></div>
+    </section>
+    <p id="homeCount" class="muted"></p>
+    <p id="homeErr" class="error"></p>
+    <section id="homeRecs" class="home-recs" hidden>
+      <h2>Recommended for you</h2>
+      <p class="muted">Characters you have not tried yet that share tags with the ones you chat with most.</p>
+      <div id="recGrid" class="home-grid"></div>
+    </section>
+    <div id="homeGrid" class="home-grid"></div>
+    <p id="homeEmpty" class="muted" hidden>No characters yet. An admin can add one.</p>
+    <p id="homeNoMatch" class="muted" hidden>Nothing matches. Try fewer words or clear a tag.</p>
+  </main>
+  </div>
+  <dialog id="infoDialog" class="home-dialog" aria-labelledby="infoTitle">
+    <div class="sheet-head">
+      <h2 id="infoTitle"></h2>
+      <button id="infoClose" class="ghost small" type="button">Close</button>
+    </div>
+    <p id="infoHeadline" class="home-headline"></p>
+    <p id="infoCreator" class="muted"></p>
+    <div id="infoTags" class="home-tags"></div>
+    <p id="infoBody" class="home-info-body"></p>
+    <div class="row">
+      <span class="spacer"></span>
+      <button id="infoStart" type="button">Start chatting</button>
+    </div>
+  </dialog>
+  <script src="/static/common.js"></script>
+  <script src="/static/home.js"></script>
+</body>
+</html>

@@ -28,7 +28,7 @@ from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_T
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, draft, branches
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, budget_days, recent_days, verify_password
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -108,7 +108,7 @@ def _persona_list(st):
 
 
 def _persona_for(st, user):
-    # The persona this account plays as. Never chosen yet: the first persona, as run.bash does. Chosen as none: None.
+    # The persona this account plays as. Never chosen yet: the first persona. Chosen as none: None.
     personas = load_personas(st.char_root)
     raw = st.store.get_pref(user["id"], "persona")
     if raw is None:
@@ -119,6 +119,18 @@ def _persona_for(st, user):
 def _persona_info(st, user):
     name = _persona_for(st, user)
     return {"name": display_for(name), "color": colour_of(st.char_root, name) or NEUTRAL_HEX} if name else None
+
+
+def _avatar_shape(store, uid):
+    # Squircle unless the account picked circles; any other stored value counts as squircle.
+    return "circle" if store.get_pref(uid, "avatar_shape") == "circle" else "squircle"
+
+
+def _has_background(root, name):
+    try:
+        return editor.background_path(root, name) is not None
+    except editor.EditorError:
+        return False
 
 
 def _has_icon(root, name):
@@ -276,6 +288,43 @@ def _budget_block(st, user):
     return None
 
 
+def _count_model_call(st, uid, model):
+    # One model call made for this user. Counts toward their usage and the per-minute limit.
+    st.store.add_usage(uid, requests=1, provider=provider_of(model))
+    with st.rpm_lock:
+        st.rpm.append(time.time())
+
+
+def _card_for(st, folder):
+    # What the home page shows for a character. Never the character.md text.
+    prof = profiles.read_profile(os.path.join(st.char_root, folder))
+    name = display_for(folder)
+    return {"name": name, "headline": prof["headline"] if prof else "", "info": prof["info"] if prof else "",
+            "tags": prof["tags"] if prof else [], "has_profile": prof is not None,
+            "pending": folder in st.profiles.pending(), "has_icon": _has_icon(st.char_root, name),
+            "has_background": _has_background(st.char_root, name),
+            "color": colour_of(st.char_root, folder) or NEUTRAL_HEX,
+            "creator": editor.creator_of(os.path.join(st.char_root, folder))}
+
+
+def _known_tags(st):
+    # Tags on solo characters, most used first. Passed to the writer so it reuses them.
+    solo, _ = scan_characters(st.char_root)
+    return [t["name"] for t in profiles.tag_counts(st.char_root, solo)]
+
+
+def _queue_missing_profiles(st, user, folders):
+    # Ask the background writer for characters that have no profile yet. Skipped when this user is over a cap.
+    missing = [f for f in folders if profiles.read_profile(os.path.join(st.char_root, f)) is None]
+    if not missing:
+        return
+    try:
+        _check_caps(st, user)
+    except HTTPException:
+        return
+    st.profiles.want(missing, user["id"])
+
+
 def _check_caps(st, user):
     # Pre-turn check. Group turns can overshoot a little: each member is one call.
     used = st.store.usage_today(user["id"])["requests"]
@@ -322,6 +371,15 @@ def _resolve_profile(st, name):
     raise HTTPException(404, "Unknown character.")
 
 
+SWITCHES = ("memory_enabled", "palace_enabled")
+
+
+def _apply_switches(st, engine):
+    # Read per request, so an admin change takes effect on the next message.
+    engine.memory_enabled = st.store.get_setting("memory_enabled") == "1"
+    engine.palace_enabled = st.store.get_setting("palace_enabled") == "1"
+
+
 def _slot(st, user, name, is_group):
     persona = _persona_for(st, user)
     thinking = _thinking_on(st, user)
@@ -329,9 +387,12 @@ def _slot(st, user, name, is_group):
     with st.slots_lock:
         slot = st.slots.get(key)
     if slot is not None:
+        _apply_switches(st, slot.engine)
         return slot
     uid = user["id"]
-    state_dir = os.path.join(st.data_dir, "users", str(uid), name)
+    state_root = os.path.join(st.data_dir, "users", str(uid), name)
+    # A branch chat loads from its own folder; the main chat is the account folder itself.
+    state_dir = branches.active_dir(state_root)
     os.makedirs(state_dir, exist_ok=True)
 
     def on_request(model=None):
@@ -346,11 +407,13 @@ def _slot(st, user, name, is_group):
     engine = Engine(st.client, name, persona, log=lambda m: None, state_dir=state_dir,
                     on_request=on_request, on_tokens=on_tokens, allow_root_user=False,
                     member_memory=False, persist_config=False)
+    _apply_switches(st, engine)
     engine.extra_models = _extra_models(st)
     engine.discover_models()
     engine.thinking = thinking
     engine.window_override = _pref_int(st.store.get_pref(uid, "window"))
     engine.temperature_override = _pref_float(st.store.get_pref(uid, "temp:" + name))
+    engine.reply_length_override = _reply_target(st, uid)
     chosen = st.store.get_pref(user["id"], "model") or ""
     if chosen and (chosen in engine.fallback_models or chosen in engine.extra_models):
         engine.pin_model(chosen)   # a saved model choice applies to every chat until changed
@@ -509,8 +572,8 @@ def _swipe_now(st, user, name, is_group, delta):
 
 
 def _memory_files(st, user, name):
-    # This account's memory bank and pinned facts, next to memory.json.
-    state_dir = os.path.join(st.data_dir, "users", str(user["id"]), name)
+    # This account's memory bank and pinned facts, in the folder of the branch that is open.
+    state_dir = branches.active_dir(os.path.join(st.data_dir, "users", str(user["id"]), name))
     return os.path.join(state_dir, "memory.md"), os.path.join(state_dir, "pinned.md")
 
 
@@ -530,7 +593,7 @@ def _write_text(path, text):
 
 
 def _summary_path(st, user, name):
-    return os.path.join(st.data_dir, "users", str(user["id"]), name, "summary.json")
+    return os.path.join(branches.active_dir(os.path.join(st.data_dir, "users", str(user["id"]), name)), "summary.json")
 
 
 def _read_summary(path):
@@ -565,6 +628,20 @@ def _pref_float(value):
         return float(value) if value not in (None, "") else None
     except (TypeError, ValueError):
         return None
+
+
+def _reply_bounds(store):
+    # The admin's site-wide range for the reply length target, in tokens.
+    return int(store.get_setting("reply_min_tokens")), int(store.get_setting("reply_max_tokens"))
+
+
+def _reply_target(st, uid):
+    # This account's reply length target, kept inside the admin's range. None = no target.
+    raw = _pref_int(st.store.get_pref(uid, "reply_length"))
+    if raw is None:
+        return None
+    lo, hi = _reply_bounds(st.store)
+    return max(lo, min(hi, raw))
 
 
 def _chat_settings_payload(st, user, name, is_group):
@@ -765,6 +842,10 @@ def make_app(client=None, data_dir=None, char_root=None):
     store.ensure_admin()
     st = AppState(store, build_client(client, data_dir), data_dir, char_root)
     st.data_dir_ref = data_dir
+    st.profile_gate = profiles.RateGate(profiles.PROFILE_RPM, reserve=profiles.PROFILE_RESERVE)   # shared by the background writer and Auto-fill
+    st.profiles = profiles.ProfileWriter(char_root, st.client, gate=st.profile_gate, log=lambda m: print(m, flush=True))
+    st.profiles.on_call = lambda uid, model: _count_model_call(st, uid, model)
+    st.profiles.tag_source = lambda: _known_tags(st)
 
     app = FastAPI(title="Miso Chat", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.rp = st
@@ -788,6 +869,10 @@ def make_app(client=None, data_dir=None, char_root=None):
 
     @app.get("/")
     def index():
+        return page("home.html")   # the character gallery
+
+    @app.get("/chat")
+    def chat_page():
         return page("app.html")
 
     @app.get("/login")
@@ -916,12 +1001,17 @@ def make_app(client=None, data_dir=None, char_root=None):
         user = require(request, allow_change=True)
         info = {"username": user["username"], "is_admin": bool(user["is_admin"]),
                 "must_change": bool(user["must_change"])}
+        info["features"] = {"memory": st.store.get_setting("memory_enabled") == "1",
+                            "palace": st.store.get_setting("palace_enabled") == "1"}
         if not user["must_change"]:
             info["usage"] = _usage_summary(st, user)
             info["global"] = {"requests_today": store.global_requests_today(),
                               "cap": int(store.get_setting("global_daily_cap"))}
             info["persona"] = _persona_info(st, user)
             info["thinking"] = _thinking_on(st, user)
+            info["reply_length"] = _reply_target(st, user["id"])
+            info["reply_length_bounds"] = list(_reply_bounds(store))
+            info["avatar_shape"] = _avatar_shape(store, user["id"])
             info["models"] = {"gemini": "auto", "extra": _extra_models(st)}
             info["model"] = store.get_pref(user["id"], "model") or ""   # the saved choice, so the picker reloads it
             info["personas"] = _persona_list(st)
@@ -955,11 +1045,16 @@ def make_app(client=None, data_dir=None, char_root=None):
 
     @app.get("/api/characters")
     def characters(request: Request):
-        require(request)
+        user = require(request)
         solo, groups = scan_characters(st.char_root)
+        _queue_missing_profiles(st, user, solo)
         return {"solo": [display_for(s) for s in solo], "groups": [{"name": display_for(g), "members": [display_for(x) for x in m]} for g, m in groups.items()],
+                "cards": [_card_for(st, s) for s in solo],
                 "personas": _persona_list(st), "colors": _colour_map(st.char_root),
-                "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))]}
+                "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))],
+                "backgrounds": [display_for(n) for n in solo if _has_background(st.char_root, display_for(n))],
+                "recommended": [{"name": display_for(r["folder"]), "tags": r["tags"]} for r in
+                                recommend.recommend(st.char_root, st.data_dir, user["id"], solo)]}
 
     @app.get("/api/history")
     def history(request: Request, character: str):
@@ -1151,12 +1246,35 @@ def make_app(client=None, data_dir=None, char_root=None):
             with st.slots_lock:
                 for k in [k for k in st.slots if k[0] == user["id"]]:
                     st.slots.pop(k, None)
+        if "reply_length" in body:
+            raw = body["reply_length"]
+            if raw in (None, ""):
+                value = ""
+            else:
+                try:
+                    n = int(raw)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, "The reply length must be a whole number of tokens.")
+                lo, hi = _reply_bounds(store)
+                if not lo <= n <= hi:
+                    raise HTTPException(400, f"The reply length must be between {lo} and {hi} tokens.")
+                value = str(n)
+            with st.slots_lock:
+                if any(st.slots[k].lock.locked() for k in st.slots if k[0] == user["id"]):
+                    raise HTTPException(409, "Wait for the current reply to finish before changing the reply length.")
+            store.set_pref(user["id"], "reply_length", value)
+        if "avatar_shape" in body:
+            if body["avatar_shape"] not in ("squircle", "circle"):
+                raise HTTPException(400, "The icon shape must be squircle or circle.")
+            store.set_pref(user["id"], "avatar_shape", body["avatar_shape"])
         # cached engines hold the old settings; drop them so the next turn picks up the new ones
         with st.slots_lock:
             for k in [k for k in st.slots if k[0] == user["id"]]:
                 st.slots.pop(k, None)
         return {"thinking": _thinking_on(st, user), "model": store.get_pref(user["id"], "model") or "",
-                "window": _pref_int(store.get_pref(user["id"], "window"))}
+                "window": _pref_int(store.get_pref(user["id"], "window")),
+                "reply_length": _reply_target(st, user["id"]),
+                "avatar_shape": _avatar_shape(store, user["id"])}
 
     @app.get("/api/character-settings")
     async def character_settings_get(request: Request, character: str):
@@ -1333,10 +1451,40 @@ def make_app(client=None, data_dir=None, char_root=None):
 
     # ---- character editor (admin only; friends see icons and colours, never the card)
 
+    @app.get("/api/admin/tags")
+    def tag_list(request: Request):
+        # Every tag in use and how many characters carry it. Feeds the editor's suggestions.
+        require(request, admin=True)
+        solo, _ = scan_characters(st.char_root)
+        return {"tags": profiles.tag_counts(st.char_root, solo)}
+
     @app.get("/api/admin/characters/example")
     def editor_example(request: Request):
         require(request, admin=True)
         return {"card": editor.example_card()}
+
+    @app.post("/api/admin/characters/draft")
+    async def editor_draft(request: Request):
+        # Drafts a headline, summary and tags from a card. Nothing is saved until the admin saves the form.
+        _csrf(request)
+        user = require(request, admin=True)
+        body = _read_body(await request.json())
+        card = body.get("card", "")
+        if not isinstance(card, str) or not card.strip():
+            raise HTTPException(400, "Write the character card first.")
+        _check_caps(st, user)
+
+        def work():
+            return profiles.generate(st.client, card, on_call=lambda model: _count_model_call(st, user["id"], model),
+                                     gate=st.profile_gate, wait_timeout=30, priority=True,
+                                     known_tags=_known_tags(st))
+        try:
+            prof = await run_in_threadpool(work)
+        except profiles.ProfileBusy as err:
+            raise HTTPException(429, f"Auto-fill is busy, try again in a minute ({err}).")
+        except profiles.ProfileError as err:
+            raise HTTPException(502, f"Auto-fill failed: {err}")
+        return {"headline": prof["headline"], "info": prof["info"], "tags": prof["tags"]}
 
     @app.get("/api/admin/characters/{name}")
     def editor_read(name: str, request: Request):
@@ -1349,12 +1497,14 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.post("/api/admin/characters")
     async def editor_create(request: Request):
         _csrf(request)
-        require(request, admin=True)
+        user = require(request, admin=True)
         body = _read_body(await request.json())
         try:
             out = editor.write_card(st.char_root, str(body.get("name", "")), body.get("card", ""),
                                     body.get("context", ""), body.get("colour", ""), creating=True,
-                                    sandbox_on=(bool(body["sandbox"]) if "sandbox" in body else None))
+                                    sandbox_on=(bool(body["sandbox"]) if "sandbox" in body else None),
+                                    profile=body.get("profile"))
+            editor.record_creator(editor.folder_of(st.char_root, str(body.get("name", ""))), user["username"])
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         return out
@@ -1367,7 +1517,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         try:
             out = editor.write_card(st.char_root, name, body.get("card", ""),
                                     body.get("context", ""), body.get("colour", ""), creating=False,
-                                    sandbox_on=(bool(body["sandbox"]) if "sandbox" in body else None))
+                                    sandbox_on=(bool(body["sandbox"]) if "sandbox" in body else None),
+                                    profile=body.get("profile"))
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         with st.slots_lock:
@@ -1398,6 +1549,54 @@ def make_app(client=None, data_dir=None, char_root=None):
         media = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg"}.get(os.path.splitext(path)[1].lower())
         return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=300"})
 
+    @app.post("/api/admin/characters/import")
+    async def editor_import(request: Request):
+        _csrf(request)
+        user = require(request, admin=True)
+        data = await request.body()
+        try:
+            return await run_in_threadpool(transfer.import_zip, st.char_root, st.data_dir, user["id"],
+                                           user["username"], data)
+        except editor.EditorError as err:
+            raise HTTPException(400, str(err))
+
+    @app.get("/api/admin/characters/{name}/export")
+    async def editor_export(name: str, request: Request, history: str = "0"):
+        # A zip of the character. history=1 adds this admin's chat history and memories for it.
+        user = require(request, admin=True)
+        include = history in ("1", "true")
+        try:
+            body = await run_in_threadpool(transfer.export_zip, st.char_root, st.data_dir, user["id"], name, include)
+        except editor.EditorError as err:
+            raise HTTPException(404, str(err))
+        stem = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or "character"
+        suffix = "-with-history" if include else ""
+        return Response(body, media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{stem}{suffix}.zip"',
+                                 "Cache-Control": "no-store"})
+
+    @app.post("/api/admin/characters/{name}/background")
+    async def editor_background(name: str, request: Request):
+        _csrf(request)
+        require(request, admin=True)
+        data = await request.body()
+        try:
+            editor.save_background(st.char_root, name, data)
+        except editor.EditorError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True}
+
+    @app.get("/api/background/{name}")
+    def character_background(name: str, request: Request):
+        require(request)
+        try:
+            path = editor.background_path(st.char_root, name)
+        except editor.EditorError:
+            raise HTTPException(404, "No such character.")
+        if path is None:
+            raise HTTPException(404, "No background.")
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
+
     @app.get("/api/admin/providers")
     def admin_providers_get(request: Request):
         require(request, admin=True)
@@ -1427,10 +1626,152 @@ def make_app(client=None, data_dir=None, char_root=None):
         for key, val in body.items():
             if key not in DEFAULT_SETTINGS:
                 raise HTTPException(400, f"Unknown setting: {key}")
-            if not isinstance(val, int) or val < 1:
+            if key in SWITCHES:
+                if not isinstance(val, bool):
+                    raise HTTPException(400, f"{key} must be on or off.")
+                continue
+            if not isinstance(val, int) or isinstance(val, bool) or val < 1:
                 raise HTTPException(400, f"{key} must be a whole number of at least 1.")
+        lo = int(body.get("reply_min_tokens", store.get_setting("reply_min_tokens")))
+        hi = int(body.get("reply_max_tokens", store.get_setting("reply_max_tokens")))
+        if not 10 <= lo <= hi <= 4000:
+            raise HTTPException(400, "Reply length must be between 10 and 4000 tokens, and the shortest cannot be longer than the longest.")
         for key, val in body.items():
-            store.set_setting(key, val)
+            store.set_setting(key, ("1" if val else "0") if key in SWITCHES else val)
         return store.all_settings()
+
+    def _character_dir(name):
+        try:
+            folder = editor.folder_of(st.char_root, name)
+        except editor.EditorError as err:
+            raise HTTPException(400, str(err))
+        if not os.path.isdir(folder):
+            raise HTTPException(404, "Unknown character.")
+        return folder
+
+    @app.get("/api/admin/characters/{name}/palace")
+    def palace_get(name: str, request: Request):
+        require(request, admin=True)
+        return {"entries": palace.load(_character_dir(name))}
+
+    @app.post("/api/admin/characters/{name}/palace")
+    async def palace_set(name: str, request: Request):
+        _csrf(request)
+        require(request, admin=True)
+        body = _read_body(await request.json())
+        try:
+            entries = palace.save(_character_dir(name), body.get("entries", []))
+        except palace.PalaceError as err:
+            raise HTTPException(400, str(err))
+        return {"entries": entries}
+
+    @app.post("/api/admin/character-draft")
+    async def character_draft(request: Request):
+        # Reads one uploaded file and drafts the card from its text. Nothing is saved here.
+        from urllib.parse import unquote
+        _csrf(request)
+        user = require(request, admin=True)
+        if int(request.headers.get("content-length") or 0) > ocr.MAX_BYTES + 4096:
+            raise HTTPException(413, "Files can be up to 10 MB.")
+        _check_caps(st, user)
+        data = await request.body()
+        filename = unquote(request.headers.get("x-filename", ""))
+        try:
+            text, notes = await run_in_threadpool(ocr.extract, filename, data)
+        except ocr.OCRError as err:
+            raise HTTPException(400, str(err))
+
+        def work():
+            return draft.draft_character(st.client, text,
+                                         on_call=lambda model: _count_model_call(st, user["id"], model),
+                                         gate=st.profile_gate, wait_timeout=30, priority=True)
+        try:
+            result = await run_in_threadpool(work)
+        except profiles.ProfileBusy as err:
+            raise HTTPException(429, str(err))
+        except draft.DraftError as err:
+            raise HTTPException(502, f"Draft failed: {err}")
+        result["notes"] = notes
+        return result
+
+    def _branch_root(user, name):
+        return os.path.join(st.data_dir, "users", str(user["id"]), name)
+
+    def _branch_state(user, name, is_group):
+        # After a branch change the next read loads the chat from the newly active folder.
+        _drop_slot(st, user, name)
+        slot = _slot(st, user, name, is_group)
+        with slot.lock:
+            return {"messages": _history(slot.engine), **branches.listing(_branch_root(user, name))}
+
+    @app.get("/api/branches")
+    def branch_list(request: Request, character: str):
+        user = require(request)
+        name, _ = _resolve_profile(st, character)
+        return branches.listing(_branch_root(user, name))
+
+    @app.post("/api/branch")
+    async def branch_fork(request: Request):
+        # Copies the chat up to the chosen message and opens the copy. The main chat is left as it was.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+
+        def work():
+            slot = _slot(st, user, name, is_group)
+            if not slot.lock.acquire(blocking=False):
+                raise HTTPException(409, "Wait for the current reply to finish before branching.")
+            try:
+                try:
+                    branches.fork(_branch_root(user, name), body.get("index"), str(body.get("name") or ""))
+                except branches.BranchError as err:
+                    raise HTTPException(400, str(err))
+            finally:
+                slot.lock.release()
+            return _branch_state(user, name, is_group)
+        return await run_in_threadpool(work)
+
+    @app.post("/api/branch/switch")
+    async def branch_switch(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+
+        def work():
+            slot = _slot(st, user, name, is_group)
+            if not slot.lock.acquire(blocking=False):
+                raise HTTPException(409, "Wait for the current reply to finish before switching branches.")
+            try:
+                try:
+                    branches.switch(_branch_root(user, name), str(body.get("id", "")))
+                except branches.BranchError as err:
+                    raise HTTPException(400, str(err))
+            finally:
+                slot.lock.release()
+            return _branch_state(user, name, is_group)
+        return await run_in_threadpool(work)
+
+    @app.post("/api/branch/delete")
+    async def branch_delete(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+
+        def work():
+            slot = _slot(st, user, name, is_group)
+            if not slot.lock.acquire(blocking=False):
+                raise HTTPException(409, "Wait for the current reply to finish before deleting a branch.")
+            try:
+                try:
+                    branches.delete(_branch_root(user, name), str(body.get("id", "")))
+                except branches.BranchError as err:
+                    raise HTTPException(400, str(err))
+            finally:
+                slot.lock.release()
+            return _branch_state(user, name, is_group)
+        return await run_in_threadpool(work)
 
     return app

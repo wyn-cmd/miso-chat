@@ -3,3 +3,6 @@
 try {
   if (localStorage.getItem("rp_theme") === "light") document.documentElement.dataset.theme = "light";
 } catch (e) { /* storage blocked: stay on the dark default */ }
+try {
+  if (localStorage.getItem("rp_avatar") === "circle") document.documentElement.dataset.avatar = "circle";
+} catch (e) { /* storage blocked: icons stay squircle */ }
