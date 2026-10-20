@@ -6,9 +6,12 @@
 # Environment:
 #     GEMINI_API_KEY          required
 #     MISO_DATA_DIR           app.db and per-user chat state (default ./data)
-#     MISO_COOKIE_SECURE      set to 1 when served over HTTPS (Cloudflare or Tailscale HTTPS)
+#     MISO_COOKIE_SECURE      defaults to 1; set to 0 only for plain-http testing on a private network
 import collections
+import hashlib
+import ipaddress
 import json
+import math
 import os
 import queue
 import re
@@ -28,23 +31,35 @@ from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_T
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor, profiles, recommend, transfer, ocr, palace, draft, branches, private_groups
-from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, budget_days, recent_days, verify_password
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, draft, branches, private_groups, secure, backup
+from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, budget_days, recent_days, verify_password, needs_rehash
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHAR_ROOT = os.path.dirname(HERE)
+# VERSION sits at the project root. The terminal client compares its major.minor with this.
+APP_VERSION = open(os.path.join(CHAR_ROOT, "VERSION"), encoding="utf-8").read().strip() if os.path.isfile(os.path.join(CHAR_ROOT, "VERSION")) else "unknown"
 
 # Read the project's .env (if any) before the settings below are read.
 from dotenv_loader import load_dotenv  # noqa: E402
 load_dotenv(os.path.join(CHAR_ROOT, ".env"))
+# Two-factor secrets are sealed with MISO_SECRET_KEY. Make one on first start and keep it in .env, so
+# every restart can open them. If .env can't be written, the two-factor routes refuse instead of guessing.
+if not os.environ.get("MISO_SECRET_KEY"):
+    _env_path = os.path.join(CHAR_ROOT, ".env")
+    try:
+        _before = open(_env_path, encoding="utf-8").read() if os.path.exists(_env_path) else ""
+        _key = secure.new_server_key()
+        with open(_env_path, "a", encoding="utf-8") as _f:
+            _f.write(("" if not _before or _before.endswith("\n") else "\n") + "MISO_SECRET_KEY=" + _key + "\n")
+        os.environ["MISO_SECRET_KEY"] = _key
+    except OSError:
+        pass
 DATA_DIR = os.environ.get("MISO_DATA_DIR") or os.environ.get("ROLEPLAY_DATA_DIR") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 COOKIE = "rp_session"
-COOKIE_SECURE = (os.environ.get("MISO_COOKIE_SECURE") or os.environ.get("ROLEPLAY_COOKIE_SECURE")) == "1"
+COOKIE_SECURE = (os.environ.get("MISO_COOKIE_SECURE") or os.environ.get("ROLEPLAY_COOKIE_SECURE") or "1") != "0"   # on unless turned off for plain-http testing
 MAX_MESSAGE = 4000
-MIN_PASSWORD = 8
+MIN_PASSWORD = 10
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{2,32}$")
-LOGIN_WINDOW = 900        # seconds
-LOGIN_MAX_FAILS = 10
 TOKEN_DISPLAY_LIMIT = 1_000_000
 MEMORY_LIMIT = 20_000        # characters allowed in memory.md or pinned.md
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -158,6 +173,108 @@ def _extra_models(st):
     return out
 
 
+def client_ip(request):
+    # Behind the tunnel every request arrives from localhost, so the real address comes from Cloudflare's
+    # header. It is trusted only from localhost, because anyone else could send it.
+    peer = request.client.host if request.client else ""
+    if peer in ("127.0.0.1", "::1"):
+        forwarded = request.headers.get("cf-connecting-ip", "").strip()
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            pass
+    return peer or "unknown"
+
+
+def _ip_error():
+    return HTTPException(423, "Too many failed sign-ins for this account from this address. An admin has to unlock it.")
+
+
+def _lock_error(state):
+    # The refusal for a locked name: 423 until an admin unlocks it, 429 with the time left otherwise.
+    if state[0] == "permanent":
+        return HTTPException(423, "This account is locked after too many failed sign-ins. An admin has to unlock it.")
+    minutes = max(1, math.ceil(state[1] / 60))
+    return HTTPException(429, f"Too many failed sign-ins. Try again in {minutes} minute{'' if minutes == 1 else 's'}.")
+
+
+def _lock_view(row, now):
+    # What the admin page shows for an account's sign-in lock.
+    fails = row["fails"] if row else 0
+    if row and row["permanent"]:
+        return {"failed_logins": fails, "login_lock": "permanent", "locked_until": None}
+    if row and row["locked_until"] > now:
+        return {"failed_logins": fails, "login_lock": "timed", "locked_until": row["locked_until"]}
+    return {"failed_logins": fails, "login_lock": None, "locked_until": None}
+
+
+# ---- two-factor sign-in and backups: helpers
+
+_session_code_fails = {}   # user id -> (misses, locked until); guards codes and passwords entered while signed in
+
+
+def _server_key():
+    try:
+        return secure.server_key(os.environ.get("MISO_SECRET_KEY"))
+    except secure.SecureError as err:
+        raise HTTPException(503, str(err))
+
+
+def _totp_aad(user_id):
+    # Binds a sealed secret to its account, so one account's secret can't be moved onto another row.
+    return f"totp:{user_id}".encode("ascii")
+
+
+def _open_secret(user):
+    if not user["totp_secret"]:
+        raise HTTPException(400, "Two-factor sign-in is not set up.")
+    try:
+        return secure.open_sealed(_server_key(), user["totp_secret"], _totp_aad(user["id"]))
+    except secure.SecureError:
+        raise HTTPException(503, "The two-factor secret could not be read. An admin can reset it.")
+
+
+def _session_gate(user):
+    # Five misses lock the signed-in checks for 15 minutes. The sign-in itself is limited by the account lock.
+    _misses, until = _session_code_fails.get(user["id"], (0, 0.0))
+    if time.time() < until:
+        raise HTTPException(429, "Too many wrong attempts. Wait 15 minutes and try again.")
+
+
+def _session_miss(user, message):
+    misses, _until = _session_code_fails.get(user["id"], (0, 0.0))
+    misses += 1
+    _session_code_fails[user["id"]] = (0, time.time() + 900) if misses >= 5 else (misses, 0.0)
+    raise HTTPException(401, message)
+
+
+def _check_session_code(user, code):
+    _session_gate(user)
+    ok, step = secure.check_code(_open_secret(user), str(code or ""), last_step=user["totp_step"])
+    if not ok:
+        _session_miss(user, "That code is wrong. Enter the one showing in your app now.")
+    _session_code_fails.pop(user["id"], None)
+    return step
+
+
+def _twofa_state(u):
+    if u["totp_enabled"] and u["totp_confirmed"]:
+        return "on"
+    return "setup" if u["totp_enabled"] else "off"
+
+
+def _build_backup(st, kind, password):
+    # A consistent database copy, the chosen files, and a manifest, all encrypted. The temp copy is removed.
+    tmp = backup.make_snapshot_dir()
+    try:
+        snap = os.path.join(tmp, "app.db")
+        backup.snapshot_db(os.path.join(st.data_dir, "app.db"), snap)
+        entries, total = backup.plan(st.char_root, st.data_dir, kind, snap)
+        return secure.encrypt_archive(password, entries, backup.manifest(kind, entries, total, APP_VERSION))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _set_session_cookie(resp, token, remember):
     # A remembered device keeps a persistent cookie; otherwise the cookie ends with the browser session.
     extra = {"max_age": REMEMBER_SECONDS} if remember else {}
@@ -220,12 +337,16 @@ class AppState:
         self.slots_lock = threading.Lock()
         self.rpm = collections.deque()        # timestamps of recent Gemini calls
         self.rpm_lock = threading.Lock()
-        self.login_fails = {}                 # username -> [timestamps]
-        self.login_lock = threading.Lock()
 
 
 def S(request):
     return request.app.state.rp
+
+
+def can_edit_card(user, char_path):
+    # Creators edit their own characters. A character made as 'admin' (the default for older folders) is edited by any admin.
+    creator = editor.creator_of(char_path)
+    return creator == user["username"] or (creator == editor.DEFAULT_CREATOR and bool(user["is_admin"]))
 
 
 def _csrf(request):
@@ -422,6 +543,10 @@ def _slot(st, user, name, is_group):
                     on_request=on_request, on_tokens=on_tokens, allow_root_user=False,
                     member_memory=False, persist_config=False)
     _apply_switches(st, engine)
+    if not is_group:
+        # Each account has its own palace per character; the first chat copies the starting one.
+        engine.palace_dir = os.path.join(st.data_dir, "users", str(uid), name)
+        palace.copy_starting(os.path.join(st.char_root, name), engine.palace_dir)
     engine.extra_models = _extra_models(st)
     engine.discover_models()
     engine.thinking = thinking
@@ -878,7 +1003,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         resp.headers["Referrer-Policy"] = "same-origin"
         if request.url.path.startswith("/api/"):
             resp.headers["Cache-Control"] = "no-store"
-        elif request.url.path == "/" or request.url.path.startswith(("/static/", "/login", "/admin")):
+        elif request.url.path == "/" or request.url.path.startswith(("/static/", "/login", "/admin", "/2fa-setup")):
             # pages and assets must revalidate, so an old cached copy never hides a new layout
             resp.headers["Cache-Control"] = "no-cache"
         return resp
@@ -897,6 +1022,10 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.get("/login")
     def login_page():
         return page("login.html")
+
+    @app.get("/2fa-setup")
+    def twofa_setup_page():
+        return page("twofa_setup.html")
 
     @app.get("/admin")
     def admin_page():
@@ -987,24 +1116,95 @@ def make_app(client=None, data_dir=None, char_root=None):
         username = str(body.get("username", "")).strip()
         password = str(body.get("password", ""))
         remember = bool(body.get("remember", True))
-        now = time.time()
-        key = username.lower()
-        with st.login_lock:
-            fails = [t for t in st.login_fails.get(key, []) if now - t < LOGIN_WINDOW]
-            st.login_fails[key] = fails
-            locked = len(fails) >= LOGIN_MAX_FAILS
-        if locked:
-            raise HTTPException(429, "Too many failed attempts. Try again in a few minutes.")
+        # A locked name is refused before its password is checked, so the lock can't be guessed through.
+        blocked = store.login_block(username)
+        if blocked:
+            raise _lock_error(blocked)
+        ip = client_ip(request)
+        if store.ip_blocked(username, ip):
+            raise _ip_error()
         user = await run_in_threadpool(store.authenticate, username, password)
         if user is None:
-            with st.login_lock:
-                st.login_fails.setdefault(key, []).append(now)
+            # Both counters move on every wrong guess, even for names that don't exist.
+            ip_locked = store.record_failed_ip(username, ip)
+            lock = store.record_failed_login(username)
+            if lock:
+                if lock[0] == "permanent":
+                    found = store.find_user(username)
+                    if found:
+                        store.end_all_sessions(found["id"])
+                raise _lock_error(lock)
+            if ip_locked:
+                raise _ip_error()
             raise HTTPException(401, "Wrong username or password.")
-        with st.login_lock:
-            st.login_fails.pop(key, None)
+        if not user["totp_enabled"]:
+            # Counters clear only once a sign-in is complete. With two-factor on, a correct password
+            # is half of it, so the code step clears them when the code is right.
+            store.clear_login_lock(username)
+            store.clear_ip_throttle(username, ip)
+        if needs_rehash(user["pw_hash"]):
+            # Hashes made at a lower scrypt cost are upgraded now that the password is known.
+            store.upgrade_hash(user["id"], password)
+        if user["totp_enabled"]:
+            # Two-factor sign-in: the password only opens a short pending session that finishes with a code.
+            key = _server_key()
+            if not user["totp_confirmed"]:
+                # First sign-in with two-factor on: a new secret to set up the app. The password is enough to see it.
+                secret = secure.new_totp_secret()
+                store.set_totp(user["id"], secure.seal(key, secret, _totp_aad(user["id"])), True, False)
+                token = store.new_pending_session(user["id"], "setup", remember)
+                resp = JSONResponse({"setup_2fa": True, "secret": secret,
+                                     "qr": secure.qr_svg(secure.provisioning_uri(secret, user["username"]))})
+            else:
+                token = store.new_pending_session(user["id"], "otp", remember)
+                resp = JSONResponse({"otp_required": True})
+            _set_session_cookie(resp, token, remember)
+            return resp
         token = store.new_session(user["id"], remember=remember)
         resp = JSONResponse({"must_change": bool(user["must_change"]), "is_admin": bool(user["is_admin"])})
         _set_session_cookie(resp, token, remember)
+        return resp
+
+    @app.get("/api/login/2fa/setup")
+    def login_2fa_setup(request: Request):
+        # The set-up page reads its QR code and key again on each load. Only a pending first set-up sees them.
+        user = store.pending_user(request.cookies.get(COOKIE), "setup")
+        if user is None:
+            raise HTTPException(401, "Sign in again.")
+        secret = _open_secret(user)
+        return {"secret": secret, "qr": secure.qr_svg(secure.provisioning_uri(secret, user["username"]))}
+
+    @app.post("/api/login/2fa")
+    async def login_2fa(request: Request):
+        # Finishes a sign-in that needed a code: the app's code, or the first code after set-up.
+        _csrf(request)
+        body = _read_body(await request.json())
+        token = request.cookies.get(COOKIE)
+        stage, user = "otp", store.pending_user(token, "otp")
+        if user is None:
+            stage, user = "setup", store.pending_user(token, "setup")
+        if user is None:
+            raise HTTPException(401, "Sign in again.")
+        blocked = store.login_block(user["username"])
+        if blocked:
+            raise _lock_error(blocked)
+        ok, step = secure.check_code(_open_secret(user), str(body.get("code", "")), last_step=user["totp_step"])
+        if not ok:
+            lock = store.record_failed_login(user["username"])
+            if lock:
+                if lock[0] == "permanent":
+                    store.end_all_sessions(user["id"])
+                raise _lock_error(lock)
+            raise HTTPException(401, "That code is wrong or was already used. Enter the one showing now.")
+        store.clear_login_lock(user["username"])
+        store.clear_ip_throttle(user["username"], client_ip(request))
+        if stage == "setup":
+            store.set_totp(user["id"], user["totp_secret"], True, True, step)
+        else:
+            store.set_totp_step(user["id"], step)
+        store.promote_session(token, bool(user["remember"]))
+        resp = JSONResponse({"must_change": bool(user["must_change"]), "is_admin": bool(user["is_admin"])})
+        _set_session_cookie(resp, token, bool(user["remember"]))
         return resp
 
     @app.post("/api/logout")
@@ -1067,13 +1267,18 @@ def make_app(client=None, data_dir=None, char_root=None):
         user = require(request)
         solo, groups = scan_characters(st.char_root)
         _queue_missing_profiles(st, user, solo)
+        # The search order is the same for every list on this page; sidebar holds only characters this account has chatted with.
+        ranked = recommend.order(st.char_root, st.data_dir, user["id"], solo)
+        chatted = set(recommend.chatted(st.data_dir, user["id"], solo))
         return {"solo": [display_for(s) for s in solo], "groups": [{"name": display_for(g), "members": [display_for(x) for x in m]} for g, m in groups.items()]
                 + [{"name": i["name"], "members": [display_for(x) for x in i["members"]], "id": i["id"], "private": True}
                    for i in private_groups.list_for(st.data_dir, user["id"])],
-                "cards": [_card_for(st, s) for s in solo],
+                "cards": [_card_for(st, s) for s in ranked],
+                 "sidebar": [display_for(s) for s in ranked if s in chatted],
                 "personas": _persona_list(st), "colors": _colour_map(st.char_root),
                 "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))],
                 "backgrounds": [display_for(n) for n in solo if _has_background(st.char_root, display_for(n))],
+                "editable": [display_for(s) for s in solo if can_edit_card(user, os.path.join(st.char_root, s))],
                 "recommended": [{"name": display_for(r["folder"]), "tags": r["tags"]} for r in
                                 recommend.recommend(st.char_root, st.data_dir, user["id"], solo)]}
 
@@ -1458,21 +1663,27 @@ def make_app(client=None, data_dir=None, char_root=None):
 
     @app.get("/api/admin/users")
     def admin_users(request: Request):
-        require(request, admin=True)
+        me = require(request, admin=True)
         today = store.usage_today_all()
+        throttle = store.login_throttle_all()
+        blocked = store.blocked_ips_all()
+        now = time.time()
         out = []
         for u in store.list_users():
             used = today.get(u["id"], {"requests": 0, "tokens": 0})
             out.append({"id": u["id"], "username": u["username"], "is_admin": bool(u["is_admin"]),
+                        "twofa": _twofa_state(u), "twofa_required": bool(u["totp_required"]),
                         "disabled": bool(u["disabled"]), "must_change": bool(u["must_change"]),
                         "daily_cap": u["daily_cap"], "effective_cap": _effective_cap(st, u),
                         "requests_today": used["requests"], "tokens_today": used["tokens"],
-                        "created_at": u["created_at"],
+                        "created_at": u["created_at"], "blocked_ips": blocked.get(u["username"].lower(), []),
+                        **_lock_view(throttle.get(u["username"].lower()), now),
                         "token_budgets": {"daily": u.get("token_daily"), "weekly": u.get("token_weekly"),
                                           "monthly": u.get("token_monthly")},
                         "tokens_week": store.usage_tokens(u["id"], budget_days("weekly")),
                         "tokens_month": store.usage_tokens(u["id"], budget_days("monthly"))})
-        return {"users": out, "global_requests_today": store.global_requests_today()}
+        # me_id lets the admin page offer two-factor set-up on the signed-in account's own row.
+        return {"users": out, "global_requests_today": store.global_requests_today(), "me_id": me["id"]}
 
     @app.post("/api/admin/users")
     async def admin_create(request: Request):
@@ -1533,6 +1744,20 @@ def make_app(client=None, data_dir=None, char_root=None):
                 raise HTTPException(400, f"Password must be at least {MIN_PASSWORD} characters.")
             store.set_password(uid, new, must_change=True)
             store.end_all_sessions(uid)
+        if body.get("unlock_sign_in"):
+            store.unlock_account(target["username"])
+            log(f"sign-in lock cleared for {target['username']} by {me_['username']}")
+        if "require_2fa" in body:
+            # Requiring it turns the account's two-factor sign-in on; it's set up at the next password sign-in.
+            # Requiring it on an account that isn't set up yet ends its sessions: it must finish the set-up page first.
+            if body["require_2fa"] and _twofa_state(target) != "on":
+                store.end_all_sessions(uid)
+            store.set_totp_required(uid, bool(body["require_2fa"]))
+        if body.get("reset_2fa"):
+            # Lost phone: the account sets up a new code at its next sign-in, and every session ends.
+            store.set_totp(uid, None, bool(store.get_user(uid)["totp_required"]), False, -1)
+            store.end_all_sessions(uid)
+            log(f"two-factor sign-in reset for {target['username']} by {me_['username']}")
         if fields:
             store.update_user(uid, **fields)
         if body.get("disabled") is True:
@@ -1540,25 +1765,126 @@ def make_app(client=None, data_dir=None, char_root=None):
         log(f"user {target['username']} updated by {me_['username']}: {sorted(body)}")
         return {"ok": True}
 
+    # ---- two-factor sign-in for the signed-in account
+
+    @app.get("/api/2fa")
+    def twofa_status(request: Request):
+        user = require(request, allow_change=True)
+        return {"state": _twofa_state(user), "required": bool(user["totp_required"])}
+
+    @app.post("/api/2fa/start")
+    async def twofa_start(request: Request):
+        # A new secret for the app. Two-factor sign-in stays off until a code from the app is confirmed.
+        _csrf(request)
+        user = require(request, allow_change=True)
+        if _twofa_state(user) == "on":
+            raise HTTPException(400, "Two-factor sign-in is already on.")
+        secret = secure.new_totp_secret()
+        store.set_totp(user["id"], secure.seal(_server_key(), secret, _totp_aad(user["id"])),
+                       bool(user["totp_required"]), False, -1)
+        return {"secret": secret, "qr": secure.qr_svg(secure.provisioning_uri(secret, user["username"]))}
+
+    @app.post("/api/2fa/confirm")
+    async def twofa_confirm(request: Request):
+        _csrf(request)
+        user = require(request, allow_change=True)
+        body = _read_body(await request.json())
+        if not user["totp_secret"] or user["totp_confirmed"]:
+            raise HTTPException(400, "Start two-factor sign-in first.")
+        step = _check_session_code(user, body.get("code"))
+        store.set_totp(user["id"], user["totp_secret"], True, True, step)
+        log(f"two-factor sign-in turned on for {user['username']}")
+        return {"ok": True}
+
+    @app.post("/api/2fa/disable")
+    async def twofa_disable(request: Request):
+        _csrf(request)
+        user = require(request, allow_change=True)
+        body = _read_body(await request.json())
+        if user["totp_required"]:
+            raise HTTPException(403, "An admin requires two-factor sign-in on this account.")
+        if _twofa_state(user) != "on":
+            raise HTTPException(400, "Two-factor sign-in is not on.")
+        _session_gate(user)
+        if store.authenticate(user["username"], str(body.get("password", ""))) is None:
+            _session_miss(user, "Wrong password.")
+        _check_session_code(user, body.get("code"))
+        store.set_totp(user["id"], None, False, False, -1)
+        log(f"two-factor sign-in turned off for {user['username']}")
+        return {"ok": True}
+
+    # ---- encrypted backups: admins with two-factor sign-in on; one backup password, set once
+
+    def _backup_admin(user, code):
+        if _twofa_state(user) != "on":
+            raise HTTPException(403, "Turn on two-factor sign-in for your admin account before making backups.")
+        store.set_totp_step(user["id"], _check_session_code(user, code))
+
+    @app.get("/api/admin/backup")
+    def backup_status(request: Request):
+        user = require(request, admin=True)
+        return {"password_set": store.backup_verifier() is not None, "two_factor_on": _twofa_state(user) == "on"}
+
+    @app.post("/api/admin/backup/password")
+    async def backup_password_set(request: Request):
+        _csrf(request)
+        user = require(request, admin=True)
+        body = _read_body(await request.json())
+        _backup_admin(user, body.get("code"))
+        pw = str(body.get("password", ""))
+        if not secure.new_backup_password_ok(pw):
+            raise HTTPException(400, "The backup password needs at least 12 characters.")
+        verifier = await run_in_threadpool(secure.backup_verifier, pw)
+        if not store.set_backup_verifier_once(verifier):
+            raise HTTPException(409, "The backup password is already set.")
+        log(f"backup password set by {user['username']}")
+        return {"ok": True}
+
+    @app.post("/api/admin/backup")
+    async def backup_make(request: Request):
+        _csrf(request)
+        user = require(request, admin=True)
+        body = _read_body(await request.json())
+        kind = str(body.get("kind", ""))
+        if kind not in backup.KINDS:
+            raise HTTPException(400, "Choose a data backup or a full backup.")
+        _backup_admin(user, body.get("code"))
+        verifier = store.backup_verifier()
+        if verifier is None:
+            raise HTTPException(409, "Set the backup password first.")
+        pw = str(body.get("password", ""))
+        _session_gate(user)
+        if not await run_in_threadpool(secure.check_backup_verifier, pw, verifier):
+            _session_miss(user, "Wrong backup password.")
+        _session_code_fails.pop(user["id"], None)
+        try:
+            blob = await run_in_threadpool(_build_backup, st, kind, pw)
+        except backup.BackupError as err:
+            raise HTTPException(413, str(err))
+        log(f"{kind} backup made by {user['username']}")
+        name = f"miso-{kind}-backup-{time.strftime('%Y%m%d-%H%M')}.mbk"
+        return Response(content=blob, media_type="application/octet-stream",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
     # ---- character editor (admin only; friends see icons and colours, never the card)
 
     @app.get("/api/admin/tags")
     def tag_list(request: Request):
         # Every tag in use and how many characters carry it. Feeds the editor's suggestions.
-        require(request, admin=True)
+        require(request)
         solo, _ = scan_characters(st.char_root)
         return {"tags": profiles.tag_counts(st.char_root, solo)}
 
     @app.get("/api/admin/characters/example")
     def editor_example(request: Request):
-        require(request, admin=True)
+        require(request)
         return {"card": editor.example_card()}
 
     @app.post("/api/admin/characters/draft")
     async def editor_draft(request: Request):
-        # Drafts a headline, summary and tags from a card. Nothing is saved until the admin saves the form.
+        # Drafts a headline, summary and tags from a card. Nothing is saved until the form is saved.
         _csrf(request)
-        user = require(request, admin=True)
+        user = require(request)
         body = _read_body(await request.json())
         card = body.get("card", "")
         if not isinstance(card, str) or not card.strip():
@@ -1579,7 +1905,7 @@ def make_app(client=None, data_dir=None, char_root=None):
 
     @app.get("/api/admin/characters/{name}")
     def editor_read(name: str, request: Request):
-        require(request, admin=True)
+        _require_editor(require(request), name)
         try:
             return editor.read_card(st.char_root, name)
         except editor.EditorError as err:
@@ -1588,12 +1914,12 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.post("/api/admin/characters")
     async def editor_create(request: Request):
         _csrf(request)
-        user = require(request, admin=True)
+        user = require(request)
         body = _read_body(await request.json())
         try:
             out = editor.write_card(st.char_root, str(body.get("name", "")), body.get("card", ""),
                                     body.get("context", ""), body.get("colour", ""), creating=True,
-                                    sandbox_on=(bool(body["sandbox"]) if "sandbox" in body else None),
+                                    sandbox_on=(bool(body["sandbox"]) if ("sandbox" in body and user["is_admin"]) else None),
                                     profile=body.get("profile"))
             editor.record_creator(editor.folder_of(st.char_root, str(body.get("name", ""))), user["username"])
         except editor.EditorError as err:
@@ -1603,12 +1929,13 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.put("/api/admin/characters/{name}")
     async def editor_update(name: str, request: Request):
         _csrf(request)
-        require(request, admin=True)
+        user = require(request)
+        _require_editor(user, name)
         body = _read_body(await request.json())
         try:
             out = editor.write_card(st.char_root, name, body.get("card", ""),
                                     body.get("context", ""), body.get("colour", ""), creating=False,
-                                    sandbox_on=(bool(body["sandbox"]) if "sandbox" in body else None),
+                                    sandbox_on=(bool(body["sandbox"]) if ("sandbox" in body and user["is_admin"]) else None),
                                     profile=body.get("profile"))
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
@@ -1620,7 +1947,7 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.post("/api/admin/characters/{name}/icon")
     async def editor_icon(name: str, request: Request):
         _csrf(request)
-        require(request, admin=True)
+        _require_editor(require(request), name)
         data = await request.body()
         try:
             editor.save_icon(st.char_root, name, data)
@@ -1640,21 +1967,52 @@ def make_app(client=None, data_dir=None, char_root=None):
         media = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg"}.get(os.path.splitext(path)[1].lower())
         return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=300"})
 
+    @app.get("/api/icon/{name}/hash")
+    def character_icon_hash(name: str, request: Request):
+        require(request)
+        try:
+            path = editor.icon_path(st.char_root, name)
+        except editor.EditorError:
+            raise HTTPException(404, "No such character.")
+        if path is None:
+            raise HTTPException(404, "No icon.")
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            for block in iter(lambda: f.read(65536), b""):
+                digest.update(block)
+        return {"sha256": digest.hexdigest()}
+
+    @app.get("/api/version")
+    def server_version():
+        # Public on purpose: the terminal client reads it before it logs in.
+        return {"version": APP_VERSION}
+
+    @app.get("/api/client/miso_remote.py")
+    def terminal_client_download(request: Request):
+        require(request)
+        # The client ships in the repository's client folder, beside web/.
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, "client", "miso_remote.py")
+        if not os.path.isfile(path):
+            raise HTTPException(404, "The terminal client is not in this install.")
+        return FileResponse(path, media_type="text/x-python", filename="miso_remote.py")
+
     @app.post("/api/admin/characters/import")
     async def editor_import(request: Request):
         _csrf(request)
-        user = require(request, admin=True)
+        user = require(request)
         data = await request.body()
         try:
             return await run_in_threadpool(transfer.import_zip, st.char_root, st.data_dir, user["id"],
-                                           user["username"], data)
+                                           user["username"], data, admin=bool(user["is_admin"]))
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
 
     @app.get("/api/admin/characters/{name}/export")
     async def editor_export(name: str, request: Request, history: str = "0"):
         # A zip of the character. history=1 adds this admin's chat history and memories for it.
-        user = require(request, admin=True)
+        user = require(request)
+        _require_editor(user, name)
         include = history in ("1", "true")
         try:
             body = await run_in_threadpool(transfer.export_zip, st.char_root, st.data_dir, user["id"], name, include)
@@ -1669,7 +2027,7 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.post("/api/admin/characters/{name}/background")
     async def editor_background(name: str, request: Request):
         _csrf(request)
-        require(request, admin=True)
+        _require_editor(require(request), name)
         data = await request.body()
         try:
             editor.save_background(st.char_root, name, data)
@@ -1741,27 +2099,85 @@ def make_app(client=None, data_dir=None, char_root=None):
         return folder
 
     @app.get("/api/admin/characters/{name}/palace")
-    def palace_get(name: str, request: Request):
-        require(request, admin=True)
-        return {"entries": palace.load(_character_dir(name))}
+    def palace_get(name: str, request: Request, user: str = ""):
+        # No user: the character's starting palace, for its editors. With user=<id>: an admin reads one non-admin's palace.
+        me_ = require(request)
+        folder = _character_dir(name)
+        if user:
+            if not me_["is_admin"]:
+                raise HTTPException(403, "Admins only.")
+            try:
+                target = st.store.get_user(int(user))
+            except ValueError:
+                target = None
+            if target is None:
+                raise HTTPException(404, "No such account.")
+            if target["is_admin"]:
+                raise HTTPException(400, "Admin palaces are not shown here.")
+            entries, cfg = palace.load_all(_account_palace_dir(target["id"], os.path.basename(folder)))
+        else:
+            _require_editor(me_, name)
+            entries, cfg = palace.load_all(folder)
+        return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"]}
 
     @app.post("/api/admin/characters/{name}/palace")
     async def palace_set(name: str, request: Request):
         _csrf(request)
-        require(request, admin=True)
+        _require_editor(require(request), name)
         body = _read_body(await request.json())
+        settings = {"recursive": body.get("recursive"), "budget": body.get("budget")}
         try:
-            entries = palace.save(_character_dir(name), body.get("entries", []))
+            entries, cfg = palace.save(_character_dir(name), body.get("entries", []), settings)
         except palace.PalaceError as err:
             raise HTTPException(400, str(err))
-        return {"entries": entries}
+        return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"]}
+
+    def _require_editor(user, name):
+        # Creators change their own characters; a character made as 'admin' is changed by any admin.
+        if not can_edit_card(user, _character_dir(name)):
+            raise HTTPException(403, "Only the character's creator can change it. Characters made as admin can be changed by any admin.")
+
+    def _account_palace_dir(uid, folder):
+        return os.path.join(st.data_dir, "users", str(uid), folder)
+
+    def _solo_folder(user, character):
+        # Groups have no Mind Palace of their own.
+        name, is_group = _resolve_profile(st, character, user)
+        if is_group:
+            raise HTTPException(400, "Groups do not have a Mind Palace.")
+        return name
+
+    @app.get("/api/character-palace")
+    def my_palace_get(request: Request, character: str):
+        # This account's own palace for one character. The first read copies the character's starting palace.
+        user = require(request)
+        folder = _solo_folder(user, character)
+        pdir = _account_palace_dir(user["id"], folder)
+        palace.copy_starting(os.path.join(st.char_root, folder), pdir)
+        entries, cfg = palace.load_all(pdir)
+        return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"]}
+
+    @app.post("/api/character-palace")
+    async def my_palace_set(request: Request, character: str):
+        _csrf(request)
+        user = require(request)
+        folder = _solo_folder(user, character)
+        body = _read_body(await request.json())
+        pdir = _account_palace_dir(user["id"], folder)
+        os.makedirs(pdir, exist_ok=True)
+        settings = {"recursive": body.get("recursive"), "budget": body.get("budget")}
+        try:
+            entries, cfg = palace.save(pdir, body.get("entries", []), settings)
+        except palace.PalaceError as err:
+            raise HTTPException(400, str(err))
+        return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"]}
 
     @app.post("/api/admin/character-draft")
     async def character_draft(request: Request):
         # Reads one uploaded file and drafts the card from its text. Nothing is saved here.
         from urllib.parse import unquote
         _csrf(request)
-        user = require(request, admin=True)
+        user = require(request)
         if int(request.headers.get("content-length") or 0) > ocr.MAX_BYTES + 4096:
             raise HTTPException(413, "Files can be up to 10 MB.")
         _check_caps(st, user)

@@ -30,6 +30,9 @@ async function act(fn) {
 
 const numOrNull = (input) => (input.value === "" ? null : parseInt(input.value, 10));
 
+// The signed-in admin's account id, from the users list, so its row can offer two-factor set-up.
+let meId = null;
+
 function userRow(u) {
   const tr = el("tr");
   tr.appendChild(el("td", u.username));
@@ -37,6 +40,11 @@ function userRow(u) {
   const status = [];
   if (u.disabled) status.push("disabled");
   if (u.must_change) status.push("must change password");
+  if (u.login_lock === "permanent") status.push("sign-in locked until an admin unlocks it");
+  else if (u.login_lock === "timed") status.push(`sign-in locked until ${new Date(u.locked_until * 1000).toLocaleString()}`);
+  if (u.blocked_ips && u.blocked_ips.length) status.push(`${u.blocked_ips.length} address${u.blocked_ips.length === 1 ? "" : "es"} blocked from signing in`);
+  if (u.twofa === "on") status.push("two-factor sign-in on" + (u.twofa_required ? " (required by admin)" : ""));
+  else if (u.twofa === "setup") status.push("two-factor set-up not finished");
   tr.appendChild(el("td", status.join(", ") || "active"));
   tr.appendChild(el("td", u.requests_today));
   const capCell = el("td");
@@ -71,13 +79,23 @@ function userRow(u) {
   }))));
   tr.appendChild(budgetCell);
   const actions = el("td");
+  if (u.id === meId && u.twofa !== "on") {
+    actions.appendChild(button("enable 2FA", () => window.misoTwoFactor.setup(loadUsers)));
+  }
   actions.appendChild(button(u.disabled ? "enable" : "disable",
     () => act(() => api("POST", `/api/admin/users/${u.id}`, { disabled: !u.disabled }))));
   actions.appendChild(button(u.is_admin ? "remove admin" : "make admin",
     () => act(() => api("POST", `/api/admin/users/${u.id}`, { is_admin: !u.is_admin }))));
   actions.appendChild(button("reset password", () => {
-    const pw = window.prompt(`New starting password for ${u.username} (8+ characters):`);
+    const pw = window.prompt(`New starting password for ${u.username} (10+ characters):`);
     if (pw) act(() => api("POST", `/api/admin/users/${u.id}`, { reset_password: pw }));
+  }));
+  if (u.login_lock || (u.blocked_ips && u.blocked_ips.length)) actions.appendChild(button("unlock sign-in", () => act(() => api("POST", `/api/admin/users/${u.id}`, { unlock_sign_in: true }))));
+  actions.appendChild(button(u.twofa_required ? "lift 2FA requirement" : "require 2FA",
+    () => act(() => api("POST", `/api/admin/users/${u.id}`, { require_2fa: !u.twofa_required }))));
+  if (u.twofa !== "off") actions.appendChild(button("reset 2FA", () => {
+    if (window.confirm(`Reset two-factor sign-in for ${u.username}? They set up a new code at their next sign-in, and their sessions end.`))
+      act(() => api("POST", `/api/admin/users/${u.id}`, { reset_2fa: true }));
   }));
   tr.appendChild(actions);
   return tr;
@@ -87,6 +105,7 @@ async function loadUsers() {
   const data = await api("GET", "/api/admin/users");
   const body = $("users");
   body.textContent = "";
+  meId = data.me_id;
   for (const u of data.users) body.appendChild(userRow(u));
   $("globalUse").textContent = `All web users today: ${data.global_requests_today} requests`;
 }

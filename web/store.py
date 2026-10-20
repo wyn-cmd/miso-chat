@@ -6,6 +6,7 @@ import hmac
 import os
 import secrets
 import sqlite3
+import threading
 import time
 import datetime
 import pytz
@@ -14,6 +15,16 @@ from rp_core import pacific_date
 
 REMEMBER_SECONDS = 30 * 24 * 3600      # "keep me signed in": renewed while the device keeps using the site
 SHORT_SESSION_SECONDS = 12 * 3600      # without "keep me signed in"
+PENDING_SECONDS = 300                  # time to finish a two-factor code after the password
+SETUP_PENDING_SECONDS = 900            # a first set-up needs time to install an authenticator app
+
+# Failed sign-ins for one username. A lock starts at each count; the next count is 5 more failures.
+LOCK_STEPS = ((10, 15 * 60), (15, 30 * 60), (20, 60 * 60), (25, 2 * 60 * 60), (30, 4 * 60 * 60))
+PERMANENT_FAILS = 35     # from here the account stays locked until an admin unlocks it
+IP_LOCK_FAILS = 15     # consecutive wrong guesses from one address that block it for one account
+HASH_N = 2 ** 16         # scrypt cost for new hashes; about 64 MB per check
+# OpenSSL refuses scrypt above 32 MB unless told otherwise, and that refusal reads as a wrong password.
+SCRYPT_MAXMEM = 128 * 1024 * 1024
 ADMIN_NAME = "admin"
 ADMIN_DEFAULT_PASSWORD = "admin"   # forced to change on first login
 
@@ -27,6 +38,19 @@ CREATE TABLE IF NOT EXISTS users (
     disabled INTEGER NOT NULL DEFAULT 0,
     daily_cap INTEGER,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS login_throttle (
+    username TEXT PRIMARY KEY,
+    fails INTEGER NOT NULL DEFAULT 0,
+    locked_until REAL NOT NULL DEFAULT 0,
+    permanent INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS login_ip_throttle (
+    username TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    fails INTEGER NOT NULL DEFAULT 0,
+    blocked INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (username, ip)
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
@@ -59,6 +83,10 @@ CREATE TABLE IF NOT EXISTS prefs (
     value TEXT NOT NULL,
     PRIMARY KEY (user_id, key)
 );
+CREATE TABLE IF NOT EXISTS backup_auth (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    verifier TEXT NOT NULL
+);
 """
 
 DEFAULT_SETTINGS = {
@@ -74,15 +102,15 @@ DEFAULT_SETTINGS = {
 
 def hash_password(pw):
     salt = secrets.token_bytes(16)
-    dk = hashlib.scrypt(pw.encode("utf-8"), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
-    return f"scrypt$16384$8$1${salt.hex()}${dk.hex()}"
+    dk = hashlib.scrypt(pw.encode("utf-8"), salt=salt, n=HASH_N, r=8, p=1, dklen=32, maxmem=SCRYPT_MAXMEM)
+    return f"scrypt${HASH_N}$8$1${salt.hex()}${dk.hex()}"
 
 
 def verify_password(pw, stored):
     try:
         _, n, r, p, salt_hex, dk_hex = stored.split("$")
         dk = hashlib.scrypt(pw.encode("utf-8"), salt=bytes.fromhex(salt_hex),
-                            n=int(n), r=int(r), p=int(p), dklen=32)
+                            n=int(n), r=int(r), p=int(p), dklen=32, maxmem=SCRYPT_MAXMEM)
         return hmac.compare_digest(dk, bytes.fromhex(dk_hex))
     except (ValueError, TypeError):
         return False
@@ -105,9 +133,19 @@ def budget_days(kind):
     return [(today - datetime.timedelta(days=i)).strftime("%d/%m/%y") for i in range(span)]
 
 
+def needs_rehash(stored):
+    # True when a stored hash was made at a lower scrypt cost than HASH_N.
+    try:
+        _, n, _, _, _, _ = stored.split("$")
+        return int(n) < HASH_N
+    except (ValueError, TypeError):
+        return False
+
+
 class Store:
     def __init__(self, path):
         self.path = path
+        self._throttle_lock = threading.Lock()
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with self._conn() as c:
             c.executescript(SCHEMA)
@@ -123,6 +161,16 @@ class Store:
             cols = {r["name"] for r in c.execute("PRAGMA table_info(sessions)")}
             if "remember" not in cols:
                 c.execute("ALTER TABLE sessions ADD COLUMN remember INTEGER NOT NULL DEFAULT 0")
+            if "stage" not in cols:
+                # full sessions are the normal kind; pending ones only finish a two-factor step
+                c.execute("ALTER TABLE sessions ADD COLUMN stage TEXT NOT NULL DEFAULT 'full'")
+            ucols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
+            for col, ddl in (("totp_secret", "TEXT"), ("totp_enabled", "INTEGER NOT NULL DEFAULT 0"),
+                             ("totp_confirmed", "INTEGER NOT NULL DEFAULT 0"),
+                             ("totp_step", "INTEGER NOT NULL DEFAULT -1"),
+                             ("totp_required", "INTEGER NOT NULL DEFAULT 0")):
+                if col not in ucols:
+                    c.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
 
     # ---- low-level
 
@@ -165,6 +213,9 @@ class Store:
     def get_user(self, user_id):
         return self._run("SELECT * FROM users WHERE id = ?", (user_id,), fetch="one")
 
+    def find_user(self, username):
+        return self._run("SELECT * FROM users WHERE username = ?", (username,), fetch="one")
+
     def list_users(self):
         return self._run("SELECT * FROM users ORDER BY id", fetch="all")
 
@@ -182,6 +233,10 @@ class Store:
         self._run("UPDATE users SET pw_hash = ?, must_change = ? WHERE id = ?",
                   (hash_password(password), int(must_change), user_id))
 
+    def upgrade_hash(self, user_id, password):
+        # Re-hash at the current cost without touching must_change.
+        self._run("UPDATE users SET pw_hash = ? WHERE id = ?", (hash_password(password), user_id))
+
     def update_user(self, user_id, **fields):
         allowed = {"is_admin", "disabled", "daily_cap", "token_daily", "token_weekly", "token_monthly"}
         bad = set(fields) - allowed
@@ -193,6 +248,81 @@ class Store:
     def count_enabled_admins(self):
         return self._run("SELECT COUNT(*) AS n FROM users WHERE is_admin = 1 AND disabled = 0",
                          fetch="one")["n"]
+
+    # ---- sign-in lockout
+    # Failures count per username whether or not the account exists, so a refusal never shows which
+    # names are real. The count resets only on a successful sign-in or an admin unlock.
+
+    def login_block(self, username, now=None):
+        # None when a sign-in may be checked; else ("permanent", None) or ("timed", seconds_left).
+        now = time.time() if now is None else now
+        row = self._run("SELECT locked_until, permanent FROM login_throttle WHERE username = ?",
+                        (username.strip().lower(),), fetch="one")
+        if row is None:
+            return None
+        if row["permanent"]:
+            return ("permanent", None)
+        if row["locked_until"] > now:
+            return ("timed", row["locked_until"] - now)
+        return None
+
+    def record_failed_login(self, username, now=None):
+        # Counts one failed check and returns the lock now in force, in the same shape as login_block.
+        now = time.time() if now is None else now
+        key = username.strip().lower()
+        with self._throttle_lock:
+            row = self._run("SELECT fails, locked_until, permanent FROM login_throttle WHERE username = ?",
+                            (key,), fetch="one") or {"fails": 0, "locked_until": 0.0, "permanent": 0}
+            fails = row["fails"] + 1
+            locked_until, permanent = row["locked_until"], row["permanent"]
+            for threshold, seconds in LOCK_STEPS:
+                if fails == threshold:
+                    locked_until = now + seconds
+            if fails >= PERMANENT_FAILS:
+                permanent = 1
+            self._run("INSERT INTO login_throttle (username, fails, locked_until, permanent) VALUES (?, ?, ?, ?) "
+                      "ON CONFLICT(username) DO UPDATE SET fails = excluded.fails, "
+                      "locked_until = excluded.locked_until, permanent = excluded.permanent",
+                      (key, fails, locked_until, permanent))
+        return self.login_block(key, now)
+
+    def clear_login_lock(self, username):
+        self._run("DELETE FROM login_throttle WHERE username = ?", (username.strip().lower(),))
+
+    def ip_blocked(self, username, ip):
+        row = self._run("SELECT blocked FROM login_ip_throttle WHERE username = ? AND ip = ?",
+                        (username.strip().lower(), ip), fetch="one")
+        return bool(row and row["blocked"])
+
+    def record_failed_ip(self, username, ip):
+        # Counts one wrong guess from this address for this account; True once the address is blocked.
+        key = username.strip().lower()
+        with self._throttle_lock:
+            row = self._run("SELECT fails, blocked FROM login_ip_throttle WHERE username = ? AND ip = ?",
+                            (key, ip), fetch="one")
+            fails = (row["fails"] if row else 0) + 1
+            blocked = 1 if (fails >= IP_LOCK_FAILS or (row and row["blocked"])) else 0
+            self._run("INSERT INTO login_ip_throttle (username, ip, fails, blocked) VALUES (?, ?, ?, ?) "
+                      "ON CONFLICT(username, ip) DO UPDATE SET fails = excluded.fails, blocked = excluded.blocked",
+                      (key, ip, fails, blocked))
+        return bool(blocked)
+
+    def clear_ip_throttle(self, username, ip):
+        self._run("DELETE FROM login_ip_throttle WHERE username = ? AND ip = ?", (username.strip().lower(), ip))
+
+    def unlock_account(self, username):
+        # Admin or server unlock: clears the account lock and every address block on that account.
+        self.clear_login_lock(username)
+        self._run("DELETE FROM login_ip_throttle WHERE username = ?", (username.strip().lower(),))
+
+    def blocked_ips_all(self):
+        out = {}
+        for r in self._run("SELECT username, ip FROM login_ip_throttle WHERE blocked = 1", fetch="all"):
+            out.setdefault(r["username"], []).append(r["ip"])
+        return out
+
+    def login_throttle_all(self):
+        return {r["username"]: r for r in self._run("SELECT * FROM login_throttle", fetch="all")}
 
     # ---- sessions
 
@@ -209,7 +339,7 @@ class Store:
         now = time.time()
         row = self._run(
             "SELECT u.*, s.remember AS remember, s.expires_at AS expires_at FROM sessions s JOIN users u ON u.id = s.user_id "
-            "WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0",
+            "WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0 AND s.stage = 'full'",
             (_token_hash(token), now), fetch="one")
         # a remembered session slides forward once it is less than REMEMBER_SECONDS minus a day from expiry
         if row and row["remember"] and row["expires_at"] < now + REMEMBER_SECONDS - 86400:
@@ -228,6 +358,63 @@ class Store:
 
     def end_all_sessions(self, user_id):
         self._run("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+
+    # ---- two-factor sign-in
+    # totp_secret is sealed with the server key (web/secure.py). totp_enabled is the account's choice or an
+    # admin's; totp_required is set by an admin and only an admin can lift it. totp_confirmed is set once the
+    # app's code has been entered, so a new account signs in with the password until it sets up the app.
+
+    def set_totp(self, user_id, sealed, enabled, confirmed, step=-1, required=None):
+        if required is None:
+            self._run("UPDATE users SET totp_secret = ?, totp_enabled = ?, totp_confirmed = ?, totp_step = ? "
+                      "WHERE id = ?", (sealed, int(enabled), int(confirmed), step, user_id))
+        else:
+            self._run("UPDATE users SET totp_secret = ?, totp_enabled = ?, totp_confirmed = ?, totp_step = ?, "
+                      "totp_required = ? WHERE id = ?", (sealed, int(enabled), int(confirmed), step, int(required), user_id))
+
+    def set_totp_step(self, user_id, step):
+        self._run("UPDATE users SET totp_step = ? WHERE id = ?", (step, user_id))
+
+    def set_totp_required(self, user_id, required):
+        # Requiring it enables the account's two-factor sign-in; lifting it leaves an account's own setting alone.
+        self._run("UPDATE users SET totp_required = ?, totp_enabled = CASE WHEN ? THEN 1 ELSE totp_enabled END "
+                  "WHERE id = ?", (int(required), int(required), user_id))
+
+    def new_pending_session(self, user_id, stage, remember=False):
+        # Short-lived; session_user ignores it, so it can only finish a two-factor step.
+        token = secrets.token_urlsafe(32)
+        life = SETUP_PENDING_SECONDS if stage == "setup" else PENDING_SECONDS
+        self._run("INSERT INTO sessions (token_hash, user_id, expires_at, remember, stage) VALUES (?, ?, ?, ?, ?)",
+                  (_token_hash(token), user_id, time.time() + life, int(bool(remember)), stage))
+        return token
+
+    def pending_user(self, token, stage):
+        if not token:
+            return None
+        return self._run("SELECT u.*, s.remember AS remember FROM sessions s JOIN users u ON u.id = s.user_id "
+                         "WHERE s.token_hash = ? AND s.stage = ? AND s.expires_at > ? AND u.disabled = 0",
+                         (_token_hash(token), stage, time.time()), fetch="one")
+
+    def promote_session(self, token, remember):
+        life = REMEMBER_SECONDS if remember else SHORT_SESSION_SECONDS
+        self._run("UPDATE sessions SET stage = 'full', expires_at = ? WHERE token_hash = ?",
+                  (time.time() + life, _token_hash(token)))
+
+    # ---- backup password: one verifier, set once by an admin with two-factor sign-in on
+
+    def backup_verifier(self):
+        row = self._run("SELECT verifier FROM backup_auth WHERE id = 1", fetch="one")
+        return row["verifier"] if row else None
+
+    def set_backup_verifier_once(self, verifier):
+        # The first set wins; a later attempt changes nothing and returns False.
+        c = self._conn()
+        try:
+            with c:
+                cur = c.execute("INSERT OR IGNORE INTO backup_auth (id, verifier) VALUES (1, ?)", (verifier,))
+                return cur.rowcount == 1
+        finally:
+            c.close()
 
     # ---- per-user preferences
 

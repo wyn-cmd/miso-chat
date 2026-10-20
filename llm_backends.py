@@ -50,11 +50,23 @@ def contents_to_messages(contents):
     return out
 
 
-def usage_obj(prompt=None, completion=None, total=None):
+def usage_obj(prompt=None, completion=None, total=None, cached=None):
     if total is None and prompt is not None and completion is not None:
         total = prompt + completion
     return SimpleNamespace(prompt_token_count=prompt, candidates_token_count=completion,
-                           total_token_count=total)
+                           total_token_count=total, cached_content_token_count=cached)
+
+
+def cached_from_usage(u):
+    # Cached prompt tokens, from whichever field the provider uses. None when it reports nothing.
+    if not isinstance(u, dict):
+        return None
+    if u.get("prompt_cache_hit_tokens") is not None:          # DeepSeek
+        return u["prompt_cache_hit_tokens"]
+    details = u.get("prompt_tokens_details")                  # OpenAI-style servers, e.g. vLLM
+    if isinstance(details, dict):
+        return details.get("cached_tokens")
+    return None
 
 
 class ThinkSplitter:
@@ -202,7 +214,7 @@ class OpenAIStyleChat:
         u = data.get("usage") or {}
         return SimpleNamespace(text=answer or None, thought=(thought if self.thinking else ""),
                                usage_metadata=usage_obj(u.get("prompt_tokens"), u.get("completion_tokens"),
-                                                        u.get("total_tokens")))
+                                                        u.get("total_tokens"), cached_from_usage(u)))
 
     def send_message_stream(self, text):
         use_tags = self.client.style == "local"
@@ -222,7 +234,8 @@ class OpenAIStyleChat:
                     continue
                 if event.get("usage"):
                     u = event["usage"]
-                    usage = usage_obj(u.get("prompt_tokens"), u.get("completion_tokens"), u.get("total_tokens"))
+                    usage = usage_obj(u.get("prompt_tokens"), u.get("completion_tokens"), u.get("total_tokens"),
+                                      cached_from_usage(u))
                 choices = event.get("choices") or []
                 if not choices:
                     continue
@@ -362,9 +375,29 @@ class ClaudeCodeChat:
 
 
 def _claude_usage(usage):
+    # Anthropic reports cache reads and writes apart from input_tokens; the prompt total adds them back.
     if not isinstance(usage, dict):
         return None
-    return usage_obj(usage.get("input_tokens"), usage.get("output_tokens"))
+    read = usage.get("cache_read_input_tokens") or 0
+    write = usage.get("cache_creation_input_tokens") or 0
+    prompt = (usage.get("input_tokens") or 0) + read + write
+    return usage_obj(prompt, usage.get("output_tokens"), None, read)
+
+
+def caching_for(model):
+    # (provider, how its prompt cache works). Used for logs and the cache report.
+    name = "gemini"
+    for prefix, label in PREFIXES.items():
+        if (model or "").startswith(prefix):
+            name = label
+            break
+    notes = {
+        "deepseek": "automatic prefix cache",
+        "local": "server prefix cache, on only if the server enables it",
+        "claude": "Claude Code manages its own cache",
+        "gemini": "implicit cache on Gemini 2.5 models; other models not verified",
+    }
+    return name, notes[name]
 
 
 # ---------------------------------------------------------------- routing

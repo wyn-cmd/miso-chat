@@ -24,6 +24,13 @@
       <button type="submit">Log in</button>
       <p id="err" class="error"></p>
     </form>
+    <form id="otpForm" class="stack" hidden>
+      <p class="muted">Enter the 6-digit code from your authenticator app.</p>
+      <label>Code <input id="otpCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label>
+      <button type="submit">Confirm</button>
+      <button id="otpBack" class="ghost" type="button">Back</button>
+      <p id="otpErr" class="error" aria-live="polite"></p>
+    </form>
   </main>
   <script src="/static/common.js"></script>
   <script src="/static/login.js"></script>

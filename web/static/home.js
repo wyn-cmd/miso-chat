@@ -6,6 +6,8 @@ let polls = 0;
 let allCards = [];          // every solo card from the last load; search and tag filters work on these
 let allRecs = [];
 const selectedTags = new Set();
+const PAGE_SIZE = 50;        // search results shown at a time; Next and Previous move through the rest
+let page = 1;
 
 async function init() {
   let me;
@@ -50,7 +52,8 @@ function renderSidebar(data) {
   const groups = $("groupList");
   solo.textContent = "";
   groups.textContent = "";
-  for (const name of data.solo || []) solo.appendChild(sidebarButton(name, data.colors || {}));
+  // Only characters this account has chatted with; the search page below lists every character.
+  for (const name of data.sidebar || []) solo.appendChild(sidebarButton(name, data.colors || {}));
   for (const g of data.groups || []) groups.appendChild(sidebarButton(g.name, data.colors || {}));
   $("groupBox").hidden = !(data.groups || []).length;
 }
@@ -143,6 +146,11 @@ function renderCard(card) {
 }
 
 function showInfo(card) {
+  // The character's background sits behind the card, darker at the bottom so the text reads.
+  const dlg = $("infoDialog");
+  dlg.classList.toggle("has-art", !!card.has_background);
+  if (card.has_background) dlg.style.setProperty("--info-art", 'url("/api/background/' + encodeURIComponent(card.name) + '")');
+  else dlg.style.removeProperty("--info-art");
   $("infoTitle").textContent = card.name;
   $("infoHeadline").textContent = card.headline || "";
   $("infoCreator").textContent = "Created by " + (card.creator || "admin");
@@ -186,12 +194,24 @@ function visibleCards() {
 
 function applyFilters() {
   const cards = visibleCards();
-  renderCards(cards);
+  const pages = Math.max(1, Math.ceil(cards.length / PAGE_SIZE));
+  if (page > pages) page = pages;
+  const start = (page - 1) * PAGE_SIZE;
+  renderCards(cards.slice(start, start + PAGE_SIZE));
   renderRecommended(allRecs, cards);
   const filtering = $("homeSearch").value.trim() !== "" || selectedTags.size > 0;
   $("homeCount").textContent = filtering ? `Showing ${cards.length} of ${allCards.length} characters` : "";
   $("homeEmpty").hidden = allCards.length > 0;
   $("homeNoMatch").hidden = !(allCards.length > 0 && cards.length === 0);
+  renderPager(cards.length, pages, start);
+}
+
+// Shown only when the results need more than one page.
+function renderPager(total, pages, start) {
+  $("homePager").hidden = total <= PAGE_SIZE;
+  $("pagePrev").disabled = page <= 1;
+  $("pageNext").disabled = page >= pages;
+  $("pageInfo").textContent = `Page ${page} of ${pages}. Showing ${start + 1} to ${Math.min(start + PAGE_SIZE, total)} of ${total}.`;
 }
 
 // Tags with counts, most common first. Selected tags sit above the rest, each group still most common first.
@@ -210,6 +230,7 @@ function renderTagFilter() {
     b.setAttribute("aria-pressed", String(selectedTags.has(t)));
     b.addEventListener("click", () => {
       if (selectedTags.has(t)) selectedTags.delete(t); else selectedTags.add(t);
+      page = 1;
       renderTagFilter();
       applyFilters();
     });
@@ -221,7 +242,7 @@ function renderTagFilter() {
   $("tagClear").disabled = selectedTags.size === 0;
 }
 
-$("homeSearch").addEventListener("input", applyFilters);
+$("homeSearch").addEventListener("input", () => { page = 1; applyFilters(); });
 $("tagFilterBtn").addEventListener("click", () => {
   const open = $("tagPanel").hidden;
   $("tagPanel").hidden = !open;
@@ -229,7 +250,9 @@ $("tagFilterBtn").addEventListener("click", () => {
 });
 $("tagClear").addEventListener("click", () => {
   selectedTags.clear();
+  page = 1;
   renderTagFilter();
   applyFilters();
 });
-
+$("pagePrev").addEventListener("click", () => { page -= 1; applyFilters(); $("homeGrid").scrollIntoView({ block: "start" }); });
+$("pageNext").addEventListener("click", () => { page += 1; applyFilters(); $("homeGrid").scrollIntoView({ block: "start" }); });
