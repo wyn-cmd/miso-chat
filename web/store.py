@@ -1,7 +1,6 @@
 # SQLite storage for the Miso Chat web app: accounts, sessions, usage and settings.
 #
-# Lives outside the character folders on purpose (the database sits in the data dir),
-# so nothing here is walked by the terminal script's sync.
+# Lives outside the character folders on purpose (the database sits in the data dir).
 import hashlib
 import hmac
 import os
@@ -66,6 +65,10 @@ DEFAULT_SETTINGS = {
     "user_daily_cap": "100",     # Gemini calls per user per Pacific day
     "global_daily_cap": "800",   # all web users together, per Pacific day
     "rpm_limit": "25",           # all web users together, per minute (key is 30 RPM)
+    "reply_min_tokens": "50",    # shortest reply length a user can pick, in tokens
+    "reply_max_tokens": "1000",  # longest reply length a user can pick, in tokens
+    "memory_enabled": "1",       # memory bank (memory.md and pinned facts): 1 on, 0 off
+    "palace_enabled": "1",       # Mind Palace keyword entries: 1 on, 0 off
 }
 
 

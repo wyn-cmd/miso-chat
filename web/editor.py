@@ -4,13 +4,15 @@
 # 'Colour:' line), optional context.md (memories, locations, situations) and optional icon.png.
 # Names are restricted to one folder level so nothing can be written outside the character root.
 import io
+import json
 import os
 import re
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageEnhance, ImageOps
 
 import sandbox
 from charname import check_display, folder_for
+from web import profiles
 
 COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 UPLOAD_MAX = 10 * 1024 * 1024         # largest file an admin may upload
@@ -61,10 +63,13 @@ def read_card(root, name):
     m = re.search(r"^\s*[-*]?\s*colou?r\s*:\s*(.+)$", card, re.I | re.M)
     colour = m.group(1).split("/")[0].strip() if m else ""
     return {"name": name, "card": card, "context": context, "colour": colour,
-            "has_icon": icon_path(root, name) is not None, "sandbox": sandbox.is_enabled(path)}
+            "has_icon": icon_path(root, name) is not None, "sandbox": sandbox.is_enabled(path),
+            "profile": profiles.read_profile(path)}
 
 
-def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None):
+def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None, profile=None):
+    # profile is the card's headline, info and tags. Blank headline and info leave the saved profile
+    # alone, so the background writer can still fill it in later.
     path = folder_of(root, name)
     if creating and os.path.exists(path):
         raise EditorError("A character with that name already exists.")
@@ -74,6 +79,7 @@ def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None)
         raise EditorError("The character card can't be empty.")
     if len(card) > 20000 or len(context or "") > 20000:
         raise EditorError("Keep the card and context under 20,000 characters each.")
+    new_profile = _checked_profile(profile)   # checked before anything is written
     colour_hex = (colour_hex or "").strip()
     if COLOUR_RE.match(colour_hex):
         card = _set_colour_line(card, colour_hex.lower())
@@ -89,7 +95,23 @@ def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None)
         _atomic_write(context_path, context.strip() + "\n")
     elif os.path.exists(context_path):
         os.remove(context_path)
+    if new_profile is not None:
+        profiles.save_profile(path, new_profile, auto=False)
     return read_card(root, name)
+
+
+def _checked_profile(profile):
+    # None when the admin left the profile blank; otherwise the cleaned profile or an EditorError.
+    if not isinstance(profile, dict):
+        return None
+    headline = str(profile.get("headline") or "")
+    info = str(profile.get("info") or "")
+    if not headline.strip() and not info.strip():
+        return None
+    try:
+        return profiles.clean_profile(headline, info, profile.get("tags"))
+    except profiles.ProfileError as err:
+        raise EditorError(str(err)) from None
 
 
 def _set_colour_line(card, colour_hex):
@@ -107,6 +129,69 @@ def _atomic_write(path, text):
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
     os.replace(tmp, path)
+
+
+CREATOR_FILE = "creator.json"
+DEFAULT_CREATOR = "admin"   # folders from before creator tracking have no file
+
+
+def creator_of(path):
+    # Username that made the character. Missing or unreadable means the default.
+    try:
+        with open(os.path.join(path, CREATOR_FILE), encoding="utf-8") as f:
+            name = json.load(f).get("creator")
+    except (OSError, ValueError, AttributeError):
+        return DEFAULT_CREATOR
+    return name if isinstance(name, str) and name.strip() else DEFAULT_CREATOR
+
+
+def record_creator(path, username):
+    # Written once at creation, so later edits never change who made the character.
+    target = os.path.join(path, CREATOR_FILE)
+    if os.path.exists(target):
+        return
+    _atomic_write(target, json.dumps({"creator": username}) + "\n")
+
+
+BG_FILE = "background.jpg"
+BG_MAX_SIDE = 1280                   # chat and card backgrounds are downsized to this
+BG_BRIGHTNESS = 0.45                 # darkened on upload so text stays readable over them
+
+
+def save_background(root, name, data):
+    # Store a darkened, downsized JPEG as the character's chat and card background. Replaces any old one.
+    path = folder_of(root, name)
+    if not os.path.isdir(path):
+        raise EditorError("No such character.")
+    if not data:
+        raise EditorError("Choose an image first.")
+    if len(data) > UPLOAD_MAX:
+        raise EditorError("Background uploads can be up to 10 MB.")
+    try:
+        img = Image.open(io.BytesIO(data))
+        if img.format not in ("PNG", "JPEG", "WEBP"):
+            raise EditorError("Background must be a PNG, JPEG or WebP image.")
+        if img.width * img.height > MAX_SOURCE_PIXELS:
+            raise EditorError("That image is too large. Use one under 40 megapixels.")
+        img = ImageOps.exif_transpose(img)
+        img.load()
+    except EditorError:
+        raise
+    except (OSError, ValueError, Image.DecompressionBombError) as err:
+        raise EditorError("Could not read that image. Use a PNG, JPEG or WebP.") from err
+    img = img.convert("RGB")
+    img.thumbnail((BG_MAX_SIDE, BG_MAX_SIDE), Image.LANCZOS)   # never enlarges
+    img = ImageEnhance.Brightness(img).enhance(BG_BRIGHTNESS)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=82, optimize=True)
+    with open(os.path.join(path, BG_FILE), "wb") as f:
+        f.write(buf.getvalue())
+    return BG_FILE
+
+
+def background_path(root, name):
+    p = os.path.join(folder_of(root, name), BG_FILE)
+    return p if os.path.isfile(p) else None
 
 
 def _shrink_icon(data):
