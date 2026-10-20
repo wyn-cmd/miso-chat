@@ -85,7 +85,8 @@ def _check_members(zf):
     return found
 
 
-def import_zip(root, data_dir, uid, username, data):
+def import_zip(root, data_dir, uid, username, data, admin=True):
+    # Non-admins always become the creator, and cannot switch a sandbox on through an archive.
     # Creates a new character from an archive. Anything that fails after the folder is made removes it again.
     if not data:
         raise EditorError("Choose a file first.")
@@ -121,11 +122,11 @@ def import_zip(root, data_dir, uid, username, data):
                 raise EditorError("profile.json must be an object.")
             profile = {"headline": raw.get("headline", ""), "info": raw.get("info", ""), "tags": raw.get("tags", [])}
         sandbox_on = None
-        if "sandbox.json" in members:
+        if admin and "sandbox.json" in members:
             flag = _json_member(zf, members["sandbox.json"], "sandbox.json")
             sandbox_on = bool(flag.get("enabled")) if isinstance(flag, dict) else None
         creator = username
-        if "creator.json" in members:
+        if admin and "creator.json" in members:
             c = _json_member(zf, members["creator.json"], "creator.json")
             if isinstance(c, dict) and isinstance(c.get("creator"), str) and c["creator"].strip():
                 creator = c["creator"].strip()[:40]

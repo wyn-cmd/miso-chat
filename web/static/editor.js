@@ -25,17 +25,21 @@ async function openEditor(name) {
   $("edIconErr").textContent = "";
   $("edIconSave").disabled = true;
   $("edImportBox").hidden = !!name;   // importing only creates new characters
-  $("edBgBox").hidden = !name;
+  $("edBgBox").hidden = false;   // a new character can take a background too; it is sent once created
   $("edExportBox").hidden = !name;
   $("edDraftBox").hidden = !!name;   // drafting only fills the new-character form
   $("edPalaceBox").hidden = !name;   // the Mind Palace is saved beside the character, so it needs one
-  if (name) loadPalace(name);
-  else {
+  if (name) {
+    loadPalace(name, "");
+    fillPalaceWho();
+  } else {
     palaceEntries = [];
     renderPalace();
   }
   $("edBgErr").textContent = "";
   $("edBgSave").disabled = true;
+  pendingBg = null;
+  $("edBgNote").textContent = "";
   $("edExportErr").textContent = "";
   if (name) {
     $("editorTitle").textContent = "Edit " + name;
@@ -62,8 +66,10 @@ async function openEditor(name) {
     $("edSandbox").checked = false;
     setProfileFields(null);
     setIconPreview(null, false);
+    resetBgPreview();
   }
   $("edColourText").classList.remove("invalid");
+  $("edSandbox").closest("label").hidden = !(me && me.is_admin);   // sandboxes are an admin feature
   showEditor(true);
 }
 
@@ -116,6 +122,18 @@ async function saveCharacter(ev) {
       body.name = $("edName").value.trim();
       saved = await api("POST", "/api/admin/characters", body);
       editing = saved.name;
+      if (pendingBg) {
+        // The folder exists now, so the chosen background is sent.
+        try {
+          await sendBackground(saved.name, pendingBg);
+          setBgPreview(saved.name);
+        } catch (err) {
+          $("edErr").textContent = "Created " + saved.name + ", but its background did not upload: " + err.message;
+        }
+        pendingBg = null;
+        $("edBgFile").value = "";
+        $("edBgNote").textContent = "";
+      }
     }
     $("edName").readOnly = true;
     setProfileFields(saved.profile);
@@ -347,68 +365,149 @@ async function draftFromFile() {
 // ---- Mind Palace: entries the server adds to the prompt when one of their keys appears in the chat.
 let palaceEntries = [];
 
-function renderPalace() {
-  const list = $("edPalaceList");
+const PALACE_LOGIC = [
+  ["and_any", "Secondary: any one"],
+  ["and_all", "Secondary: all"],
+  ["not_any", "Secondary: none"],
+  ["not_all", "Secondary: not all"],
+];
+
+function palaceField(tag, attrs) {
+  const el = document.createElement(tag);
+  Object.entries(attrs).forEach(([k, v]) => { if (k === "text") el.textContent = v; else el.setAttribute(k, v); });
+  return el;
+}
+
+function palaceLabel(text, control) {
+  const label = document.createElement("label");
+  label.className = "palace-field";
+  label.append(palaceField("span", { text }), control);
+  return label;
+}
+
+function renderPalaceList(list, entries, readOnly) {
   list.replaceChildren();
-  palaceEntries.forEach((entry, index) => {
+  entries.forEach((entry, index) => {
     const wrap = document.createElement("div");
     wrap.className = "palace-entry";
-    const title = document.createElement("input");
-    title.placeholder = "Title (optional)";
+    const title = palaceField("input", { placeholder: "Title (optional)", "aria-label": "Entry title", "data-field": "title" });
     title.value = entry.title;
-    title.dataset.field = "title";
-    title.setAttribute("aria-label", "Entry title");
-    const keys = document.createElement("input");
-    keys.placeholder = "Keys, comma separated";
+    const keys = palaceField("input", { placeholder: "Keys, comma separated", "aria-label": "Keys that trigger this entry", "data-field": "keys" });
     keys.value = entry.keys.join(", ");
-    keys.dataset.field = "keys";
-    keys.setAttribute("aria-label", "Keys that trigger this entry");
-    const content = document.createElement("textarea");
-    content.rows = 3;
-    content.value = entry.content;
-    content.dataset.field = "content";
-    content.setAttribute("aria-label", "Entry content");
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "ghost";
-    remove.textContent = "Remove";
-    remove.addEventListener("click", () => {
-      readPalaceForm();
-      palaceEntries.splice(index, 1);
-      renderPalace();
+    const secondary = palaceField("input", { placeholder: "Secondary keys (optional)", "aria-label": "Secondary keys", "data-field": "secondary" });
+    secondary.value = entry.secondary.join(", ");
+    const logic = palaceField("select", { "aria-label": "Secondary key logic", "data-field": "logic" });
+    PALACE_LOGIC.forEach(([value, text]) => {
+      const opt = palaceField("option", { value, text });
+      logic.append(opt);
     });
-    wrap.append(title, keys, content, remove);
+    logic.value = entry.logic;
+    const constant = palaceField("input", { type: "checkbox", "data-field": "constant" });
+    constant.checked = entry.constant;
+    const enabled = palaceField("input", { type: "checkbox", "data-field": "enabled" });
+    enabled.checked = entry.enabled;
+    const whole = palaceField("input", { type: "checkbox", "data-field": "whole" });
+    whole.checked = entry.whole;
+    const depth = palaceField("input", { type: "number", min: "1", max: "30", step: "1", "aria-label": "Scan depth", "data-field": "depth" });
+    depth.value = entry.depth;
+    const order = palaceField("input", { type: "number", min: "0", max: "1000", step: "1", "aria-label": "Insertion order", "data-field": "order" });
+    order.value = entry.order;
+    const content = palaceField("textarea", { rows: "3", "aria-label": "Entry content", "data-field": "content" });
+    content.value = entry.content;
+    const remove = palaceField("button", { type: "button", class: "ghost", text: "Remove" });
+    remove.addEventListener("click", () => {
+      const live = readPalaceList(list);
+      live.splice(index, 1);
+      renderPalaceList(list, live, readOnly);
+    });
+    const options = palaceField("div", { class: "palace-options" });
+    options.append(
+      palaceLabel("Secondary keys", secondary),
+      palaceLabel("Logic", logic),
+      palaceLabel("Scan depth (messages)", depth),
+      palaceLabel("Order (higher = kept first)", order),
+      palaceLabel("Always on", constant),
+      palaceLabel("Enabled", enabled),
+      palaceLabel("Whole words only", whole),
+    );
+    if (readOnly) {
+      wrap.querySelectorAll("input, select, textarea").forEach((f) => { f.disabled = true; });
+      remove.hidden = true;
+    }
+    wrap.append(title, keys, options, content, remove);
     list.append(wrap);
+  });
+}
+
+function renderPalace(readOnly = false) {
+  renderPalaceList($("edPalaceList"), palaceEntries, readOnly);
+}
+
+function readPalaceList(list) {
+  // Reads what is typed in a list of entries, so nothing is lost when rows change.
+  return [...list.children].map((wrap) => {
+    const field = (name) => wrap.querySelector(`[data-field="${name}"]`);
+    const list = (name) => field(name).value.split(",").map((k) => k.trim()).filter(Boolean);
+    return {
+      title: field("title").value.trim(),
+      keys: list("keys"),
+      secondary: list("secondary"),
+      logic: field("logic").value,
+      content: field("content").value,
+      constant: field("constant").checked,
+      enabled: field("enabled").checked,
+      whole: field("whole").checked,
+      depth: Number(field("depth").value) || 6,
+      order: Number(field("order").value),
+    };
   });
 }
 
 function readPalaceForm() {
   // Keeps what is typed when a row is removed or the list is saved.
-  palaceEntries = [...$("edPalaceList").children].map((wrap) => {
-    const field = (name) => wrap.querySelector(`[data-field="${name}"]`).value;
-    return {
-      title: field("title").trim(),
-      keys: field("keys").split(",").map((k) => k.trim()).filter(Boolean),
-      content: field("content"),
-    };
-  });
+  palaceEntries = readPalaceList($("edPalaceList"));
 }
 
-async function loadPalace(name) {
+async function loadPalace(name, uid) {
+  // uid picks one account's palace to look at (admins only, read-only). An empty uid is the starting palace.
   $("edPalaceMsg").textContent = "";
+  const viewing = !!uid;
+  const query = viewing ? "?user=" + encodeURIComponent(uid) : "";
   try {
-    const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(name) + "/palace");
+    const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(name) + "/palace" + query);
     palaceEntries = data.entries;
+    $("edPalaceRecursive").checked = !!data.recursive;
+    $("edPalaceBudget").value = data.budget;
   } catch (err) {
     palaceEntries = [];
     $("edPalaceMsg").textContent = err.message;
   }
-  renderPalace();
+  for (const id of ["edPalaceRecursive", "edPalaceBudget"]) $(id).disabled = viewing;
+  $("edPalaceAdd").hidden = viewing;
+  $("edPalaceSave").hidden = viewing;
+  renderPalace(viewing);
+}
+
+async function fillPalaceWho() {
+  // Admins can look at a non-admin account's palace for this character. The select lists those accounts.
+  const sel = $("edPalaceWho");
+  $("edPalaceWhoRow").hidden = !(me && me.is_admin);
+  sel.replaceChildren(palaceField("option", { value: "", text: "Starting palace (editable)" }));
+  if (!me || !me.is_admin) return;
+  try {
+    const data = await api("GET", "/api/admin/users");
+    for (const u of data.users) {
+      if (!u.is_admin) sel.append(palaceField("option", { value: String(u.id), text: "Account " + u.username + " (read-only)" }));
+    }
+  } catch (err) {
+    $("edPalaceMsg").textContent = err.message;
+  }
 }
 
 function addPalaceEntry() {
   readPalaceForm();
-  palaceEntries.push({ title: "", keys: [], content: "" });
+  palaceEntries.push({ title: "", keys: [], secondary: [], logic: "and_any", content: "", constant: false,
+                       enabled: true, whole: true, depth: 6, order: 100 });
   renderPalace();
 }
 
@@ -417,12 +516,30 @@ async function savePalace() {
   readPalaceForm();
   $("edPalaceMsg").textContent = "";
   try {
-    const data = await api("POST", "/api/admin/characters/" + encodeURIComponent(editing) + "/palace", { entries: palaceEntries });
+    const data = await api("POST", "/api/admin/characters/" + encodeURIComponent(editing) + "/palace",
+      { entries: palaceEntries, recursive: $("edPalaceRecursive").checked, budget: Number($("edPalaceBudget").value) });
     palaceEntries = data.entries;
+    $("edPalaceRecursive").checked = !!data.recursive;
+    $("edPalaceBudget").value = data.budget;
     renderPalace();
     $("edPalaceMsg").textContent = "Saved.";
   } catch (err) {
     $("edPalaceMsg").textContent = err.message;
+  }
+}
+
+async function sendBackground(name, file) {
+  // Sends one background for a character. Throws with the server's message if it is refused.
+  const r = await fetch("/api/admin/characters/" + encodeURIComponent(name) + "/background", {
+    method: "POST",
+    headers: { "X-Requested-With": "roleplay", "Content-Type": file.type || "application/octet-stream" },
+    credentials: "same-origin",
+    body: file,
+  });
+  if (!r.ok) {
+    let detail = "Upload failed.";
+    try { detail = (await r.json()).detail || detail; } catch (e) { /* not json */ }
+    throw new Error(typeof detail === "string" ? detail : "Upload failed.");
   }
 }
 
@@ -431,17 +548,7 @@ async function uploadBackground() {
   if (!file || !editing) return;
   $("edBgErr").textContent = "";
   try {
-    const r = await fetch("/api/admin/characters/" + encodeURIComponent(editing) + "/background", {
-      method: "POST",
-      headers: { "X-Requested-With": "roleplay", "Content-Type": file.type || "application/octet-stream" },
-      credentials: "same-origin",
-      body: file,
-    });
-    if (!r.ok) {
-      let detail = "Upload failed.";
-      try { detail = (await r.json()).detail || detail; } catch (e) { /* not json */ }
-      throw new Error(typeof detail === "string" ? detail : "Upload failed.");
-    }
+    await sendBackground(editing, file);
     $("edBgFile").value = "";
     $("edBgSave").disabled = true;
     setBgPreview(editing);
@@ -449,6 +556,30 @@ async function uploadBackground() {
   } catch (err) {
     $("edBgErr").textContent = err.message;
   }
+}
+
+// A background chosen on the new-character form waits until the character exists.
+let pendingBg = null;
+const NEW_BG_MAX = 10 * 1024 * 1024;
+
+function resetBgPreview() {
+  const box = $("edBgPreview");
+  box.textContent = "No background yet";
+  box.classList.add("placeholder");
+}
+
+function queueNewBackground() {
+  const f = $("edBgFile").files[0];
+  pendingBg = !editing && f && f.size <= NEW_BG_MAX ? f : null;
+  $("edBgNote").textContent = pendingBg ? "Ready. It is uploaded when you create the character." : "";
+  if (!pendingBg) return;
+  const box = $("edBgPreview");
+  box.textContent = "";
+  box.classList.remove("placeholder");
+  const img = document.createElement("img");
+  img.alt = "";
+  img.src = URL.createObjectURL(pendingBg);
+  box.appendChild(img);
 }
 
 // Export downloads the zip through fetch, so a failure shows here instead of as a blank page.
@@ -524,6 +655,52 @@ $("edBgFile").addEventListener("change", () => {
   $("edBgSave").disabled = !f || !editing || tooBig;
 });
 $("edBgSave").addEventListener("click", uploadBackground);
+$("edBgFile").addEventListener("change", queueNewBackground);
+$("edPalaceWho").addEventListener("change", () => { if (editing) loadPalace(editing, $("edPalaceWho").value); });
+
+// ---- Settings: the account's own Mind Palace for the open character. Each account has its own copy.
+async function openMyPalace() {
+  if (!current || !soloNames.includes(current)) return;
+  $("palMsg").textContent = "";
+  try {
+    const data = await api("GET", "/api/character-palace?character=" + encodeURIComponent(current));
+    $("palRecursive").checked = !!data.recursive;
+    $("palBudget").value = data.budget;
+    renderPalaceList($("palList"), data.entries, false);
+  } catch (err) {
+    $("chatErr").textContent = err.message;
+    return;
+  }
+  $("palaceDlg").showModal();
+}
+
+async function saveMyPalace() {
+  if (!current) return;
+  $("palMsg").textContent = "";
+  try {
+    const data = await api("POST", "/api/character-palace?character=" + encodeURIComponent(current), {
+      entries: readPalaceList($("palList")),
+      recursive: $("palRecursive").checked,
+      budget: Number($("palBudget").value),
+    });
+    renderPalaceList($("palList"), data.entries, false);
+    $("palMsg").textContent = "Saved. Applies from your next message.";
+  } catch (err) {
+    $("palMsg").textContent = err.message;
+  }
+}
+
+function addMyPalaceEntry() {
+  const entries = readPalaceList($("palList"));
+  entries.push({ title: "", keys: [], secondary: [], logic: "and_any", content: "", constant: false,
+                 enabled: true, whole: true, depth: 6, order: 100 });
+  renderPalaceList($("palList"), entries, false);
+}
+
+$("palaceOpen").addEventListener("click", openMyPalace);
+$("palAdd").addEventListener("click", addMyPalaceEntry);
+$("palSave").addEventListener("click", saveMyPalace);
+$("palClose").addEventListener("click", () => $("palaceDlg").close());
 $("edExport").addEventListener("click", exportCharacter);
 $("impFile").addEventListener("change", () => {
   const f = $("impFile").files[0];

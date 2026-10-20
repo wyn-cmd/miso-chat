@@ -2,6 +2,75 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.3.0 - 2026-10-20
+
+This release adds two-factor sign-in, encrypted backups made from the admin page, a closer match to SillyTavern for the Mind Palace, and the character changes below. It also includes everything from 1.3.0-beta and 1.3.0-beta-2: the terminal client, character pictures in the terminal, the version check and the sign-in protection.
+
+### Added
+
+- Two-factor sign-in with an authenticator app, using the 6-digit code that changes every 30 seconds. Any account can turn it on in Settings. Once it is on, each sign-in asks for the code after the password.
+- Admins can require two-factor sign-in on any account. An account that is required but has not yet set up two-factor sign-in goes to a set-up page straight after its password. The page shows a QR code and the key to add to the app, then asks for a code from the app. Until that code is accepted, nothing else in the app is available. The set-up page stays open for 15 minutes.
+- An "enable 2FA" button on the admin's own row of the users table, which opens the same set-up window as Settings. Other admins' rows do not show the button.
+- Admins can reset two-factor sign-in on an account that has lost its phone. The account then sets up a new code at its next sign-in, and all its sessions end.
+- Two-factor sign-in in the terminal client. The first sign-in with it required shows the key once, grouped in fours, because a terminal cannot show the QR code.
+- Encrypted backups, made from the Backups section of the admin page. Only admins with two-factor sign-in on can make one. The first admin sets a backup password of at least 12 characters, which is stored only as a check value. A backup is one encrypted `.mbk` file. A data backup holds the data folder (accounts, chats, memory, characters and groups), the server settings and `.env`. A full backup also holds the server code. Backups are never scheduled. Another admin who downloads a backup cannot read it without the password.
+- `restore_backup.py` restores a backup into an empty folder: `python restore_backup.py BACKUP_FILE TARGET_FOLDER`.
+- Mind Palace (database searching) is closer to SillyTavern World Info. An entry can have secondary keys, combined with AND or NOT logic (and any, and all, not any, not all). An entry can be always on, can be switched off, and has its own scan depth (1 to 30 messages) and insertion order. A character has a budget of 500 to 12,000 characters, 3,000 by default, and entries can optionally trigger other entries (recursion). A character can have up to 60 entries, and up to 24 are matched in one turn.
+- Any signed-in account can create a character. The account that creates it becomes that character's creator.
+- Creators can edit their own characters, upload a background and edit the character's starting Mind Palace.
+- The new-character form has a background picture option. The picture is uploaded when the character is created.
+- Mind Palace in Settings. Each account has its own entries for each character. The first time an account chats with a character, it receives a copy of that character's starting palace. Changes apply from the next message.
+- Admins can read another account's Mind Palace for a character from the character editor. They cannot change it.
+- Search results show 50 characters per page, with Previous and Next buttons when there are more.
+- The character info card (the i icon) uses the character's background picture, with a gradient that is darker at the bottom so the text stays readable.
+
+### Changed
+
+- A correct password no longer resets the wrong-code count. Lock counts clear only when a sign-in is finished.
+- Requiring two-factor sign-in on an account that has not finished setting it up ends that account's current sessions, so the account must finish the set-up page first.
+- The Mind Palace editor saves the recursion setting, the budget and each entry's options.
+- Characters are ordered by recommendation. Characters that share tags with the ones an account chats with come first, then the most used across all accounts, then by name. The search page and the home page use the same order.
+- The chat sidebar lists only the characters an account has chatted with. A character appears once it has at least one saved message, on the main chat or on a branch. A new account's sidebar starts empty. Groups are listed as before.
+- The sidebar refreshes after each message, so a first message adds its character straight away. A new account with no open character no longer shows an empty chat window.
+- Only admins can change characters made as admin. Characters from before creator tracking count as admin's. Admins cannot change a character a user created.
+- Only admins can set the sandbox option or keep a creator name from an imported zip. Any other account that imports a character becomes its creator.
+- Group chats still read the character's starting Mind Palace, which is shared by everyone in the group.
+
+### Security
+
+- Two-factor secrets are encrypted at rest with AES-GCM, under a key kept in `MISO_SECRET_KEY`. The server creates that key in `.env` on first start. Each secret is bound to its account. A code that has already been used is refused, so a copied code cannot be replayed.
+- Backups are encrypted with AES-GCM under a key derived from the backup password with scrypt.
+- The sign-in lockout, the per-address block, the secure cookie and the 10-character minimum password from 1.3.0-beta-2 are unchanged.
+
+### Upgrading
+
+Follow `UPDATE.txt`. Keep `.env` safe: it holds `MISO_SECRET_KEY`, and two-factor secrets cannot be read without it.
+
+## 1.3.0-beta-2 - 2026-10-20
+
+### Security
+
+- Sign-in lockout per username, kept in the database. It counts failures whether or not the account exists, so a refusal never shows which names are real. 10 failures lock for 15 minutes; 5 more lock for 30 minutes, then 1, 2 and 4 hours. 35 failures with no successful sign-in lock the account until an admin unlocks it. A locked name is refused before its password is checked. Each address is counted separately too: 15 consecutive wrong guesses from one address block that address for that account until an admin unlocks it. Other addresses are not affected. The admin page shows locks and can clear them, and `unlock_account.py` clears one from the server.
+- Password minimum is 10 characters, up from 8. Existing passwords still work; the minimum applies when a password is set.
+- Password hashes use scrypt at cost 2^16, up from 2^14. Old hashes still sign in and are upgraded at the next sign-in.
+- The session cookie is marked Secure by default. Plain-http setups must set `MISO_COOKIE_SECURE=0`.
+- The terminal client refuses a redirect to a non-https address.
+
+## 1.3.0-beta - 2026-10-20
+
+This beta adds a terminal client for Miso Chat, with character pictures drawn in the terminal. It is for testing on a server before the 1.3.0 release.
+
+### Added
+
+- A terminal client, `client/miso_remote.py`. It logs in to a running server and chats with characters and groups from a terminal. It uses only the Python standard library. Italic and bold text show where marked, and each character's reply sits in a box in that character's colour.
+- Character pictures in the terminal client. The client downloads a character's picture, draws it with chafa in colour braille, and keeps the drawing in a cache. `/portrait` shows it again during a chat. Pictures need chafa on the computer that runs the client.
+- The server reports its version at `/api/version`. The terminal client checks it before login and connects only when the major and minor version match, so 1.3.0 and 1.3.4 work together. Older servers that do not report a version are refused.
+- A download link for the terminal client, in the sidebar under Account and in Settings.
+
+### Upgrading
+
+Follow `UPDATE.txt`. The zip adds the `client/` folder, which the download link needs. No data changes are needed.
+
 ## 1.2.1 - 2026-10-20
 
 This release adds group chats and a branch tree view, and changes how chat backgrounds and message bubbles look.
@@ -32,7 +101,7 @@ This release adds a home page, chat branches, character import and export, draft
 ### Added
 
 - A home page with character cards, a search box, a tag filter and recommendations based on the tags of the characters you chat with.
-- Chat branches. Each saved message has a Branch button that copies the chat up to that message into a new branch. You can switch between branches and delete one. A chat can have up to 12 branches.
+- Chat branches. Each saved message has a Branch button that copies the chat up to that message into a new branch. You can switch between branches and delete one. A chat can have up to 12 branches, and groups work the same way.
 - Character import and export as zip files. The export can include this account's chat history and memory.
 - Chat backgrounds. An admin uploads one per character. It is darkened and shown on the character's home card and behind its chat.
 - Creators. A new character is credited to the account that created it. Existing characters are credited to admin.

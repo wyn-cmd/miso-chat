@@ -40,7 +40,7 @@
       <h2>Add a user</h2>
       <form id="createForm" class="stack narrow">
         <label>Username <input id="newName" pattern="[A-Za-z0-9_\-]{2,32}" required></label>
-        <label>Starting password (8+ characters, they change it on first login) <input id="newPass" type="text" minlength="8" required></label>
+        <label>Starting password (10+ characters, they change it on first login) <input id="newPass" type="text" minlength="10" required></label>
         <label>Daily cap (blank = default) <input id="newCap" type="number" min="0"></label>
         <label class="inline"><input id="newAdmin" type="checkbox"> Admin</label>
         <button type="submit">Create user</button>
@@ -61,6 +61,28 @@
         <button type="submit">Save limits</button>
         <p id="settingsMsg" class="muted"></p>
       </form>
+    </section>
+    <section>
+      <h2>Backups</h2>
+      <p class="muted">Each backup is encrypted with the backup password. The first admin sets it once, and every backup needs it, along with your two-factor code. Someone who downloads a backup can't open it without that password. A data backup holds the data, characters and settings, including .env. A full backup also holds the server code, so restore_backup.py can rebuild the whole install.</p>
+      <p id="bkStatus" class="muted"></p>
+      <form id="bkSetForm" class="stack narrow" hidden>
+        <label>Backup password (12 characters or more) <input id="bkNewPw" type="password" autocomplete="new-password" minlength="12" required></label>
+        <label>Two-factor code <input id="bkSetCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label>
+        <button type="submit">Set backup password</button>
+      </form>
+      <form id="bkMakeForm" class="stack narrow" hidden>
+        <label>Kind
+          <select id="bkKind">
+            <option value="data">Data backup (data, characters, settings, .env)</option>
+            <option value="full">Full backup (also the server code, for full recovery)</option>
+          </select>
+        </label>
+        <label>Backup password <input id="bkPw" type="password" autocomplete="off" required></label>
+        <label>Two-factor code <input id="bkCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label>
+        <button type="submit">Make and download backup</button>
+      </form>
+      <p id="bkMsg" class="muted" aria-live="polite"></p>
     </section>
     <section>
       <h2>Model providers</h2>
@@ -91,7 +113,9 @@
     </section>
   </main>
   <script src="/static/common.js"></script>
+  <script src="/static/security.js"></script>
   <script src="/static/admin.js"></script>
+  <script src="/static/backup.js"></script>
   <script src="/static/providers.js"></script>
 </body>
 </html>
