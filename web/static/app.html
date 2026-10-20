@@ -18,7 +18,7 @@
     <button id="menuBtn" class="ghost menu-btn" type="button" aria-label="Open character list" aria-controls="sidebar" aria-expanded="false">
       <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
     </button>
-    <span class="brand">Miso Chat</span>
+    <a class="brand" href="/" title="Back to the character gallery">Miso Chat</a>
     <span id="headerChat" class="header-chat"></span>
     <span id="who" class="muted"></span>
     <span class="spacer"></span>
@@ -77,6 +77,20 @@
         <span class="spacer"></span>
         <button id="editorBack" class="ghost" type="button">Back to chat</button>
       </div>
+      <fieldset id="edDraftBox" class="icon-box draft-box">
+        <legend>Draft from a file</legend>
+        <p class="muted">Pick a .txt, .md, .docx, .pdf or a screenshot that describes the character. Text is read directly, and pictures and scanned pages go through OCR. The draft fills this form for you to check before you create the character. Pictures are never used as the profile or background image.</p>
+        <input id="edDraftFile" type="file" accept=".txt,.md,.docx,.pdf,.png,.jpg,.jpeg,.webp">
+        <button id="edDraftBtn" class="ghost" type="button">Read and draft</button>
+        <p id="edDraftMsg" class="muted" aria-live="polite"></p>
+      </fieldset>
+      <div id="edImportBox" class="import-box">
+        <label class="side-label">Import a character from a .zip (new characters only)
+          <input id="impFile" type="file" accept=".zip,application/zip">
+        </label>
+        <button id="impBtn" class="ghost small" type="button" disabled>Import</button>
+        <p id="impMsg" class="muted"></p>
+      </div>
       <form id="editorForm" class="stack editor-form">
         <label>Name <input id="edName" maxlength="40" required></label>
         <div class="row">
@@ -85,6 +99,24 @@
           </label>
         </div>
         <label class="check-row"><input id="edSandbox" type="checkbox"> Give this character a private sandbox: a folder of notes and files it can keep and manage. Off by default.</label>
+        <fieldset class="profile-fields">
+          <legend>Profile card: what users see on the home page</legend>
+          <label>Headline <span class="muted">one sentence, 120 characters at most</span>
+            <input id="edHeadline" maxlength="120" autocomplete="off">
+          </label>
+          <label>Summary <span class="muted">shown behind the i button; plain prose</span>
+            <textarea id="edInfo" rows="5" maxlength="2000"></textarea>
+          </label>
+          <label>Tags <span class="muted">Enter or comma adds one; reuse a tag to group characters; up to 8</span>
+            <div id="edTagBox" class="tag-input"><input id="edTagText" list="edTagSuggest" maxlength="24" autocomplete="off" placeholder="Type a tag" aria-label="Add a tag"></div>
+            <datalist id="edTagSuggest"></datalist>
+          </label>
+          <div class="row">
+            <button id="edProfileAuto" class="ghost" type="button">Auto-fill from card</button>
+            <span id="edProfileNote" class="muted"></span>
+          </div>
+          <p id="edProfileErr" class="error"></p>
+        </fieldset>
         <label>Character card
           <textarea id="edCard" rows="14" maxlength="20000" required></textarea>
         </label>
@@ -108,6 +140,32 @@
           <p id="edIconErr" class="error"></p>
         </div>
       </div>
+      <div id="edBgBox" class="icon-box bg-box">
+        <div id="edBgPreview" class="bg-preview placeholder"></div>
+        <div class="stack">
+          <input id="edBgFile" type="file" accept="image/png,image/jpeg,image/webp">
+          <p class="muted">Shown behind this character's chat and on its home page card. It is darkened when you upload it. PNG, JPEG or WebP, up to 10 MB.</p>
+          <button id="edBgSave" class="ghost" type="button" disabled>Upload background</button>
+          <p id="edBgErr" class="error"></p>
+        </div>
+      </div>
+      <fieldset id="edPalaceBox" class="icon-box palace-box" hidden>
+        <legend>Mind Palace (database searching)</legend>
+        <p class="muted">Each entry joins the prompt only when one of its keys appears in the recent chat. Keys match whole words, ignoring case and accents, so list plurals too.</p>
+        <div id="edPalaceList" class="palace-list"></div>
+        <div class="palace-actions">
+          <button id="edPalaceAdd" class="ghost" type="button">Add entry</button>
+          <button id="edPalaceSave" type="button">Save Mind Palace</button>
+        </div>
+        <p id="edPalaceMsg" class="muted" aria-live="polite"></p>
+      </fieldset>
+      <div id="edExportBox" class="export-box">
+        <h2>Export</h2>
+        <label class="check-row"><input id="edExportHistory" type="checkbox"> Include my chat history and memories for this character</label>
+        <button id="edExport" class="ghost" type="button">Export as .zip</button>
+        <p class="muted">The zip holds the card, profile, icon, background and context. Sandbox files are not included.</p>
+        <p id="edExportErr" class="error"></p>
+      </div>
     </section>
     <section id="chatSection" hidden>
       <div class="bar">
@@ -130,6 +188,8 @@
             <button id="sizeUp" class="ghost small" type="button" aria-label="Larger text" title="Larger text">A+</button>
           </span>
         <span class="spacer"></span>
+        <select id="branchPick" class="font-select" aria-label="Chat branch" title="Which branch of this chat is open" hidden></select>
+        <button id="branchDel" class="ghost small" type="button" title="Delete the open branch" hidden>Delete branch</button>
         <button id="memBtn" class="ghost" type="button" title="See and edit what the character remembers">Memory</button>
         <button id="rollBtn" class="ghost" type="button" title="Roll: the model adds a random event to the scene">Roll</button>
         <button id="undoBtn" class="ghost" type="button">Undo</button>
@@ -138,7 +198,7 @@
       <form id="chatForm" class="composer">
         <div class="msg-wrap">
           <textarea id="msg" rows="3" maxlength="4000" placeholder="Say something… (Enter sends, Shift+Enter for a new line, /help for commands)"></textarea>
-          <button id="autoBtn" class="dice-btn" type="button" title="Auto-fill: let the model draft your next message" aria-label="Auto-fill your next message"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="1.7" fill="currentColor"/><circle cx="16" cy="8" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="8" cy="16" r="1.7" fill="currentColor"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/></svg></button>
+          <button id="autoBtn" class="dice-btn" type="button" title="Auto-fill: let the model draft your next message" aria-label="Auto-fill your next message"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><g class="die-face" data-face="5"><circle cx="8" cy="8" r="1.7" fill="currentColor"/><circle cx="16" cy="8" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="8" cy="16" r="1.7" fill="currentColor"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/></g></svg></button>
         </div>
         <button id="sendBtn" type="submit" aria-label="Send" title="Send"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/></svg></button>
       </form>
@@ -185,6 +245,12 @@
       <div class="sheet-row"><span>Highlight colour</span>
         <span class="accent-ctl"><input id="accentPick" type="color" aria-label="Highlight colour"><button id="accentReset" class="ghost small" type="button">Reset</button></span>
       </div>
+      <div class="sheet-row"><span>Character icon shape</span>
+        <select id="avatarShape" aria-label="Character icon shape">
+          <option value="squircle">Squircle</option>
+          <option value="circle">Circle</option>
+        </select>
+      </div>
       <div id="charSettings" hidden>
         <h2>This character</h2>
         <div class="sheet-row slider-row"><label for="tempSlider">Creativity (temperature) <span id="tempVal" class="muted"></span></label>
@@ -196,6 +262,10 @@
         <span class="slider-ctl"><input id="winSlider" type="range" min="1" max="100" step="1" aria-label="Rolling window in messages"><button id="winReset" class="ghost small" type="button">Default</button></span>
       </div>
       <p id="winNote" class="muted"></p>
+      <div class="sheet-row slider-row"><label for="replySlider">Reply length (tokens) <span id="replyVal" class="muted"></span></label>
+        <span class="slider-ctl"><input id="replySlider" type="range" step="10" aria-label="Reply length target in tokens"><button id="replyReset" class="ghost small" type="button">No target</button></span>
+      </div>
+      <p id="replyNote" class="muted"></p>
       <div class="sheet-row"><span>Export this chat</span>
         <span class="slider-ctl"><button id="exportMd" class="ghost small" type="button">Markdown</button><button id="exportTxt" class="ghost small" type="button">Text</button></span>
       </div>
