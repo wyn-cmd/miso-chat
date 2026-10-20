@@ -38,7 +38,7 @@ async function openEditor(name) {
   }
   $("edBgErr").textContent = "";
   $("edBgSave").disabled = true;
-  pendingBg = null;
+  pendingBgs = [];
   $("edBgNote").textContent = "";
   $("edExportErr").textContent = "";
   if (name) {
@@ -54,7 +54,7 @@ async function openEditor(name) {
     $("edSandbox").checked = !!data.sandbox;
     setProfileFields(data.profile);
     setIconPreview(name, data.has_icon);
-    setBgPreview(name);
+    setBgPreview(name, data.backgrounds || []);
   } else {
     $("editorTitle").textContent = "New character";
     $("edName").value = "";
@@ -83,9 +83,23 @@ function setIconPreview(name, hasIcon) {
     img.src = "/api/icon/" + encodeURIComponent(name) + "?v=" + Date.now();
     box.appendChild(img);
   } else {
-    box.textContent = ($("edName").value || "?").trim().charAt(0).toUpperCase() || "?";
+    box.appendChild(faceIcon(editorColour()));
   }
 }
+
+// The colour typed or picked for the character; the face placeholder uses it.
+function editorColour() {
+  const t = ($("edColourText").value || "").trim();
+  return /^#[0-9a-f]{6}$/i.test(t) ? t : "";
+}
+
+$("edColour").addEventListener("input", () => {
+  $("edColourText").value = $("edColour").value;
+  if ($("edIconPreview").classList.contains("placeholder")) setIconPreview(editing, false);
+});
+$("edColourText").addEventListener("input", () => {
+  if ($("edIconPreview").classList.contains("placeholder")) setIconPreview(editing, false);
+});
 
 async function loadExample() {
   const data = await api("GET", "/api/admin/characters/example");
@@ -122,17 +136,26 @@ async function saveCharacter(ev) {
       body.name = $("edName").value.trim();
       saved = await api("POST", "/api/admin/characters", body);
       editing = saved.name;
-      if (pendingBg) {
-        // The folder exists now, so the chosen background is sent.
-        try {
-          await sendBackground(saved.name, pendingBg);
-          setBgPreview(saved.name);
-        } catch (err) {
-          $("edErr").textContent = "Created " + saved.name + ", but its background did not upload: " + err.message;
+      if (pendingBgs.length) {
+        // The folder exists now, so the queued backgrounds are sent in the order chosen.
+        let failed = "";
+        for (const file of pendingBgs) {
+          try {
+            await sendBackground(saved.name, file);
+          } catch (err) {
+            failed = err.message;
+            break;
+          }
         }
-        pendingBg = null;
+        if (failed) $("edErr").textContent = "Created " + saved.name + ", but a background did not upload: " + failed;
+        pendingBgs = [];
         $("edBgFile").value = "";
-        $("edBgNote").textContent = "";
+        try {
+          const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(saved.name));
+          setBgPreview(saved.name, data.backgrounds || []);
+        } catch (err) {
+          $("edErr").textContent = err.message;
+        }
       }
     }
     $("edName").readOnly = true;
@@ -310,16 +333,56 @@ async function uploadIcon() {
   }
 }
 
-function setBgPreview(name) {
-  const box = $("edBgPreview");
+// ---- Backgrounds: several per character. A new character queues its files until it exists.
+const BG_MAX = 10;
+let bgItems = [];      // saved backgrounds: { id }
+let pendingBgs = [];   // files queued on the new-character form
+
+function setBgPreview(name, ids) {
+  bgItems = (ids || []).map((id) => ({ id }));
+  renderBgList();
+}
+
+function resetBgPreview() {
+  bgItems = [];
+  renderBgList();
+}
+
+function renderBgList() {
+  const box = $("edBgList");
   box.textContent = "";
-  box.classList.add("placeholder");
-  const img = document.createElement("img");
-  img.alt = "";
-  img.onload = () => box.classList.remove("placeholder");
-  img.onerror = () => { box.textContent = "No background yet"; };
-  img.src = "/api/background/" + encodeURIComponent(name) + "?v=" + Date.now();
-  box.appendChild(img);
+  const items = [...bgItems, ...pendingBgs.map((file) => ({ file }))];
+  if (!items.length) box.appendChild(el("p", "No backgrounds yet.", "muted"));
+  for (const item of items) {
+    const thumb = el("div", "", "bg-thumb");
+    const img = document.createElement("img");
+    img.alt = "";
+    img.src = item.file ? URL.createObjectURL(item.file) : "/api/background/" + encodeURIComponent(editing) + "?b=" + encodeURIComponent(item.id);
+    const rm = el("button", "Remove", "ghost small");
+    rm.type = "button";
+    rm.setAttribute("aria-label", "Remove this background");
+    rm.addEventListener("click", () => removeBackground(item));
+    thumb.append(img, rm);
+    box.appendChild(thumb);
+  }
+  $("edBgNote").textContent = items.length + " of " + BG_MAX + " backgrounds.";
+}
+
+async function removeBackground(item) {
+  if (item.file) {
+    pendingBgs = pendingBgs.filter((f) => f !== item.file);
+    renderBgList();
+    return;
+  }
+  $("edBgErr").textContent = "";
+  try {
+    await api("DELETE", "/api/admin/characters/" + encodeURIComponent(editing) + "/backgrounds/" + encodeURIComponent(item.id));
+    const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(editing));
+    setBgPreview(editing, data.backgrounds || []);
+    await loadCharacters();
+  } catch (err) {
+    $("edBgErr").textContent = err.message;
+  }
 }
 
 // ---- Draft from a file: fills the new-character form for review. Nothing is saved until Create.
@@ -529,8 +592,8 @@ async function savePalace() {
 }
 
 async function sendBackground(name, file) {
-  // Sends one background for a character. Throws with the server's message if it is refused.
-  const r = await fetch("/api/admin/characters/" + encodeURIComponent(name) + "/background", {
+  // Adds one background for a character. Throws with the server's message if it is refused.
+  const r = await fetch("/api/admin/characters/" + encodeURIComponent(name) + "/backgrounds", {
     method: "POST",
     headers: { "X-Requested-With": "roleplay", "Content-Type": file.type || "application/octet-stream" },
     credentials: "same-origin",
@@ -544,42 +607,55 @@ async function sendBackground(name, file) {
 }
 
 async function uploadBackground() {
-  const file = $("edBgFile").files[0];
-  if (!file || !editing) return;
+  const files = Array.from($("edBgFile").files || []);
+  if (!files.length || !editing) return;
   $("edBgErr").textContent = "";
+  let failed = "";
+  for (const file of files) {
+    try {
+      await sendBackground(editing, file);
+    } catch (err) {
+      failed = err.message;
+      break;
+    }
+  }
+  $("edBgFile").value = "";
+  $("edBgSave").disabled = true;
+  if (failed) $("edBgErr").textContent = failed;
   try {
-    await sendBackground(editing, file);
-    $("edBgFile").value = "";
-    $("edBgSave").disabled = true;
-    setBgPreview(editing);
-    await loadCharacters();
+    const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(editing));
+    setBgPreview(editing, data.backgrounds || []);
   } catch (err) {
     $("edBgErr").textContent = err.message;
   }
+  await loadCharacters();
 }
 
 // A background chosen on the new-character form waits until the character exists.
-let pendingBg = null;
 const NEW_BG_MAX = 10 * 1024 * 1024;
 
-function resetBgPreview() {
-  const box = $("edBgPreview");
-  box.textContent = "No background yet";
-  box.classList.add("placeholder");
+
+function queueNewBackground(files) {
+  // New characters hold their backgrounds until Create; the list shows what is queued.
+  const tooBig = files.some((f) => f.size > NEW_BG_MAX);
+  const room = BG_MAX - pendingBgs.length;
+  pendingBgs = pendingBgs.concat(tooBig ? [] : files.slice(0, Math.max(0, room)));
+  $("edBgErr").textContent = tooBig ? "Background uploads can be up to 10 MB." : files.length > room ? "Only " + Math.max(0, room) + " more fit (up to 10)." : "";
+  $("edBgFile").value = "";
+  renderBgList();
 }
 
-function queueNewBackground() {
-  const f = $("edBgFile").files[0];
-  pendingBg = !editing && f && f.size <= NEW_BG_MAX ? f : null;
-  $("edBgNote").textContent = pendingBg ? "Ready. It is uploaded when you create the character." : "";
-  if (!pendingBg) return;
-  const box = $("edBgPreview");
-  box.textContent = "";
-  box.classList.remove("placeholder");
-  const img = document.createElement("img");
-  img.alt = "";
-  img.src = URL.createObjectURL(pendingBg);
-  box.appendChild(img);
+function onBgFilesChosen() {
+  const files = Array.from($("edBgFile").files || []);
+  if (!files.length) return;
+  if (!editing) {
+    queueNewBackground(files);
+    return;
+  }
+  const tooBig = files.some((f) => f.size > NEW_BG_MAX);
+  const over = bgItems.length + files.length > BG_MAX;
+  $("edBgErr").textContent = tooBig ? "Background uploads can be up to 10 MB." : over ? "A character can have up to 10 backgrounds. Remove one first." : "";
+  $("edBgSave").disabled = tooBig || over;
 }
 
 // Export downloads the zip through fetch, so a failure shows here instead of as a blank page.
@@ -648,14 +724,8 @@ $("edIconSave").addEventListener("click", uploadIcon);
 $("edDraftBtn").addEventListener("click", draftFromFile);
 $("edPalaceAdd").addEventListener("click", addPalaceEntry);
 $("edPalaceSave").addEventListener("click", savePalace);
-$("edBgFile").addEventListener("change", () => {
-  const f = $("edBgFile").files[0];
-  const tooBig = !!f && f.size > 10 * 1024 * 1024;
-  $("edBgErr").textContent = tooBig ? "Background uploads can be up to 10 MB." : "";
-  $("edBgSave").disabled = !f || !editing || tooBig;
-});
 $("edBgSave").addEventListener("click", uploadBackground);
-$("edBgFile").addEventListener("change", queueNewBackground);
+$("edBgFile").addEventListener("change", onBgFilesChosen);
 $("edPalaceWho").addEventListener("change", () => { if (editing) loadPalace(editing, $("edPalaceWho").value); });
 
 // ---- Settings: the account's own Mind Palace for the open character. Each account has its own copy.
