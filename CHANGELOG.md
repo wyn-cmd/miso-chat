@@ -2,6 +2,31 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.3.1-beta - 2026-10-20
+
+A beta that adds character backgrounds, face icons, appearance sliders and a settings grid. It keeps the 1.3 protocol, so terminal clients from 1.3.0 still connect.
+
+### Added
+
+- Up to 10 backgrounds per character. The character editor adds and removes them one at a time. Export and import carry all of them.
+- A chat picks one of a character's backgrounds at random each time it opens.
+- Home cards and the character info card cycle through the backgrounds at random. Each change waits 5 to 8 seconds, then fades to the next picture. Reduced-motion settings keep one still picture.
+- Shared default backgrounds in `web/static/defaults/`, for characters with no backgrounds of their own. They cycle the same way.
+- A character with no picture shows a face in its colour, instead of the first letter of its name. The character editor shows the same face as its preview.
+- Appearance has a background brightness slider (darker or lighter) and a chat bubble opacity slider. Each account keeps its own settings.
+- Settings is a grid of cards, one for each category. Admins also see an Admin card.
+- README screenshots, using made-up characters with generated art and chats.
+
+### Changed
+
+- Chat look and creativity sit under Appearance and Character. Persona is a card of its own.
+- On phones the Undo button sits beside the Tree button.
+- The single-upload background route is replaced by a route that adds one background at a time. Existing `background.jpg` files still show.
+
+### Upgrading
+
+Follow `UPDATE.txt`. Keep `.env` safe: it holds `MISO_SECRET_KEY`, and two-factor secrets cannot be read without it.
+
 ## 1.3.0 - 2026-10-20
 
 This release adds two-factor sign-in, encrypted backups made from the admin page, a closer match to SillyTavern for the Mind Palace, and the character changes below. It also includes everything from 1.3.0-beta and 1.3.0-beta-2: the terminal client, character pictures in the terminal, the version check and the sign-in protection.
@@ -161,7 +186,6 @@ This release is mostly about the chat itself: replies can be regenerated and com
 - In dark mode, sidebar characters are dark cards with a light outline.
 - The Send button is now an up arrow.
 - On phones, Roll is no longer in the header. The Memory button moves into the Settings sheet on phones. Desktop keeps Roll and Memory in the chat bar.
-- The built-in word substitutions start empty. Existing `substitutions.json` files are not touched.
 
 ## 1.0.0 - 2026-10-15
 

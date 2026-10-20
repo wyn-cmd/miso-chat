@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import secrets
 
 from PIL import Image, ImageOps
 
@@ -63,7 +64,7 @@ def read_card(root, name):
     m = re.search(r"^\s*[-*]?\s*colou?r\s*:\s*(.+)$", card, re.I | re.M)
     colour = m.group(1).split("/")[0].strip() if m else ""
     return {"name": name, "card": card, "context": context, "colour": colour,
-            "has_icon": icon_path(root, name) is not None, "sandbox": sandbox.is_enabled(path),
+            "has_icon": icon_path(root, name) is not None, "backgrounds": background_ids(root, name), "sandbox": sandbox.is_enabled(path),
             "profile": profiles.read_profile(path)}
 
 
@@ -153,15 +154,16 @@ def record_creator(path, username):
     _atomic_write(target, json.dumps({"creator": username}) + "\n")
 
 
-BG_FILE = "background.jpg"
+BG_LEGACY = "background.jpg"         # the single background from before several were allowed; still served
+BG_DIR = "backgrounds"               # one JPEG per background, named by its id
 BG_MAX_SIDE = 1280                   # chat and card backgrounds are downsized to this
+MAX_BACKGROUNDS = 10                 # per character
+LEGACY_ID = "legacy"
+BG_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
-def save_background(root, name, data):
-    # Store a downsized JPEG as the character's chat and card background, in its original colours. Replaces any old one.
-    path = folder_of(root, name)
-    if not os.path.isdir(path):
-        raise EditorError("No such character.")
+def _encode_background(data):
+    # Checks an upload and returns it downsized as JPEG, in its original colours.
     if not data:
         raise EditorError("Choose an image first.")
     if len(data) > UPLOAD_MAX:
@@ -182,14 +184,74 @@ def save_background(root, name, data):
     img.thumbnail((BG_MAX_SIDE, BG_MAX_SIDE), Image.LANCZOS)   # never enlarges
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=82, optimize=True)
-    with open(os.path.join(path, BG_FILE), "wb") as f:
-        f.write(buf.getvalue())
-    return BG_FILE
+    return buf.getvalue()
 
 
-def background_path(root, name):
-    p = os.path.join(folder_of(root, name), BG_FILE)
+def background_ids(root, name):
+    # The legacy single file first, then the rest in name order. Empty when there are none.
+    try:
+        folder = folder_of(root, name)
+    except EditorError:
+        return []
+    ids = []
+    if os.path.isfile(os.path.join(folder, BG_LEGACY)):
+        ids.append(LEGACY_ID)
+    bdir = os.path.join(folder, BG_DIR)
+    if os.path.isdir(bdir):
+        for f in sorted(os.listdir(bdir)):
+            stem, ext = os.path.splitext(f)
+            if ext == ".jpg" and BG_ID_RE.match(stem) and os.path.isfile(os.path.join(bdir, f)):
+                ids.append(stem)
+    return ids
+
+
+def _bg_file(root, name, bid):
+    # The file for one id, or None. Ids are checked before they touch the disk.
+    if bid != LEGACY_ID and not BG_ID_RE.match(bid or ""):
+        return None
+    try:
+        folder = folder_of(root, name)
+    except EditorError:
+        return None
+    p = os.path.join(folder, BG_LEGACY) if bid == LEGACY_ID else os.path.join(folder, BG_DIR, bid + ".jpg")
     return p if os.path.isfile(p) else None
+
+
+def background_path(root, name, bid=None):
+    # With no id, the first background. Cards and chats ask for a specific one.
+    if bid is None:
+        ids = background_ids(root, name)
+        if not ids:
+            return None
+        bid = ids[0]
+    return _bg_file(root, name, bid)
+
+
+def add_background(root, name, data):
+    # Adds one background and returns its id. Refuses past MAX_BACKGROUNDS.
+    path = folder_of(root, name)
+    if not os.path.isdir(path):
+        raise EditorError("No such character.")
+    encoded = _encode_background(data)
+    if len(background_ids(root, name)) >= MAX_BACKGROUNDS:
+        raise EditorError(f"A character can have up to {MAX_BACKGROUNDS} backgrounds. Remove one first.")
+    bdir = os.path.join(path, BG_DIR)
+    os.makedirs(bdir, exist_ok=True)
+    bid = secrets.token_hex(6)
+    while os.path.exists(os.path.join(bdir, bid + ".jpg")):
+        bid = secrets.token_hex(6)
+    tmp = os.path.join(bdir, bid + ".tmp")
+    with open(tmp, "wb") as f:
+        f.write(encoded)
+    os.replace(tmp, os.path.join(bdir, bid + ".jpg"))
+    return bid
+
+
+def remove_background(root, name, bid):
+    p = _bg_file(root, name, bid)
+    if p is None:
+        raise EditorError("No such background.")
+    os.remove(p)
 
 
 def _shrink_icon(data):

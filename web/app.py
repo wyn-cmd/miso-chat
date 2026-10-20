@@ -136,6 +136,31 @@ def _persona_info(st, user):
     return {"name": display_for(name), "color": colour_of(st.char_root, name) or NEUTRAL_HEX} if name else None
 
 
+def _shade_pref(store, uid):
+    # Signed brightness of the page art: -100 darkest, 100 lightest, 0 leaves the image as it is.
+    try:
+        return max(-100, min(100, int(store.get_pref(uid, "bg_shade") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _bubble_pref(store, uid):
+    # Chat bubble opacity in percent; 72 is the look before this setting existed.
+    try:
+        return max(30, min(100, int(store.get_pref(uid, "bubble_opacity") or 72)))
+    except (TypeError, ValueError):
+        return 72
+
+
+def _default_art():
+    # Shared default backgrounds: default-*.jpg/png/webp in static/defaults, picked at random by the pages.
+    d = os.path.join(HERE, "static", "defaults")
+    if not os.path.isdir(d):
+        return []
+    names = sorted(f for f in os.listdir(d) if re.match(r"^default-[\w-]+\.(jpe?g|png|webp)$", f))
+    return ["/static/defaults/" + f for f in names]
+
+
 def _avatar_shape(store, uid):
     # Squircle unless the account picked circles; any other stored value counts as squircle.
     return "circle" if store.get_pref(uid, "avatar_shape") == "circle" else "squircle"
@@ -423,7 +448,7 @@ def _card_for(st, folder):
     return {"name": name, "headline": prof["headline"] if prof else "", "info": prof["info"] if prof else "",
             "tags": prof["tags"] if prof else [], "has_profile": prof is not None,
             "pending": folder in st.profiles.pending(), "has_icon": _has_icon(st.char_root, name),
-            "has_background": _has_background(st.char_root, name),
+            "has_background": _has_background(st.char_root, name), "backgrounds": editor.background_ids(st.char_root, name), "default_backgrounds": _default_art(),
             "color": colour_of(st.char_root, folder) or NEUTRAL_HEX,
             "creator": editor.creator_of(os.path.join(st.char_root, folder))}
 
@@ -1231,6 +1256,8 @@ def make_app(client=None, data_dir=None, char_root=None):
             info["reply_length"] = _reply_target(st, user["id"])
             info["reply_length_bounds"] = list(_reply_bounds(store))
             info["avatar_shape"] = _avatar_shape(store, user["id"])
+            info["bg_shade"] = _shade_pref(store, user["id"])
+            info["bubble_opacity"] = _bubble_pref(store, user["id"])
             info["models"] = {"gemini": "auto", "extra": _extra_models(st)}
             info["model"] = store.get_pref(user["id"], "model") or ""   # the saved choice, so the picker reloads it
             info["personas"] = _persona_list(st)
@@ -1277,7 +1304,7 @@ def make_app(client=None, data_dir=None, char_root=None):
                  "sidebar": [display_for(s) for s in ranked if s in chatted],
                 "personas": _persona_list(st), "colors": _colour_map(st.char_root),
                 "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))],
-                "backgrounds": [display_for(n) for n in solo if _has_background(st.char_root, display_for(n))],
+                "backgrounds": [display_for(n) for n in solo if _has_background(st.char_root, display_for(n))], "default_backgrounds": _default_art(), "bg_ids": {display_for(n): editor.background_ids(st.char_root, display_for(n)) for n in solo if _has_background(st.char_root, display_for(n))},
                 "editable": [display_for(s) for s in solo if can_edit_card(user, os.path.join(st.char_root, s))],
                 "recommended": [{"name": display_for(r["folder"]), "tags": r["tags"]} for r in
                                 recommend.recommend(st.char_root, st.data_dir, user["id"], solo)]}
@@ -1563,6 +1590,22 @@ def make_app(client=None, data_dir=None, char_root=None):
             if body["avatar_shape"] not in ("squircle", "circle"):
                 raise HTTPException(400, "The icon shape must be squircle or circle.")
             store.set_pref(user["id"], "avatar_shape", body["avatar_shape"])
+        if "bg_shade" in body:
+            try:
+                shade = int(body["bg_shade"])
+            except (TypeError, ValueError):
+                raise HTTPException(400, "The background brightness must be a whole number.")
+            if not -100 <= shade <= 100:
+                raise HTTPException(400, "The background brightness must be between -100 and 100.")
+            store.set_pref(user["id"], "bg_shade", str(shade))
+        if "bubble_opacity" in body:
+            try:
+                opacity = int(body["bubble_opacity"])
+            except (TypeError, ValueError):
+                raise HTTPException(400, "The bubble opacity must be a whole number.")
+            if not 30 <= opacity <= 100:
+                raise HTTPException(400, "The bubble opacity must be between 30 and 100.")
+            store.set_pref(user["id"], "bubble_opacity", str(opacity))
         # cached engines hold the old settings; drop them so the next turn picks up the new ones
         with st.slots_lock:
             for k in [k for k in st.slots if k[0] == user["id"]]:
@@ -1570,7 +1613,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         return {"thinking": _thinking_on(st, user), "model": store.get_pref(user["id"], "model") or "",
                 "window": _pref_int(store.get_pref(user["id"], "window")),
                 "reply_length": _reply_target(st, user["id"]),
-                "avatar_shape": _avatar_shape(store, user["id"])}
+                "avatar_shape": _avatar_shape(store, user["id"]),
+                "bg_shade": _shade_pref(store, user["id"]), "bubble_opacity": _bubble_pref(store, user["id"])}
 
     @app.get("/api/character-settings")
     async def character_settings_get(request: Request, character: str):
@@ -2024,22 +2068,32 @@ def make_app(client=None, data_dir=None, char_root=None):
                         headers={"Content-Disposition": f'attachment; filename="{stem}{suffix}.zip"',
                                  "Cache-Control": "no-store"})
 
-    @app.post("/api/admin/characters/{name}/background")
-    async def editor_background(name: str, request: Request):
+    @app.post("/api/admin/characters/{name}/backgrounds")
+    async def editor_background_add(name: str, request: Request):
         _csrf(request)
         _require_editor(require(request), name)
         data = await request.body()
         try:
-            editor.save_background(st.char_root, name, data)
+            bid = editor.add_background(st.char_root, name, data)
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
-        return {"ok": True}
+        return {"ok": True, "id": bid, "backgrounds": editor.background_ids(st.char_root, name)}
+
+    @app.delete("/api/admin/characters/{name}/backgrounds/{bid}")
+    def editor_background_remove(name: str, bid: str, request: Request):
+        _csrf(request)
+        _require_editor(require(request), name)
+        try:
+            editor.remove_background(st.char_root, name, bid)
+        except editor.EditorError as err:
+            raise HTTPException(404, str(err))
+        return {"ok": True, "backgrounds": editor.background_ids(st.char_root, name)}
 
     @app.get("/api/background/{name}")
-    def character_background(name: str, request: Request):
+    def character_background(name: str, request: Request, b: str = ""):
         require(request)
         try:
-            path = editor.background_path(st.char_root, name)
+            path = editor.background_path(st.char_root, name, b or None)
         except editor.EditorError:
             raise HTTPException(404, "No such character.")
         if path is None:

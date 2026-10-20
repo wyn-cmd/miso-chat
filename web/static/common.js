@@ -154,6 +154,40 @@ async function streamChat(body, handlers, path = "/api/chat") {
   }
 }
 
+// Look settings: page-art brightness and bubble opacity. Cached so the first paint already uses them.
+const LOOK_KEY = "rp_look";
+function applyLook(shade, bubble) {
+  const s = document.documentElement.style;
+  const v = Math.max(-100, Math.min(100, Math.round(Number(shade)) || 0));
+  const b = Math.max(30, Math.min(100, Math.round(Number(bubble)) || 72));
+  // Negative darkens with black, positive lightens with white.
+  s.setProperty("--shade-overlay", v < 0 ? `rgba(0, 0, 0, ${(-v / 100 * 0.85).toFixed(3)})` : `rgba(255, 255, 255, ${(v / 100 * 0.6).toFixed(3)})`);
+  s.setProperty("--bubble-alpha", b + "%");
+  try { localStorage.setItem(LOOK_KEY, JSON.stringify({ shade: v, bubble: b })); } catch (e) { /* storage blocked */ }
+}
+(function restoreLook() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOOK_KEY) || "null");
+    if (saved) applyLook(saved.shade, saved.bubble);
+  } catch (e) { /* storage blocked or corrupt */ }
+})();
+
+// Placeholder for a character with no picture: its colour, with a simple face in a readable ink.
+function faceIcon(hex) {
+  const span = document.createElement("span");
+  span.className = "face";
+  span.setAttribute("aria-hidden", "true");
+  const ok = /^#[0-9a-f]{6}$/i.test(hex || "");
+  let ink = "#0b1020";
+  if (ok) {
+    span.style.background = hex.toLowerCase();
+    const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+    ink = (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? "#1a1420" : "#ffffff";
+  }
+  span.innerHTML = `<svg viewBox="0 0 64 64" focusable="false"><circle cx="23" cy="27" r="4.5" fill="${ink}"/><circle cx="41" cy="27" r="4.5" fill="${ink}"/><path d="M21 40 Q32 50 43 40" fill="none" stroke="${ink}" stroke-width="4" stroke-linecap="round"/></svg>`;
+  return span;
+}
+
 function el(tag, text, cls) {
   const node = document.createElement(tag);
   if (text !== undefined && text !== null) node.textContent = String(text);
