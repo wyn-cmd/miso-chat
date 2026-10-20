@@ -143,11 +143,11 @@
         </div>
       </div>
       <div id="edBgBox" class="icon-box bg-box">
-        <div id="edBgPreview" class="bg-preview placeholder"></div>
         <div class="stack">
-          <input id="edBgFile" type="file" accept="image/png,image/jpeg,image/webp">
-          <p class="muted">Shown behind this character's chat and on its home page card. It is stored in its original colours; dark mode darkens it slightly on screen. PNG, JPEG or WebP, up to 10 MB.</p>
-          <button id="edBgSave" class="ghost" type="button" disabled>Upload background</button>
+          <div id="edBgList" class="bg-list"></div>
+          <input id="edBgFile" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+          <p class="muted">Each background is shown behind this character's chat, one picked at random each time it opens, and its home page card cycles through them. Add up to 10. PNG, JPEG or WebP, 10 MB each.</p>
+          <button id="edBgSave" class="ghost" type="button" disabled>Add background</button>
           <p id="edBgErr" class="error"></p>
           <p id="edBgNote" class="muted"></p>
         </div>
@@ -245,56 +245,85 @@
   <div id="settingsSheet" class="sheet" hidden>
     <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
       <div class="sheet-head">
+        <button id="setBack" class="ghost small" type="button" hidden>Back</button>
         <h2 id="sheetTitle">Settings</h2>
         <button id="sheetClose" class="ghost small" type="button">Done</button>
       </div>
-      <h2>Admin</h2>
-      <div class="sheet-row"><span>Character sandboxes</span><a id="sandboxLink" href="/admin/sandboxes" hidden>Open</a></div>
-      <h2>Appearance</h2>
-      <div class="sheet-row"><span>Highlight colour</span>
-        <span class="accent-ctl"><input id="accentPick" type="color" aria-label="Highlight colour"><button id="accentReset" class="ghost small" type="button">Reset</button></span>
+      <div id="setGrid" class="set-grid">
+        <button class="set-card" type="button" data-panel="account"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 11h14v10H5z"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span><span class="set-name">Account</span><span class="set-note">Two-factor sign-in</span></button>
+        <button class="set-card" type="button" data-panel="appearance"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.8 1.7-1.6 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5c0-4.4-4-7.4-9-7.4z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7.5" r="1"/><circle cx="15" cy="8" r="1"/></svg></span><span class="set-name">Appearance</span><span class="set-note">Colour, icon shape, font, size</span></button>
+        <button class="set-card" type="button" data-panel="character"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></span><span class="set-name">Character</span><span class="set-note">Memory, model, creativity, characters</span></button>
+        <button class="set-card" type="button" data-panel="persona"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9.5" cy="11" r="2"/><path d="M6.5 16c.6-1.4 1.7-2 3-2s2.4.6 3 2"/><path d="M15 10h3M15 13h3"/></svg></span><span class="set-name">Persona</span><span class="set-note">Who you are in chats</span></button>
+        <button class="set-card" type="button" data-panel="palace"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9 10v8M15 10v8M19 10v8"/><path d="M3 20h18"/></svg></span><span class="set-name">Mind Palace</span><span class="set-note">Your entries for this character</span></button>
+        <button class="set-card" type="button" data-panel="history"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="set-name">Chat history</span><span class="set-note">Window, reply length</span></button>
+        <button class="set-card" type="button" data-panel="export"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span><span class="set-name">Export</span><span class="set-note">This chat as Markdown or text</span></button>
+        <button class="set-card" type="button" data-panel="client"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/></svg></span><span class="set-name">Terminal client</span><span class="set-note">Download</span></button>
+        <button id="setAdminCard" class="set-card" type="button" data-panel="admin" hidden><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6l8-3z"/></svg></span><span class="set-name">Admin</span><span class="set-note">Character sandboxes</span></button>
       </div>
-      <div class="sheet-row"><span>Character icon shape</span>
-        <select id="avatarShape" aria-label="Character icon shape">
-          <option value="squircle">Squircle</option>
-          <option value="circle">Circle</option>
-        </select>
-      </div>
-      <div class="sheet-row"><span>Terminal client</span><a href="/api/client/miso_remote.py" download>Download</a></div>
-      <div class="sheet-row"><span>Two-factor sign-in</span>
-        <span class="slider-ctl"><span id="twofaNote" class="muted"></span><button id="twofaBtn" class="ghost small" type="button" hidden>Turn on</button></span>
-      </div>
-      <div id="charSettings" hidden>
-        <h2>This character</h2>
-        <div class="sheet-row slider-row"><label for="tempSlider">Creativity (temperature) <span id="tempVal" class="muted"></span></label>
-          <span class="slider-ctl"><input id="tempSlider" type="range" min="0" max="1.5" step="0.05" aria-label="Creativity"><button id="tempReset" class="ghost small" type="button">Default</button></span>
+      <section class="set-panel" data-panel="account" hidden>
+        <div class="sheet-row"><span>Two-factor sign-in</span>
+          <span class="slider-ctl"><span id="twofaNote" class="muted"></span><button id="twofaBtn" class="ghost small" type="button" hidden>Turn on</button></span>
         </div>
-        <div id="palaceRow" class="sheet-row"><span>Mind Palace (your entries)</span><button id="palaceOpen" class="ghost small" type="button">Open</button></div>
-      </div>
-      <h2>Chat history</h2>
-      <div class="sheet-row slider-row"><label for="winSlider">Rolling window (messages) <span id="winVal" class="muted"></span></label>
-        <span class="slider-ctl"><input id="winSlider" type="range" min="1" max="100" step="1" aria-label="Rolling window in messages"><button id="winReset" class="ghost small" type="button">Default</button></span>
-      </div>
-      <p id="winNote" class="muted"></p>
-      <div class="sheet-row slider-row"><label for="replySlider">Reply length (tokens) <span id="replyVal" class="muted"></span></label>
-        <span class="slider-ctl"><input id="replySlider" type="range" step="10" aria-label="Reply length target in tokens"><button id="replyReset" class="ghost small" type="button">No target</button></span>
-      </div>
-      <p id="replyNote" class="muted"></p>
-      <div class="sheet-row"><span>Export this chat</span>
-        <span class="slider-ctl"><button id="exportMd" class="ghost small" type="button">Markdown</button><button id="exportTxt" class="ghost small" type="button">Text</button></span>
-      </div>
-      <p id="charMsg" class="muted"></p>
-      <div class="phone-only">
-        <h2>Character</h2>
-        <div class="sheet-row"><span>Memory</span><span data-slot="memory"></span></div>
-        <h2>Chat look</h2>
+      </section>
+      <section class="set-panel" data-panel="appearance" hidden>
+        <div class="sheet-row"><span>Highlight colour</span>
+          <span class="accent-ctl"><input id="accentPick" type="color" aria-label="Highlight colour"><button id="accentReset" class="ghost small" type="button">Reset</button></span>
+        </div>
+        <div class="sheet-row"><span>Character icon shape</span>
+          <select id="avatarShape" aria-label="Character icon shape">
+            <option value="squircle">Squircle</option>
+            <option value="circle">Circle</option>
+          </select>
+        </div>
+        <div class="sheet-row"><span>Background brightness</span>
+          <span class="slider-ctl"><input id="shadeSlider" type="range" min="-100" max="100" step="5" aria-label="Background brightness"><span id="shadeVal" class="muted"></span><button id="shadeReset" class="ghost small" type="button">Reset</button></span>
+        </div>
+        <div class="sheet-row"><span>Chat bubble opacity</span>
+          <span class="slider-ctl"><input id="bubbleSlider" type="range" min="30" max="100" step="5" aria-label="Chat bubble opacity"><span id="bubbleVal" class="muted"></span><button id="bubbleReset" class="ghost small" type="button">Reset</button></span>
+        </div>
         <div class="sheet-row"><span>Font type</span><span data-slot="font"></span></div>
         <div class="sheet-row"><span>Name badge</span><span data-slot="badge"></span></div>
         <div class="sheet-row"><span>Font size</span><span data-slot="size"></span></div>
-        <div data-slot="persona"></div>
+      </section>
+      <section class="set-panel" data-panel="character" hidden>
+        <div class="sheet-row"><span>Memory</span><span data-slot="memory"></span></div>
         <div data-slot="model"></div>
+        <p class="muted needs-char">Open a character to set its creativity.</p>
+        <div class="sheet-row slider-row char-only"><label for="tempSlider">Creativity (temperature) <span id="tempVal" class="muted"></span></label>
+          <span class="slider-ctl"><input id="tempSlider" type="range" min="0" max="1.5" step="0.05" aria-label="Creativity"><button id="tempReset" class="ghost small" type="button">Default</button></span>
+        </div>
         <div data-slot="characters"></div>
-      </div>
+      </section>
+      <section class="set-panel" data-panel="persona" hidden>
+        <div data-slot="persona"></div>
+      </section>
+      <section class="set-panel" data-panel="palace" hidden>
+        <p class="muted needs-char">Open a character to see its Mind Palace.</p>
+        <div id="palaceRow" class="sheet-row"><span>Mind Palace (your entries)</span><button id="palaceOpen" class="ghost small" type="button">Open</button></div>
+      </section>
+      <section class="set-panel" data-panel="history" hidden>
+        <div class="sheet-row slider-row"><label for="winSlider">Rolling window (messages) <span id="winVal" class="muted"></span></label>
+          <span class="slider-ctl"><input id="winSlider" type="range" min="1" max="100" step="1" aria-label="Rolling window in messages"><button id="winReset" class="ghost small" type="button">Default</button></span>
+        </div>
+        <p id="winNote" class="muted"></p>
+        <div class="sheet-row slider-row"><label for="replySlider">Reply length (tokens) <span id="replyVal" class="muted"></span></label>
+          <span class="slider-ctl"><input id="replySlider" type="range" step="10" aria-label="Reply length target in tokens"><button id="replyReset" class="ghost small" type="button">No target</button></span>
+        </div>
+        <p id="replyNote" class="muted"></p>
+      </section>
+      <section class="set-panel" data-panel="export" hidden>
+        <p class="muted needs-char">Open a character to export its chat.</p>
+        <div class="sheet-row"><span>Export this chat</span>
+          <span class="slider-ctl"><button id="exportMd" class="ghost small" type="button">Markdown</button><button id="exportTxt" class="ghost small" type="button">Text</button></span>
+        </div>
+      </section>
+      <section class="set-panel" data-panel="client" hidden>
+        <div class="sheet-row"><span>Terminal client</span><a href="/api/client/miso_remote.py" download>Download</a></div>
+      </section>
+      <section class="set-panel" data-panel="admin" hidden>
+        <div class="sheet-row"><span>Character sandboxes</span><a id="sandboxLink" href="/admin/sandboxes" hidden>Open</a></div>
+      </section>
+      <p id="charMsg" class="muted"></p>
     </div>
   </div>
   <dialog id="groupDlg" class="dlg" aria-labelledby="groupDlgTitle">
