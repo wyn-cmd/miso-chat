@@ -2,6 +2,40 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.2.0 - 2026-10-19
+
+This release adds a home page, chat branches, character import and export, drafting a character from a file, and the Mind Palace.
+
+### Added
+
+- A home page with character cards, a search box, a tag filter and recommendations based on the tags of the characters you chat with.
+- Chat branches. Each saved message has a Branch button that copies the chat up to that message into a new branch. You can switch between branches and delete one. A chat can have up to 12 branches, and groups work the same way.
+- Character import and export as zip files. The export can include this account's chat history and memory.
+- Chat backgrounds. An admin uploads one per character. It is darkened and shown on the character's home card and behind its chat.
+- Creators. A new character is credited to the account that created it. Existing characters are credited to admin.
+- Drafting a character from a text, Markdown, Word, PDF or screenshot file. Text is read directly. Pictures and scanned pages are read with Tesseract OCR. The draft fills the new-character form for you to check. Pictures never become the profile or background picture.
+- The Mind Palace. Keyword entries join the prompt only when one of their keys appears in the recent chat.
+- Admin switches for the memory bank and the Mind Palace, both on by default.
+- A reply length setting. Admins set the range, and each account picks a target inside it.
+- Squircle avatars, with a circle option in the chat Settings.
+- A dice button on Auto-fill that shows a random face each time.
+
+### Changed
+
+- The chat window and message bubbles are more transparent, and the bubbles have a shadow.
+- The top bar on every page stays on one row, including on phones.
+- requirements.txt adds pymupdf and python-docx.
+
+### Removed
+
+- The peer-to-peer sync that copied character folders between two machines on a local network, with its `.p2pbak` and `.p2ptmp` files.
+- The terminal chat, `roleplay.py` and `run.bash`. It now lives in its own repository.
+- A hard-coded LAN address in the terminal chat.
+
+### Upgrading
+
+Run `pip install -r requirements.txt`. Tesseract is needed only for drafting from screenshots and scanned pages. The README has install steps for Windows and Linux.
+
 ## 1.1.1 - 2026-10-19
 
 A small release. Apart from the wiki removal, nothing changes what the app does.
