@@ -8,7 +8,7 @@ import json
 import os
 import re
 
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageOps
 
 import sandbox
 from charname import check_display, folder_for
@@ -155,11 +155,10 @@ def record_creator(path, username):
 
 BG_FILE = "background.jpg"
 BG_MAX_SIDE = 1280                   # chat and card backgrounds are downsized to this
-BG_BRIGHTNESS = 0.45                 # darkened on upload so text stays readable over them
 
 
 def save_background(root, name, data):
-    # Store a darkened, downsized JPEG as the character's chat and card background. Replaces any old one.
+    # Store a downsized JPEG as the character's chat and card background, in its original colours. Replaces any old one.
     path = folder_of(root, name)
     if not os.path.isdir(path):
         raise EditorError("No such character.")
@@ -181,7 +180,6 @@ def save_background(root, name, data):
         raise EditorError("Could not read that image. Use a PNG, JPEG or WebP.") from err
     img = img.convert("RGB")
     img.thumbnail((BG_MAX_SIDE, BG_MAX_SIDE), Image.LANCZOS)   # never enlarges
-    img = ImageEnhance.Brightness(img).enhance(BG_BRIGHTNESS)
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=82, optimize=True)
     with open(os.path.join(path, BG_FILE), "wb") as f:

@@ -39,7 +39,13 @@ def _read(state_root):
         for item in data.get("items", []):
             if isinstance(item, dict) and _valid_id(item.get("id")) and os.path.isdir(os.path.join(state_root, DIR, item["id"])):
                 items.append({"id": item["id"], "name": str(item.get("name") or "Branch")[:NAME_MAX],
-                              "fork_index": int(item.get("fork_index", 0)), "created": str(item.get("created") or "")})
+                              "fork_index": int(item.get("fork_index", 0)), "created": str(item.get("created") or ""),
+                              "parent": item.get("parent", MAIN)})
+    # A parent that no longer exists means the branch hangs from the main chat.
+    known = {i["id"] for i in items}
+    for item in items:
+        if item["parent"] != MAIN and item["parent"] not in known:
+            item["parent"] = MAIN
     active = data.get("active") if isinstance(data, dict) else MAIN
     if active != MAIN and active not in {i["id"] for i in items}:
         active = MAIN
@@ -61,6 +67,16 @@ def active_dir(state_root):
     if data["active"] == MAIN:
         return state_root
     return os.path.join(state_root, DIR, data["active"])
+
+
+def tree(state_root):
+    # The main chat plus every branch, each with the branch it was made from. Used for the tree view.
+    data = _read(state_root)
+    nodes = [{"id": MAIN, "name": "Main chat", "parent": None, "fork_index": None, "created": ""}]
+    for i in data["items"]:
+        nodes.append({"id": i["id"], "name": i["name"], "parent": i["parent"], "fork_index": i["fork_index"],
+                      "created": i["created"]})
+    return {"active": data["active"], "nodes": nodes, "max": MAX_BRANCHES}
 
 
 def listing(state_root):
@@ -119,7 +135,7 @@ def fork(state_root, index, name):
             # The summary describes messages after the fork point, so the branch rebuilds it.
             os.remove(summary)
     item = {"id": bid, "name": _clean_name(name, len(data["items"])), "fork_index": index,
-            "created": datetime.datetime.now().isoformat(timespec="seconds")}
+            "created": datetime.datetime.now().isoformat(timespec="seconds"), "parent": data["active"]}
     data["items"].append(item)
     data["active"] = bid
     _write(state_root, data)
@@ -141,6 +157,11 @@ def delete(state_root, bid):
     data = _read(state_root)
     if bid not in {i["id"] for i in data["items"]}:
         raise BranchError("That branch no longer exists.")
+    gone = next(i for i in data["items"] if i["id"] == bid)
+    # Branches made from the deleted one hang from its parent instead.
+    for item in data["items"]:
+        if item["parent"] == bid:
+            item["parent"] = gone["parent"]
     data["items"] = [i for i in data["items"] if i["id"] != bid]
     if data["active"] == bid:
         data["active"] = MAIN

@@ -268,6 +268,8 @@ function renderBranches(data) {
   pick.value = data.active;
   pick.hidden = data.items.length === 0;   // the picker appears once a branch exists
   $("branchDel").hidden = data.active === "main";
+  // Admins always see the Tree button, since they can open any account's tree from it.
+  $("branchTree").hidden = !(me && me.is_admin) && data.items.length === 0;
 }
 
 // Editing a saved message: the text opens in a box with Save and Cancel. Saving changes the saved chat only; no model call.
@@ -635,8 +637,9 @@ async function loadCharacters() {
   solo.textContent = "";
   groups.textContent = "";
   for (const name of data.solo) solo.appendChild(charButton(name));
-  for (const g of data.groups) groups.appendChild(charButton(g.name));
-  $("groupBox").hidden = data.groups.length === 0;
+  for (const g of data.groups) groups.appendChild(g.private ? privateGroupRow(g) : charButton(g.name));
+  $("groupBox").hidden = false;   // always shown, so any account can start its own group
+  soloNames = data.solo || [];
   const all = [...data.solo, ...data.groups.map((g) => g.name)];
   // A card on the home page sends the name as ?c=; that wins over the last character used.
   const asked = new URLSearchParams(location.search).get("c");
@@ -646,16 +649,22 @@ async function loadCharacters() {
   else { current = null; markActive(); }
 }
 
-// A character's background sits behind its chat. The file is already darkened on the server.
+// A character's background sits behind its chat, and the whole page takes it.
 function applyChatArt(name) {
+  // The whole page takes the art too, so the bars beside the chat column show the same picture.
   const section = $("chatSection");
   if (!section) return;
   if (name && bgSet.has(name)) {
-    section.style.setProperty("--chat-art", 'url("/api/background/' + encodeURIComponent(name) + '")');
+    const art = 'url("/api/background/' + encodeURIComponent(name) + '")';
+    section.style.setProperty("--chat-art", art);
+    document.body.style.setProperty("--chat-art", art);
     section.classList.add("has-art");
+    document.body.classList.add("page-art");
   } else {
     section.style.removeProperty("--chat-art");
+    document.body.style.removeProperty("--chat-art");
     section.classList.remove("has-art");
+    document.body.classList.remove("page-art");
   }
 }
 
@@ -1292,3 +1301,210 @@ init();
   sync();
   placeAll();
 })();
+
+// ---- Private group chats: an account's own groups of solo characters, with a note for each member.
+let soloNames = [];
+let groupEditing = null;       // id of the group being edited; null when a new one is being made
+let groupEditingName = "";
+let groupLimits = { min_members: 2, max_members: 8, note_max: 500 };
+
+function privateGroupRow(g) {
+  const row = el("div", "", "group-row");
+  row.appendChild(charButton(g.name));
+  const edit = el("button", "Edit", "ghost small group-edit");
+  edit.type = "button";
+  edit.title = "Change this group's characters and notes";
+  edit.setAttribute("aria-label", "Edit group " + g.name);
+  edit.addEventListener("click", () => openGroupDialog(g.id));
+  row.appendChild(edit);
+  return row;
+}
+
+async function refreshGroups() {
+  const data = await api("GET", "/api/characters");
+  soloNames = data.solo || [];
+  colorMap = data.colors || {};
+  const groups = $("groupList");
+  groups.textContent = "";
+  for (const g of data.groups) groups.appendChild(g.private ? privateGroupRow(g) : charButton(g.name));
+  markActive();
+  return data.groups.map((g) => g.name);
+}
+
+async function openGroupDialog(gid) {
+  $("groupMsg").textContent = "";
+  const data = await api("GET", "/api/groups");
+  groupLimits = { min_members: data.min_members, max_members: data.max_members, note_max: data.note_max };
+  const item = gid ? data.groups.find((g) => g.id === gid) : null;
+  if (gid && !item) {
+    $("chatErr").textContent = "That group no longer exists.";
+    return;
+  }
+  groupEditing = item ? item.id : null;
+  groupEditingName = item ? item.name : "";
+  $("groupDlgTitle").textContent = item ? "Edit group chat" : "New group chat";
+  $("groupPickLegend").textContent = `Characters (${groupLimits.min_members} to ${groupLimits.max_members})`;
+  $("groupName").value = item ? item.name : "";
+  $("groupDelete").hidden = !item;
+  const chosen = new Set(item ? item.members.map((m) => m.name) : []);
+  const known = item ? item.notes : {};
+  const pick = $("groupPick");
+  pick.replaceChildren();
+  for (const name of soloNames) {
+    const label = el("label", "", "group-check");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = name;
+    box.checked = chosen.has(name);
+    box.addEventListener("change", () => renderGroupNotes(known));
+    label.append(box, document.createTextNode(" " + name));
+    pick.appendChild(label);
+  }
+  renderGroupNotes(known);
+  $("groupDlg").showModal();
+  $("groupName").focus();
+}
+
+// Rebuilds one note box per ticked character. Text already typed is kept when a tick changes.
+function renderGroupNotes(known) {
+  const typed = {};
+  for (const ta of $("groupNotes").querySelectorAll("textarea")) typed[ta.dataset.name] = ta.value;
+  const chosen = [...$("groupPick").querySelectorAll("input:checked")].map((b) => b.value);
+  const box = $("groupNotes");
+  box.replaceChildren();
+  $("groupNotesBox").hidden = chosen.length === 0;
+  for (const name of chosen) {
+    const wrap = el("label", "", "group-note");
+    wrap.appendChild(el("span", name, "group-note-name"));
+    const ta = document.createElement("textarea");
+    ta.dataset.name = name;
+    ta.maxLength = groupLimits.note_max;
+    ta.rows = 2;
+    ta.value = typed[name] !== undefined ? typed[name] : (known[name] || "");
+    wrap.appendChild(ta);
+    box.appendChild(wrap);
+  }
+}
+
+async function saveGroup() {
+  $("groupMsg").textContent = "";
+  const members = [...$("groupPick").querySelectorAll("input:checked")].map((b) => b.value);
+  const notes = {};
+  for (const ta of $("groupNotes").querySelectorAll("textarea")) {
+    const text = ta.value.trim();
+    if (text) notes[ta.dataset.name] = text;
+  }
+  const body = { name: $("groupName").value, members, notes };
+  const wasOpen = groupEditing !== null && current === groupEditingName;
+  try {
+    const saved = groupEditing
+      ? await api("PUT", "/api/groups/" + encodeURIComponent(groupEditing), body)
+      : await api("POST", "/api/groups", body);
+    $("groupDlg").close();
+    const names = await refreshGroups();
+    if (wasOpen && !busy) await pickCharacter(saved.name);
+    else if (current && !names.includes(current) && !soloNames.includes(current)) await loadCharacters();
+  } catch (err) {
+    $("groupMsg").textContent = err.message;
+  }
+}
+
+async function deleteGroup() {
+  if (!groupEditing) return;
+  if (!confirm("Delete this group chat? Its messages, memory and notes are removed. The characters are kept.")) return;
+  try {
+    await api("DELETE", "/api/groups/" + encodeURIComponent(groupEditing));
+    $("groupDlg").close();
+    const names = await refreshGroups();
+    if (current && !names.includes(current) && !soloNames.includes(current)) await loadCharacters();
+  } catch (err) {
+    $("groupMsg").textContent = err.message;
+  }
+}
+
+// ---- Branch tree. Everyone sees their own; admins can also open any account's tree, read-only.
+async function openTree() {
+  const admin = !!(me && me.is_admin);
+  $("treeAccountRow").hidden = !admin;
+  if (admin) {
+    const sel = $("treeAccount");
+    const users = await api("GET", "/api/admin/users");
+    sel.replaceChildren(new Option("My own chats", ""));
+    for (const u of users.users) sel.append(new Option(u.username, String(u.id)));
+    sel.value = "";
+  }
+  $("treeDlg").showModal();
+  await loadTree();
+}
+
+async function loadTree() {
+  const sel = $("treeAccount");
+  const other = !!(me && me.is_admin && sel.value !== "");
+  $("treeBody").replaceChildren();
+  $("treeNote").textContent = "";
+  if (!current) {
+    $("treeNote").textContent = "Open a chat first.";
+    return;
+  }
+  try {
+    const data = other
+      ? await api("GET", "/api/admin/branches/tree?uid=" + encodeURIComponent(sel.value) + "&character=" + encodeURIComponent(current))
+      : await api("GET", "/api/branches/tree?character=" + encodeURIComponent(current));
+    $("treeNote").textContent = other
+      ? `Read-only: ${data.account}'s branches for this chat. Nothing here can be changed.`
+      : "Choose a branch to open it. The one you are in is marked open.";
+    renderTree(data, other);
+  } catch (err) {
+    $("treeNote").textContent = err.message;
+  }
+}
+
+function renderTree(data, readOnly) {
+  const kids = new Map();
+  for (const n of data.nodes) {
+    const key = n.parent === null ? "" : n.parent;
+    if (!kids.has(key)) kids.set(key, []);
+    kids.get(key).push(n);
+  }
+  const build = (key) => {
+    const list = el("ul", "", "tree-list");
+    for (const n of kids.get(key) || []) {
+      let text = n.name;
+      if (n.fork_index !== null && n.fork_index !== undefined) text += ` (from message ${n.fork_index + 1})`;
+      if (n.id === data.active) text += " - open";
+      const node = readOnly ? el("div", text, "tree-node") : el("button", text, "tree-node");
+      if (!readOnly) {
+        node.type = "button";
+        node.addEventListener("click", () => switchFromTree(n.id));
+      }
+      if (n.id === data.active) node.classList.add("open");
+      const li = el("li");
+      li.appendChild(node);
+      const sub = build(n.id);
+      if (sub.childElementCount) li.appendChild(sub);
+      list.appendChild(li);
+    }
+    return list;
+  };
+  const body = $("treeBody");
+  body.replaceChildren(build(""));
+  body.classList.add("tree");
+}
+
+async function switchFromTree(id) {
+  $("treeDlg").close();
+  if (busy || !current) return;
+  try {
+    applyBranchState(current, await api("POST", "/api/branch/switch", { character: current, id }));
+  } catch (err) {
+    $("chatErr").textContent = err.message;
+  }
+}
+
+$("newGroupBtn").addEventListener("click", () => openGroupDialog(null));
+$("groupSave").addEventListener("click", saveGroup);
+$("groupCancel").addEventListener("click", () => $("groupDlg").close());
+$("groupDelete").addEventListener("click", deleteGroup);
+$("branchTree").addEventListener("click", openTree);
+$("treeAccount").addEventListener("change", loadTree);
+$("treeClose").addEventListener("click", () => $("treeDlg").close());

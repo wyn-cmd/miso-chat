@@ -60,7 +60,7 @@ a { color:var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .log { height: 58vh; overflow-y:auto; border:1px solid var(--line); border-radius:10px; padding:12px; background:var(--card); }
 .line { margin:0 0 10px; padding:8px 10px; border-radius:8px; background:var(--theirs); border:1px solid var(--line); }
-.line.mine { background:var(--mine); margin-left:15%; }
+.line.mine { background:var(--mine); margin-left:auto; margin-right:0; width:fit-content; max-width:85%; }
 .line.thinking { color:var(--muted); font-style:italic; }
 .line.note { color:var(--muted); font-size:13px; background:transparent; border:none; }
 .line.event { font-style:italic; }
@@ -101,9 +101,9 @@ body.locked .sidebar, body.locked .menu-btn { display: none; }
   .sidebar.open { transform: none; }
   .content { padding: 10px; }
   .log { flex: 1; min-height: 120px; height: auto; }
-  #msg { font-size: max(16px, var(--chat-size)); }   /* iOS zooms in on inputs smaller than 16px */
+  #msg { font-size: var(--chat-size); }   /* same size as the messages; iOS zooms in on fields under 16px */
   body.fit-viewport .shell { height: calc(100% - 52px); }
-  .line.mine { margin-left: 8%; }
+  .line.mine { max-width: 92%; }
   #who { display: none; }
 }
 
@@ -268,7 +268,7 @@ input.budget { width: 84px; margin-right: 4px; }
   .line { padding: 6px 8px; margin: 0 0 7px; }
   .stamp { font-size: 10px; }
   .composer { margin-top: 6px; gap: 6px; }
-  #msg { height: auto; font-size: max(16px, var(--chat-size)); line-height: 1.35; overflow-y: hidden; }   /* last rule for #msg, so iOS does not zoom in; app.js sets the height */
+  #msg { height: auto; font-size: var(--chat-size); line-height: 1.35; overflow-y: hidden; }   /* last rule for #msg; app.js sets the height */
   #sendBtn { padding: 6px 10px; }
   .sidebar { padding: 4px 8px 12px; }
   .sidebar h2 { margin: 12px 4px 4px; }
@@ -540,12 +540,12 @@ main > section:has(> table) { overflow-x: auto; }
 .home-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .home-creator { font-size: 12px; color: var(--muted); }
 
-/* Character backgrounds: darkened on the server; the card text switches to light over the art. */
+/* Character backgrounds: the card text switches to light over the art. */
 .home-card.has-art { background: linear-gradient(rgba(2, 3, 7, .35), rgba(2, 3, 7, .35)) padding-box, var(--card-art) center / cover no-repeat padding-box, linear-gradient(135deg, var(--accent), var(--accent-2)) border-box; }
 .home-card.has-art .home-name, .home-card.has-art .home-headline, .home-card.has-art .home-creator, .home-card.has-art .home-reason { color: #f4f8ff; }
 .home-card.has-art .home-tag { background: rgba(2, 3, 7, .55); color: #e9eff9; border-color: rgba(255, 255, 255, .25); }
 :root:not([data-theme="light"]) .home-card.has-art .home-info { background: rgba(2, 3, 7, .6); color: #f4f8ff; }
-#chatSection.has-art { background: linear-gradient(color-mix(in srgb, var(--bg) 35%, transparent), color-mix(in srgb, var(--bg) 35%, transparent)), var(--chat-art) center / cover no-repeat fixed; border-radius: 14px; }
+#chatSection.has-art { border-radius: 14px; }
 .home-recs { margin-top: 18px; }
 .home-recs h2 { font-size: 18px; margin: 0 0 4px; }
 .home-reason { font-size: 12px; color: var(--accent); }
@@ -602,3 +602,37 @@ main > section:has(> table) { overflow-x: auto; }
 header a, header button, header .brand, header .muted { white-space: nowrap; }
 header .brand { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 body:not(.chat-open) header > .spacer { display: block; flex: 1 1 auto; }
+
+/* Private group chats, their dialogs, and the branch tree */
+.group-row { display: flex; gap: 6px; align-items: center; }
+.group-row .char-item { flex: 1; min-width: 0; }
+.group-edit { flex: none; }
+dialog.dlg { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; width: min(560px, 94vw); max-height: 88vh; padding: 18px; }
+dialog.dlg::backdrop { background: rgba(0, 0, 0, .55); }
+.dlg h2 { font-size: 18px; margin: 0 0 10px; }
+.dlg-field { display: block; margin: 10px 0; border: 0; padding: 0; }
+.dlg-field input, .dlg-field select { width: 100%; box-sizing: border-box; margin-top: 4px; }
+.group-pick { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; }
+.group-check { display: inline-flex; gap: 4px; align-items: center; }
+.group-note { display: block; margin: 8px 0; }
+.group-note-name { display: block; font-weight: 600; }
+.group-note textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; resize: vertical; font: inherit; padding: 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.dlg-actions { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+.dlg-actions .grow { flex: 1; }
+.error-msg { color: #ff8a8a; min-height: 1em; }
+.tree-list { list-style: none; margin: 4px 0; padding-left: 18px; }
+.tree > .tree-list { padding-left: 0; }
+.tree-node { display: block; width: 100%; text-align: left; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin: 3px 0; box-sizing: border-box; }
+button.tree-node { cursor: pointer; }
+.tree-node.open { border-color: var(--accent); }
+
+/* Your bubbles stay on the right and the character's sit on the left, both the same width (85%, or 92% on phones). */
+.line.theirs { margin-left: 0; margin-right: 15%; }
+@media (max-width: 760px) { .line.theirs { margin-right: 8%; } }
+
+/* Whole-page background: the chat art fills the page behind the sidebar, header and window. Dark mode adds a light
+   darkening; light mode shows the image as it was uploaded. */
+body.page-art { background: var(--chat-art) center / cover no-repeat fixed; }
+:root:not([data-theme="light"]) body.page-art { background: linear-gradient(rgba(0, 0, 0, .60), rgba(0, 0, 0, .60)), var(--chat-art) center / cover no-repeat fixed; }
+:root:not([data-theme="light"]) body.page-art .sidebar { background: color-mix(in srgb, var(--card) 94%, transparent); }
+:root body.page-art header { background: color-mix(in srgb, var(--card) 60%, transparent); }
