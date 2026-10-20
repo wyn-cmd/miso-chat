@@ -2,7 +2,7 @@
 #
 # Model calls, sliding windows, the group director, the request and token
 # trackers, and the memory.md refresh live here. Nothing in this module prints
-# or reads keyboard input. Callers decide how results are shown: roleplay.py
+# or reads keyboard input. Callers decide how results are shown.
 # (terminal) uses it now, and the web app will use it next.
 #
 # Paths are relative to the working directory, as they were in the original
@@ -24,6 +24,7 @@ import pytz
 from google.genai import types
 from charname import display_for
 import sandbox
+from web import palace
 
 
 def _mk(text):
@@ -35,7 +36,7 @@ CONFIG_FILE = "config.json"
 REQUEST_TRACKER_FILE = "request_tracker.json"
 TOKEN_TRACKER_FILE = "token_tracker.json"
 GLOBAL_SUBS_FILE = "substitutions.json"
-TMP_SUFFIX = ".p2ptmp"
+TMP_SUFFIX = ".tmp"
 
 REQUEST_LIMIT = 14400
 TOKEN_LIMIT = 1000000
@@ -90,7 +91,6 @@ PRIORITY_MODELS = ["gemini-3.8-flash", "gemma-4-31b-it"]
 MEMORY_MODELS_HEAD = ["gemini-3.8-flash", "gemma-4-31b-it"]
 MEMORY_MODELS_TAIL = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
 
-# Starts empty. Words are added through substitutions.json in the project root.
 DEFAULT_SUBSTITUTIONS = {}
 
 NARRATIVE_INSTRUCTION = (
@@ -258,42 +258,8 @@ def _load_json_file(path):
         return None
 
 
-def _entry_key(item):
-    try:
-        return json.dumps(item, sort_keys=True, ensure_ascii=False)
-    except Exception:
-        return repr(item)
-
-
-def merge_memory(local_data, peer_data):
-    # Union two chat histories: nothing either device wrote is dropped.
-    if not isinstance(local_data, list) or not isinstance(peer_data, list):
-        return None
-    merged = list(local_data)
-    have = {_entry_key(i) for i in local_data}
-    for item in peer_data:
-        if _entry_key(item) not in have:
-            merged.append(item)
-    return merged
-
-
-def save_history(path, history):
-    # Save without discarding turns the other device added meanwhile; returns
-    # the merged list so the live session sees them.
-    on_disk = _load_json_file(path)
-    merged = history
-    if isinstance(history, list) and isinstance(on_disk, list):
-        merged = merge_memory(history, on_disk)
-    tmp = path + TMP_SUFFIX
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(merged, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
-    return merged
-
-
 def _write_history(path, history):
-    # Write the history as it is, with no merge. Regenerate and swipe remove turns in memory on purpose,
-    # and a merge with the copy on disk would bring them back.
+    # Write the history as it is. Regenerate and swipe remove turns in memory on purpose.
     tmp = path + TMP_SUFFIX
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2, ensure_ascii=False)
@@ -510,6 +476,10 @@ class Engine:
         self.on_request = on_request
         self.on_tokens = on_tokens
         self.member_memory = member_memory
+        # Admin switches, set by the web app before each request. Memory is on by default.
+        self.memory_enabled = True
+        self.palace_enabled = True
+        self.palace_text = ""
         self.persist_config = persist_config
         self.allow_root_user = allow_root_user
         self.character_file = os.path.join(ai_dir, "character.md")
@@ -518,6 +488,7 @@ class Engine:
         self.pinned_file = os.path.join(self.state_dir, "pinned.md")   # facts the memory refresh never touches
         self.window_override = None        # the user's rolling window size; None = the defaults
         self.temperature_override = None   # the character's creativity; None = the defaults
+        self.reply_length_override = None  # the reply length target in tokens, not counting reasoning; None = no target
         self.summary_file = os.path.join(self.state_dir, "summary.json")
         self.summary_text = ""
         self.summary_covered = 0           # how many messages from the start the summary already covers
@@ -733,7 +704,7 @@ class Engine:
             except Exception as e:
                 self.log(f"[yellow]Could not load context.md: {e}[/yellow]")
 
-        if os.path.exists(self.memory_bank_file):
+        if self.memory_enabled and os.path.exists(self.memory_bank_file):
             try:
                 mb_content = _read_text(self.memory_bank_file)
                 if mb_content:
@@ -741,15 +712,18 @@ class Engine:
                 self.log(f"[cyan]Loaded memory bank from {self.memory_bank_file} ✨[/cyan]")
             except Exception as e:
                 self.log(f"[yellow]Could not load memory.md: {e}[/yellow]")
-        if os.path.exists(self.pinned_file):
+        if self.memory_enabled and os.path.exists(self.pinned_file):
             try:
                 pinned = _read_text(self.pinned_file).strip()
                 if pinned:
                     prompt += ("\n\n--- Pinned facts (kept as written; the memory refresh never changes them) ---\n" + pinned)
             except Exception as e:
                 self.log(f"[yellow]Could not load pinned.md: {e}[/yellow]")
+        if self.palace_text:
+            prompt += "\n\n--- Mind Palace (matched entries) ---\n" + self.palace_text
         if self.summary_text:
             prompt += "\n\n--- Earlier in this chat (running summary) ---\n" + self.summary_text
+        prompt += self.reply_length_clause()
         self.system_prompt = prompt
 
     def _load_history(self):
@@ -825,7 +799,18 @@ class Engine:
 
     # ---- turns
 
+    def _refresh_palace(self, processed):
+        # Matched entries depend on the newest messages.
+        blocks = []
+        if self.palace_enabled:
+            recent = [str(m.get("text") or "") for m in self.full_history[-palace.SCAN_MESSAGES:]]
+            blocks = palace.match(palace.load(self.ai_dir), recent + [str(processed or "")])
+        # Rebuilt every turn, so an admin switch to memory or the palace takes effect at once.
+        self.palace_text = "\n\n".join(blocks)
+        self._build_system_prompt()
+
     def send(self, processed, on_delta=None, on_think=None):
+        self._refresh_palace(processed)
         # Run one turn (solo or group). Saves history and tracks tokens on success.
         # on_delta(speaker, text_so_far) is called as each reply streams in, if given.
         # on_think(speaker, thinking_so_far) is called as reasoning streams in (only when thinking is on).
@@ -839,7 +824,7 @@ class Engine:
             return result
         result.tokens_state = self._count_tokens(result.turn_tokens)
         self.save()
-        result.memory_due = len(self.full_history) > 0 and len(self.full_history) % MEMORY_EVERY == 0
+        result.memory_due = self.memory_enabled and len(self.full_history) > 0 and len(self.full_history) % MEMORY_EVERY == 0
         return result
 
     def sandbox_active(self):
@@ -1079,7 +1064,7 @@ class Engine:
                         col = parts[1].strip().lower()
                         if col:
                             color = get_safe_color(col, "cyan")
-        return prompt + NARRATIVE_INSTRUCTION + DIALOGUE_INSTRUCTION + FORMAT_INSTRUCTION, color
+        return prompt + NARRATIVE_INSTRUCTION + DIALOGUE_INSTRUCTION + FORMAT_INSTRUCTION + self.reply_length_clause(), color
 
     def _select_members(self, processed):
         # Ask the director model which members speak. Returns (names, note).
@@ -1146,7 +1131,7 @@ class Engine:
             # A regenerate has taken the old exchange out of memory. Write nothing until it finishes, so disk keeps
             # the saved exchange; finish_regenerate writes the result, and a failed attempt leaves disk as it was.
             return self.full_history
-        self.full_history = save_history(self.memory_file, self.full_history)
+        _write_history(self.memory_file, self.full_history)
         return self.full_history
 
     def undo(self):
@@ -1218,6 +1203,15 @@ class Engine:
             if e.get("role") == "user" and e.get("speaker") != "narrator":
                 return i
         return None
+
+    def reply_length_clause(self):
+        # The user's reply length target, as a guide for the model. The reply is not cut off at it.
+        if self.reply_length_override is None:
+            return ""
+        tokens = int(self.reply_length_override)
+        words = max(1, round(tokens * 0.75))
+        return (f"\n\n--- Reply length ---\nAim for each reply to be about {tokens} tokens (roughly {words} words). "
+                "This is a target, not a hard limit. Reasoning does not count toward it.")
 
     def window_size(self):
         # Messages sent to the model: the user's rolling window if set, else the 1:1 or group default.
