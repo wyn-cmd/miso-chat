@@ -31,9 +31,10 @@
     <aside id="sidebar" class="sidebar" aria-label="Characters">
       <h2>Characters</h2>
       <div id="charList" class="char-list"></div>
-      <div id="groupBox" hidden>
+      <div id="groupBox">
         <h2>Group chats</h2>
         <div id="groupList" class="char-list"></div>
+        <button id="newGroupBtn" class="ghost small" type="button">+ New group chat</button>
       </div>
       <div id="personaBox" hidden>
         <h2>Persona (you)</h2>
@@ -144,7 +145,7 @@
         <div id="edBgPreview" class="bg-preview placeholder"></div>
         <div class="stack">
           <input id="edBgFile" type="file" accept="image/png,image/jpeg,image/webp">
-          <p class="muted">Shown behind this character's chat and on its home page card. It is darkened when you upload it. PNG, JPEG or WebP, up to 10 MB.</p>
+          <p class="muted">Shown behind this character's chat and on its home page card. It is stored in its original colours; dark mode darkens it slightly on screen. PNG, JPEG or WebP, up to 10 MB.</p>
           <button id="edBgSave" class="ghost" type="button" disabled>Upload background</button>
           <p id="edBgErr" class="error"></p>
         </div>
@@ -190,6 +191,7 @@
         <span class="spacer"></span>
         <select id="branchPick" class="font-select" aria-label="Chat branch" title="Which branch of this chat is open" hidden></select>
         <button id="branchDel" class="ghost small" type="button" title="Delete the open branch" hidden>Delete branch</button>
+      <button id="branchTree" class="ghost small" type="button" title="Show the branches as a tree" hidden>Tree</button>
         <button id="memBtn" class="ghost" type="button" title="See and edit what the character remembers">Memory</button>
         <button id="rollBtn" class="ghost" type="button" title="Roll: the model adds a random event to the scene">Roll</button>
         <button id="undoBtn" class="ghost" type="button">Undo</button>
@@ -283,6 +285,40 @@
       </div>
     </div>
   </div>
+  <dialog id="groupDlg" class="dlg" aria-labelledby="groupDlgTitle">
+    <h2 id="groupDlgTitle">New group chat</h2>
+    <label class="dlg-field">Name
+      <input id="groupName" maxlength="40" autocomplete="off">
+    </label>
+    <fieldset class="dlg-field">
+      <legend id="groupPickLegend">Characters</legend>
+      <div id="groupPick" class="group-pick"></div>
+    </fieldset>
+    <fieldset id="groupNotesBox" class="dlg-field" hidden>
+      <legend>Notes for each character</legend>
+      <p class="muted">Only you see these. The director and the character both read them when the group replies.</p>
+      <div id="groupNotes"></div>
+    </fieldset>
+    <p id="groupMsg" class="error-msg" role="alert"></p>
+    <div class="dlg-actions">
+      <button id="groupDelete" class="ghost small" type="button" hidden>Delete group</button>
+      <span class="grow"></span>
+      <button id="groupCancel" class="ghost" type="button">Cancel</button>
+      <button id="groupSave" type="button">Save</button>
+    </div>
+  </dialog>
+  <dialog id="treeDlg" class="dlg" aria-labelledby="treeTitle">
+    <h2 id="treeTitle">Branch tree</h2>
+    <label id="treeAccountRow" class="dlg-field" hidden>Account
+      <select id="treeAccount"></select>
+    </label>
+    <p id="treeNote" class="muted"></p>
+    <div id="treeBody" class="tree"></div>
+    <div class="dlg-actions">
+      <span class="grow"></span>
+      <button id="treeClose" class="ghost" type="button">Close</button>
+    </div>
+  </dialog>
   <script src="/static/common.js"></script>
   <script src="/static/markdown.js"></script>
   <script src="/static/app.js"></script>
