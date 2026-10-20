@@ -2,32 +2,9 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
-## 1.3.1-beta - 2026-10-20
-
-This release lets ordinary accounts create and edit their own characters, gives each character a background picture and a personal Mind Palace, and tidies the search page and the sidebar. It includes everything in 1.3.0.
-
-### Added
-
-- Any signed-in account can create a character. The account that creates it becomes that character's creator.
-- Creators can edit their own characters, upload a background and edit the character's starting Mind Palace.
-- The new-character form has a background picture option. The picture is uploaded when the character is created.
-- Mind Palace in Settings. Each account has its own entries for each character. The first time an account chats with a character, it receives a copy of that character's starting palace. Changes apply from the next message.
-- Admins can read another account's Mind Palace for a character from the character editor. They cannot change it.
-- Search results show 50 characters per page, with Previous and Next buttons when there are more.
-- The character info card (the i icon) uses the character's background picture, with a gradient that is darker at the bottom so the text stays readable.
-
-### Changed
-
-- Characters are ordered by recommendation. Characters that share tags with the ones an account chats with come first, then the most used across all accounts, then by name. The search page and the home page use the same order.
-- The chat sidebar lists only the characters an account has chatted with. A character appears once it has at least one saved message, on the main chat or on a branch. A new account's sidebar starts empty. Groups are listed as before.
-- The sidebar refreshes after each message, so a first message adds its character straight away. A new account with no open character no longer shows an empty chat window.
-- Only admins can change characters made as admin. Characters from before creator tracking count as admin's. Admins cannot change a character a user created.
-- Only admins can set the sandbox option or keep a creator name from an imported zip. Any other account that imports a character becomes its creator.
-- Group chats still read the character's starting Mind Palace, which is shared by everyone in the group.
-
 ## 1.3.0 - 2026-10-20
 
-This release adds two-factor sign-in, encrypted backups made from the admin page, and a closer match to SillyTavern for the Mind Palace. It also includes everything from 1.3.0-beta and 1.3.0-beta-2: the terminal client, character pictures in the terminal, the version check and the sign-in protection.
+This release adds two-factor sign-in, encrypted backups made from the admin page, a closer match to SillyTavern for the Mind Palace, and the character changes below. It also includes everything from 1.3.0-beta and 1.3.0-beta-2: the terminal client, character pictures in the terminal, the version check and the sign-in protection.
 
 ### Added
 
@@ -39,12 +16,25 @@ This release adds two-factor sign-in, encrypted backups made from the admin page
 - Encrypted backups, made from the Backups section of the admin page. Only admins with two-factor sign-in on can make one. The first admin sets a backup password of at least 12 characters, which is stored only as a check value. A backup is one encrypted `.mbk` file. A data backup holds the data folder (accounts, chats, memory, characters and groups), the server settings and `.env`. A full backup also holds the server code. Backups are never scheduled. Another admin who downloads a backup cannot read it without the password.
 - `restore_backup.py` restores a backup into an empty folder: `python restore_backup.py BACKUP_FILE TARGET_FOLDER`.
 - Mind Palace (database searching) is closer to SillyTavern World Info. An entry can have secondary keys, combined with AND or NOT logic (and any, and all, not any, not all). An entry can be always on, can be switched off, and has its own scan depth (1 to 30 messages) and insertion order. A character has a budget of 500 to 12,000 characters, 3,000 by default, and entries can optionally trigger other entries (recursion). A character can have up to 60 entries, and up to 24 are matched in one turn.
+- Any signed-in account can create a character. The account that creates it becomes that character's creator.
+- Creators can edit their own characters, upload a background and edit the character's starting Mind Palace.
+- The new-character form has a background picture option. The picture is uploaded when the character is created.
+- Mind Palace in Settings. Each account has its own entries for each character. The first time an account chats with a character, it receives a copy of that character's starting palace. Changes apply from the next message.
+- Admins can read another account's Mind Palace for a character from the character editor. They cannot change it.
+- Search results show 50 characters per page, with Previous and Next buttons when there are more.
+- The character info card (the i icon) uses the character's background picture, with a gradient that is darker at the bottom so the text stays readable.
 
 ### Changed
 
 - A correct password no longer resets the wrong-code count. Lock counts clear only when a sign-in is finished.
 - Requiring two-factor sign-in on an account that has not finished setting it up ends that account's current sessions, so the account must finish the set-up page first.
 - The Mind Palace editor saves the recursion setting, the budget and each entry's options.
+- Characters are ordered by recommendation. Characters that share tags with the ones an account chats with come first, then the most used across all accounts, then by name. The search page and the home page use the same order.
+- The chat sidebar lists only the characters an account has chatted with. A character appears once it has at least one saved message, on the main chat or on a branch. A new account's sidebar starts empty. Groups are listed as before.
+- The sidebar refreshes after each message, so a first message adds its character straight away. A new account with no open character no longer shows an empty chat window.
+- Only admins can change characters made as admin. Characters from before creator tracking count as admin's. Admins cannot change a character a user created.
+- Only admins can set the sandbox option or keep a creator name from an imported zip. Any other account that imports a character becomes its creator.
+- Group chats still read the character's starting Mind Palace, which is shared by everyone in the group.
 
 ### Security
 
