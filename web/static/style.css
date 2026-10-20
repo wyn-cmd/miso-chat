@@ -312,7 +312,7 @@ header { font-size: clamp(10px, calc(var(--chat-size) * 0.87), 16px); }
 .u-short { display: none; }
 @media (max-width: 760px) {
   header .brand { display: none; }
-  body:not(.chat-open) header .brand { display: inline-block; }
+  body:not(.chat-open) header .brand { display: inline-flex; }   /* inline-block dropped the text below the icon */
   #headerChat { display: flex; flex: 1 1 auto; align-items: center; gap: 8px; min-width: 0; }
   body:not(.chat-open) #headerChat { display: none; }
   #headerChat .char-icon.chat-icon { width: 28px; height: 28px; flex: none; }
@@ -482,3 +482,123 @@ header .icon-btn { flex: 0 0 36px; }
 :root:not([data-theme="light"]) button:not(.ghost).char-item { background: var(--char-bg); color: var(--ink); border-color: var(--char-line); }
 :root:not([data-theme="light"]) button:not(.ghost).char-item:hover:not(:disabled) { background: var(--char-hover); }
 :root:not([data-theme="light"]) button:not(.ghost).char-item.active { background: var(--char-active-bg); border-color: var(--char-active-line); }
+
+/* Home: the character gallery */
+a.brand { text-decoration: none; }
+.home-main { max-width: 1040px; margin: 0 auto; padding: 22px 16px 40px; }
+.home-main h1 { font-size: 22px; margin: 4px 0; }
+.home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 16px; }
+/* The card is the page colour; the gradient shows through the 1px border as its outline. */
+.home-card { position: relative; border: 1px solid transparent; border-radius: 14px;
+  background: linear-gradient(var(--bg), var(--bg)) padding-box, linear-gradient(135deg, var(--accent), var(--accent-2)) border-box; }
+.home-card:hover .home-name { color: var(--accent); }
+.home-card .home-open { background: none; border: 0; color: inherit; font: inherit; font-weight: 400; text-align: left; width: 100%; height: 100%; display: flex; flex-direction: row; align-items: flex-start; gap: 14px; padding: 18px 50px 18px 18px; border-radius: 14px; cursor: pointer; }
+.home-card .home-open:hover { background: none; }
+.home-avatar { flex: 0 0 64px; width: 64px; height: 64px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--avatar-ring, var(--line)); overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text-soft); font-size: 24px; font-weight: 700; }
+.home-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.home-text { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.home-name { font-weight: 700; font-size: 16px; color: var(--ink); }
+.home-headline { font-size: 14px; color: var(--text-soft); line-height: 1.45; margin: 0; }
+.home-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.home-tag { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--input); color: var(--muted); }
+.home-card .home-info { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--surface); color: var(--text-soft); border: 1px solid var(--line); font-family: Georgia, serif; font-style: italic; font-weight: 700; }
+.home-dialog { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; width: min(520px, 92vw); padding: 22px; }
+.home-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+.home-dialog h2 { margin: 0; font-size: 20px; }
+.home-dialog .home-tags { margin: 10px 0; }
+.home-info-body { white-space: pre-wrap; color: var(--text-soft); }
+.profile-fields { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.profile-fields legend { font-weight: 600; padding: 0 6px; color: var(--text-soft); }
+
+/* Tag chips in the character editor */
+.tag-input { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.tag-input input { flex: 1 1 140px; min-width: 120px; border: 0; background: transparent; color: var(--ink); font: inherit; padding: 4px; outline: none; }
+.tag-chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 10px; border-radius: 999px; border: 1px solid var(--accent); background: var(--card); color: var(--ink); font-size: 13px; }
+.tag-chip .tag-x { background: transparent; border: 0; padding: 0 6px; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; }
+.tag-chip .tag-x:hover { color: var(--ink); }
+
+/* Gallery cards. The dark-mode rule that paints every button with the accent gradient (line ~475) has
+   higher specificity than the card rules above, so the card face and the i button are reset here. */
+:root:not([data-theme="light"]) .home-card .home-open,
+:root:not([data-theme="light"]) .home-card .home-open:hover {
+  background: none;
+  background-color: transparent;
+}
+:root:not([data-theme="light"]) .home-card .home-info { background: var(--surface); }
+/* The gallery header keeps its spacer on phones too, so Admin, Log out and the theme button stay right. */
+header > .spacer.home-spacer { display: block; flex: 1 1 auto; }
+
+/* The brand keeps its name on one line in the header on phones; the spacer takes the leftover width. */
+header > a.brand { white-space: nowrap; flex: 0 0 auto; }
+
+/* Admin and stats top bars keep their spacer on phones so Stats, Back to chat and the theme button stay at the right. */
+header > .spacer.admin-spacer, header > .spacer.stats-spacer { display: block; flex: 1 1 auto; }
+/* The users table scrolls inside its section; a wide table otherwise widens the whole page on phones. */
+main > section:has(> table) { overflow-x: auto; }
+
+/* Creator handle on gallery cards and in the profile dialog. */
+.home-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.home-creator { font-size: 12px; color: var(--muted); }
+
+/* Character backgrounds: darkened on the server; the card text switches to light over the art. */
+.home-card.has-art { background: linear-gradient(rgba(2, 3, 7, .35), rgba(2, 3, 7, .35)) padding-box, var(--card-art) center / cover no-repeat padding-box, linear-gradient(135deg, var(--accent), var(--accent-2)) border-box; }
+.home-card.has-art .home-name, .home-card.has-art .home-headline, .home-card.has-art .home-creator, .home-card.has-art .home-reason { color: #f4f8ff; }
+.home-card.has-art .home-tag { background: rgba(2, 3, 7, .55); color: #e9eff9; border-color: rgba(255, 255, 255, .25); }
+:root:not([data-theme="light"]) .home-card.has-art .home-info { background: rgba(2, 3, 7, .6); color: #f4f8ff; }
+#chatSection.has-art { background: linear-gradient(color-mix(in srgb, var(--bg) 35%, transparent), color-mix(in srgb, var(--bg) 35%, transparent)), var(--chat-art) center / cover no-repeat fixed; border-radius: 14px; }
+.home-recs { margin-top: 18px; }
+.home-recs h2 { font-size: 18px; margin: 0 0 4px; }
+.home-reason { font-size: 12px; color: var(--accent); }
+.bg-preview { width: 100%; max-width: 320px; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: var(--surface-2); display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
+.bg-preview img { width: 100%; height: 100%; object-fit: cover; }
+.export-box, .import-box { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+
+/* Character icon shape. Squircle by default; circles when the account chooses them (data-avatar on <html>). */
+.char-icon, .home-avatar, .icon-preview { border-radius: 36%; }
+@supports (corner-shape: squircle) {
+  .char-icon, .home-avatar, .icon-preview { corner-shape: squircle; border-radius: 42%; }
+}
+[data-avatar="circle"] .char-icon, [data-avatar="circle"] .home-avatar, [data-avatar="circle"] .icon-preview { border-radius: 50%; corner-shape: round; }
+
+/* Home search and tag filter. The dark-mode button rule (near line 475) outranks plain selectors, so these also repeat the dark rule. */
+.home-search { display: flex; gap: 8px; align-items: center; margin: 14px 0 10px; }
+.home-search input[type=search] { flex: 1 1 auto; min-width: 0; }
+.home-search button.icon-btn { background: var(--input); color: var(--ink); border: 1px solid var(--line); }
+:root:not([data-theme="light"]) .home-search button.icon-btn { background: var(--input); color: var(--ink); border: 1px solid var(--line); }
+.tag-panel { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 10px; background: var(--surface); }
+.tag-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; font-size: 13px; }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.tag-panel button.tag-filter { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 999px; background: var(--input); color: var(--muted); border: 1px solid var(--line); }
+.tag-panel button.tag-filter[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+:root:not([data-theme="light"]) .tag-panel button.tag-filter { background: var(--input); color: var(--muted); border: 1px solid var(--line); }
+:root:not([data-theme="light"]) .tag-panel button.tag-filter[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+#homeCount { margin: 0 0 10px; font-size: 13px; }
+
+/* Chat window: a little darker in dark mode, and see-through over a character's background. */
+:root:not([data-theme="light"]) .log { background: linear-gradient(180deg, color-mix(in srgb, var(--card) 60%, #000), color-mix(in srgb, var(--surface) 60%, #000)); }
+#chatSection.has-art .log { background: linear-gradient(180deg, color-mix(in srgb, var(--card) 25%, transparent), color-mix(in srgb, var(--surface) 25%, transparent)); }
+:root:not([data-theme="light"]) #chatSection.has-art .log { background: linear-gradient(180deg, color-mix(in srgb, color-mix(in srgb, var(--card) 60%, #000) 25%, transparent), color-mix(in srgb, color-mix(in srgb, var(--surface) 60%, #000) 25%, transparent)); }
+
+/* Chat bubbles: a little see-through in both themes, and darker in dark mode. Notes stay plain. */
+.line:not(.note) { background: color-mix(in srgb, var(--theirs) 72%, transparent); }
+.line.mine:not(.note) { background: color-mix(in srgb, var(--mine) 72%, transparent); }
+.bubble-bubble .line.coloured { background: color-mix(in srgb, var(--speaker) 86%, transparent); }
+:root:not([data-theme="light"]) .line:not(.note) { background: color-mix(in srgb, color-mix(in srgb, var(--theirs) 65%, #000) 72%, transparent); }
+:root:not([data-theme="light"]) .line.mine:not(.note) { background: color-mix(in srgb, color-mix(in srgb, var(--mine) 65%, #000) 72%, transparent); }
+:root:not([data-theme="light"]) .bubble-bubble .line.coloured { background: color-mix(in srgb, color-mix(in srgb, var(--speaker) 65%, #000) 86%, transparent); }
+.line:not(.note) { box-shadow: 0 4px 12px rgba(0, 0, 0, .5); }
+
+/* Draft and Mind Palace boxes in the character editor. */
+.draft-box, .palace-box { display: grid; gap: 8px; }
+.draft-box[hidden], .palace-box[hidden] { display: none; }
+.draft-box input[type="file"] { max-width: 100%; }
+.palace-list { display: grid; gap: 10px; }
+.palace-entry { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.palace-entry textarea { resize: vertical; }
+.palace-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---- top bar on every page: labels stay on one line, and the right-hand group sits at the far right on phones too.
+   The chat page keeps its own phone header (chat-open), so the spacer is only shown elsewhere. */
+header a, header button, header .brand, header .muted { white-space: nowrap; }
+header .brand { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+body:not(.chat-open) header > .spacer { display: block; flex: 1 1 auto; }
