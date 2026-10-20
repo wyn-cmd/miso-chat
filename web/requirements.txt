@@ -3,3 +3,6 @@ rich
 pytz
 fastapi
 uvicorn
+pillow
+pymupdf>=1.28.2
+python-docx>=1.2.0

@@ -16,9 +16,9 @@
 <body>
   <header>
     <span class="brand">Miso Chat admin</span>
-    <span class="spacer"></span>
+    <span class="spacer admin-spacer"></span>
     <a href="/admin/stats">Stats</a>
-    <a href="/">Back to chat</a>
+    <a href="/chat">Back to chat</a>
     <button id="themeBtn" class="icon-btn" type="button" aria-label="Switch to light theme"></button>
   </header>
   <main>
@@ -53,6 +53,11 @@
         <label>Requests per user per day <input id="s_user_daily_cap" type="number" min="1" required></label>
         <label>Requests for all web users per day <input id="s_global_daily_cap" type="number" min="1" required></label>
         <label>Requests per minute for all web users <input id="s_rpm_limit" type="number" min="1" required></label>
+        <label>Shortest reply length users can pick (tokens) <input id="s_reply_min_tokens" type="number" min="10" max="4000" required></label>
+        <label>Longest reply length users can pick (tokens) <input id="s_reply_max_tokens" type="number" min="10" max="4000" required></label>
+      <label class="inline"><input id="s_memory_enabled" type="checkbox"> Memory bank (memory.md and pinned facts)</label>
+      <label class="inline"><input id="s_palace_enabled" type="checkbox"> Mind Palace (database searching: keyword entries)</label>
+      <p class="muted">Both are on by default. Turning one off stops it being read, refreshed and shown to users.</p>
         <button type="submit">Save limits</button>
         <p id="settingsMsg" class="muted"></p>
       </form>

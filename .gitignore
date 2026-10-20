@@ -3,24 +3,6 @@
 data/
 users/
 *.bak
-*.p2pbak
-*.p2ptmp
-
-# runtime files written by the app
-config.json
-user_id.json
-device_id.json
-peers.json
-request_tracker.json
-token_tracker.json
-
-# personal character content (only the example folders are published)
-*/memory.json
-*/memory.md
-*/facts.json
-*/user.md
-*/group_config.json
-*/config.json
 
 # Python
 __pycache__/

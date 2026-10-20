@@ -96,6 +96,10 @@ async function loadSettings() {
   $("s_user_daily_cap").value = s.user_daily_cap;
   $("s_global_daily_cap").value = s.global_daily_cap;
   $("s_rpm_limit").value = s.rpm_limit;
+  $("s_reply_min_tokens").value = s.reply_min_tokens;
+  $("s_reply_max_tokens").value = s.reply_max_tokens;
+  $("s_memory_enabled").checked = s.memory_enabled === "1";
+  $("s_palace_enabled").checked = s.palace_enabled === "1";
 }
 
 $("createForm").addEventListener("submit", async (ev) => {
@@ -125,6 +129,10 @@ $("settingsForm").addEventListener("submit", async (ev) => {
       user_daily_cap: parseInt($("s_user_daily_cap").value, 10),
       global_daily_cap: parseInt($("s_global_daily_cap").value, 10),
       rpm_limit: parseInt($("s_rpm_limit").value, 10),
+      reply_min_tokens: parseInt($("s_reply_min_tokens").value, 10),
+      reply_max_tokens: parseInt($("s_reply_max_tokens").value, 10),
+      memory_enabled: $("s_memory_enabled").checked,
+      palace_enabled: $("s_palace_enabled").checked,
     });
     $("settingsMsg").textContent = "Saved.";
     await loadUsers();

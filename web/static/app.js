@@ -45,6 +45,7 @@ function applyFont(name) {
 // as the whole bubble (per browser). Text switches black or white by the colour's brightness.
 let colorMap = {};        // name -> "#rrggbb"
 let iconSet = new Set(); // characters that have an icon.png/jpg/webp on the server
+let bgSet = new Set();   // solo characters that have a background.jpg on the server
 const BUBBLE_CHOICES = ["badge", "bubble"];
 
 function hexToRgb(hex) {
@@ -117,6 +118,8 @@ function showChat() {
 }
 
 function renderUsage() {
+  // Memory is an admin switch; hide its button when it is off.
+  $("memBtn").hidden = !!(me && me.features && me.features.memory === false);
   if (!me || !me.usage) return;
   const u = me.usage;
   // two forms of the same line: the long one on desktop, a compact one for phones (CSS picks which shows)
@@ -220,12 +223,51 @@ function renderHistory(messages) {
       const box = addLine(m.speaker, m.text, isEvent ? "note event" : (m.role === "user" ? "mine" : "theirs"), m.time);
       box.dataset.idx = String(i);   // position in the saved chat, used to place the context marker
       addEditButton(box, i, m);
+      addBranchButton(box, i);
       if (m.role === "user" && !isEvent && me && me.persona) colourLine(box, me.persona.name);
       if (m.thinking) setThinking(box, m.thinking);
     });
   }
   placeTurnTools(messages);
   refreshContext();
+}
+
+// Branching: copy the chat up to this message into a new branch and open it. The chat being branched from is left as it was.
+function addBranchButton(box, i) {
+  const btn = el("button", "Branch", "ghost small branch-btn");
+  btn.type = "button";
+  btn.title = "Start a new branch from this message. The current chat stays as it is.";
+  btn.setAttribute("aria-label", "Branch from this message");
+  btn.addEventListener("click", () => branchFrom(i));
+  box.appendChild(btn);
+}
+
+async function branchFrom(index) {
+  const name = prompt("Name for the new branch (optional)", "");
+  if (name === null) return;
+  const chat = current;
+  $("chatErr").textContent = "";
+  try {
+    const data = await api("POST", "/api/branch", { character: chat, index, name: name.trim() });
+    applyBranchState(chat, data);
+  } catch (err) {
+    $("chatErr").textContent = err.message;
+  }
+}
+
+function applyBranchState(name, data) {
+  if (name !== current) return;   // the user moved to another chat while this was saving
+  renderHistory(data.messages);
+  renderBranches(data);
+}
+
+function renderBranches(data) {
+  const pick = $("branchPick");
+  pick.replaceChildren(new Option("Main chat", "main"));
+  for (const item of data.items) pick.append(new Option(item.name, item.id));
+  pick.value = data.active;
+  pick.hidden = data.items.length === 0;   // the picker appears once a branch exists
+  $("branchDel").hidden = data.active === "main";
 }
 
 // Editing a saved message: the text opens in a box with Save and Cancel. Saving changes the saved chat only; no model call.
@@ -339,6 +381,9 @@ $("tempReset").addEventListener("click", () => saveCharSettings({ temperature: n
 $("winSlider").addEventListener("input", () => { $("winVal").textContent = $("winSlider").value; });
 $("winSlider").addEventListener("change", () => saveWindow(Number($("winSlider").value)));
 $("winReset").addEventListener("click", () => saveWindow(null));
+$("replySlider").addEventListener("input", () => { $("replyVal").textContent = `${$("replySlider").value} tokens`; });
+$("replySlider").addEventListener("change", () => saveReplyLength(Number($("replySlider").value)));
+$("replyReset").addEventListener("click", () => saveReplyLength(null));
 $("exportMd").addEventListener("click", () => exportChat("md"));
 $("exportTxt").addEventListener("click", () => exportChat("txt"));
 
@@ -499,6 +544,46 @@ function renderModels() {
   }
   sel.value = (me && me.model) || "";
   $("thinkToggle").checked = !!(me && me.thinking);
+  if (me && me.avatar_shape) applyAvatarShape(me.avatar_shape);
+  $("avatarShape").value = (me && me.avatar_shape) || "squircle";
+  renderReplyLength();
+}
+
+// The reply length target. The server keeps it inside the admin range; null means no target.
+function renderReplyLength() {
+  const [lo, hi] = (me && me.reply_length_bounds) || [50, 1000];
+  const s = $("replySlider");
+  const v = me ? me.reply_length : null;
+  s.min = lo;
+  s.max = hi;
+  s.value = v == null ? lo : v;
+  $("replyVal").textContent = v == null ? "(no target)" : `${v} tokens`;
+  $("replyReset").disabled = v == null;
+  $("replyNote").textContent = `An aim for how long each reply should be, in tokens, not counting reasoning. The model is guided, not cut off. The server admin sets the range: ${lo} to ${hi} tokens.`;
+}
+
+async function saveAvatarShape(shape) {
+  try {
+    const data = await api("POST", "/api/settings", { avatar_shape: shape });
+    me.avatar_shape = data.avatar_shape;
+    applyAvatarShape(me.avatar_shape);
+    $("settingsMsg").textContent = "Saved.";
+  } catch (err) {
+    $("settingsMsg").textContent = err.message;
+    $("avatarShape").value = me.avatar_shape || "squircle";
+  }
+}
+
+async function saveReplyLength(value) {
+  try {
+    const data = await api("POST", "/api/settings", { reply_length: value });
+    me.reply_length = data.reply_length;
+    renderReplyLength();
+    $("settingsMsg").textContent = "Saved. Applies from your next message.";
+  } catch (err) {
+    $("settingsMsg").textContent = err.message;
+    renderReplyLength();
+  }
 }
 
 async function saveSettings(patch) {
@@ -543,6 +628,7 @@ async function loadCharacters() {
   const data = await api("GET", "/api/characters");
   colorMap = data.colors || {};
   iconSet = new Set(data.icons || []);
+  bgSet = new Set(data.backgrounds || []);
   renderPersonas(data.personas || []);
   const solo = $("charList");
   const groups = $("groupList");
@@ -552,10 +638,25 @@ async function loadCharacters() {
   for (const g of data.groups) groups.appendChild(charButton(g.name));
   $("groupBox").hidden = data.groups.length === 0;
   const all = [...data.solo, ...data.groups.map((g) => g.name)];
+  // A card on the home page sends the name as ?c=; that wins over the last character used.
+  const asked = new URLSearchParams(location.search).get("c");
   const saved = localStorage.getItem("rp_character");
-  const start = all.includes(saved) ? saved : (data.solo[0] || null);
+  const start = all.includes(asked) ? asked : (all.includes(saved) ? saved : (data.solo[0] || null));
   if (start) await pickCharacter(start);
   else { current = null; markActive(); }
+}
+
+// A character's background sits behind its chat. The file is already darkened on the server.
+function applyChatArt(name) {
+  const section = $("chatSection");
+  if (!section) return;
+  if (name && bgSet.has(name)) {
+    section.style.setProperty("--chat-art", 'url("/api/background/' + encodeURIComponent(name) + '")');
+    section.classList.add("has-art");
+  } else {
+    section.style.removeProperty("--chat-art");
+    section.classList.remove("has-art");
+  }
 }
 
 async function pickCharacter(name) {
@@ -563,6 +664,7 @@ async function pickCharacter(name) {
   current = name;
   localStorage.setItem("rp_character", name);
   markActive();
+  applyChatArt(name);
   closeSidebar();
   showMemory(false);
   $("chatErr").textContent = "";
@@ -575,6 +677,12 @@ async function loadHistory() {
   const data = await api("GET", "/api/history?character=" + encodeURIComponent(name));
   if (name !== current) return;   // the user switched characters while this was loading
   renderHistory(data.messages);
+  try {
+    const list = await api("GET", "/api/branches?character=" + encodeURIComponent(name));
+    if (name === current) renderBranches(list);
+  } catch (err) {
+    $("branchPick").hidden = true;
+  }
 }
 
 
@@ -859,7 +967,40 @@ async function rollEvent() {
   }
 }
 
-$("autoBtn").addEventListener("click", autoFill);
+// The dice face changes on every click. One click in a million shows Miso instead.
+const DIE_PIPS = {
+  1: [[12, 12]],
+  2: [[8, 8], [16, 16]],
+  3: [[8, 8], [12, 12], [16, 16]],
+  4: [[8, 8], [16, 8], [8, 16], [16, 16]],
+  5: [[8, 8], [16, 8], [12, 12], [8, 16], [16, 16]],
+  6: [[8, 8], [16, 8], [8, 12], [16, 12], [8, 16], [16, 16]],
+};
+const MISO_DIE = `<svg x="3" y="3" width="18" height="18" viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="dieMisoGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4cc4ff"/><stop offset="1" stop-color="#9b8cff"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#dieMisoGrad)"/><ellipse cx="136" cy="150" rx="58" ry="58" fill="#04121f"/><ellipse cx="376" cy="150" rx="58" ry="58" fill="#04121f"/><ellipse cx="256" cy="296" rx="150" ry="128" fill="#f4f8ff"/><ellipse cx="196" cy="282" rx="40" ry="34" fill="#04121f"/><ellipse cx="316" cy="282" rx="40" ry="34" fill="#04121f"/><circle cx="206" cy="274" r="9" fill="#f4f8ff"/><circle cx="326" cy="274" r="9" fill="#f4f8ff"/><circle cx="160" cy="336" r="20" fill="#9b8cff" fill-opacity="0.55"/><circle cx="352" cy="336" r="20" fill="#9b8cff" fill-opacity="0.55"/><ellipse cx="256" cy="334" rx="22" ry="15" fill="#04121f"/></svg>`;
+
+// Uniform random integer in [0, n) from the browser's crypto source, without modulo bias.
+function randomBelow(n) {
+  const limit = Math.floor(4294967296 / n) * n;
+  const buf = new Uint32Array(1);
+  do { crypto.getRandomValues(buf); } while (buf[0] >= limit);
+  return buf[0] % n;
+}
+
+function rollDie() {
+  const face = $("autoBtn").querySelector(".die-face");
+  if (randomBelow(1000000) === 0) {
+    face.dataset.face = "miso";
+    face.innerHTML = MISO_DIE;
+    return;
+  }
+  const current = Number(face.dataset.face) || 0;
+  let next;
+  do { next = 1 + randomBelow(6); } while (next === current);   // always a different face
+  face.dataset.face = String(next);
+  face.innerHTML = DIE_PIPS[next].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="1.7" fill="currentColor"/>`).join("");
+}
+
+$("autoBtn").addEventListener("click", () => { rollDie(); autoFill(); });
 $("rollBtn").addEventListener("click", rollEvent);
 $("msg").addEventListener("input", updateEstimate);
 
@@ -916,9 +1057,30 @@ $("sizeUp").addEventListener("click", () => applySize(chatSize + 1));
 applySize(localStorage.getItem("rp_size") || SIZE_DEFAULT);
 applyBubbleStyle(localStorage.getItem("rp_bubble"));
 $("thinkToggle").addEventListener("change", (e) => saveSettings({ thinking: e.target.checked }));
+$("avatarShape").addEventListener("change", (e) => saveAvatarShape(e.target.value));
 $("modelSelect").addEventListener("change", (e) => saveSettings({ model: e.target.value }));
 $("editNewBtn").addEventListener("click", () => openEditor(null));
 $("undoBtn").addEventListener("click", undo);
+$("branchPick").addEventListener("change", async () => {
+  const chat = current;
+  $("chatErr").textContent = "";
+  try {
+    applyBranchState(chat, await api("POST", "/api/branch/switch", { character: chat, id: $("branchPick").value }));
+  } catch (err) {
+    $("chatErr").textContent = err.message;
+    loadHistory();
+  }
+});
+$("branchDel").addEventListener("click", async () => {
+  const chat = current;
+  if (!confirm("Delete this branch? Its messages and memory are removed. The main chat is kept.")) return;
+  $("chatErr").textContent = "";
+  try {
+    applyBranchState(chat, await api("POST", "/api/branch/delete", { character: chat, id: $("branchPick").value }));
+  } catch (err) {
+    $("chatErr").textContent = err.message;
+  }
+});
 $("pwForm").addEventListener("submit", changePassword);
 $("pwBtn").addEventListener("click", () => showPassword(""));
 $("backBtn").addEventListener("click", () => { showChat(); renderUsage(); });
