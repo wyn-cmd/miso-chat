@@ -3,6 +3,7 @@
 const $ = (id) => document.getElementById(id);
 let me = null;
 let current = null;   // character or group chat currently open
+let editableSet = new Set();   // characters this account may change (shows the sidebar pencil)
 let busy = false;     // a turn is streaming: keep the character list and buttons locked
 
 function setSidebar(open) {
@@ -316,6 +317,7 @@ function startEdit(box, i, m) {
 // Settings sheet: this character's creativity, the rolling window, and export.
 function loadCharSettings() {
   $("charSettings").hidden = !current;
+  $("palaceRow").hidden = !(current && soloNames.includes(current));
   for (const id of ["tempSlider", "tempReset", "winSlider", "winReset", "exportMd", "exportTxt"]) $(id).disabled = !current;
   $("charMsg").textContent = "";
   if (!current) return;
@@ -499,7 +501,7 @@ function charButton(name) {
   if (colorMap[name]) b.style.setProperty("--dot", colorMap[name]);
   b.appendChild(iconFor(name));
   b.appendChild(el("span", name, "char-name"));
-  if (me && me.is_admin) b.appendChild(editPencil(name));
+  if (editableSet.has(name)) b.appendChild(editPencil(name));
   b.addEventListener("click", () => pickCharacter(name));
   return b;
 }
@@ -626,17 +628,22 @@ function markActive() {
   setChatHeader(current || "");
 }
 
-async function loadCharacters() {
+async function loadCharacters(choose = true) {
   const data = await api("GET", "/api/characters");
   colorMap = data.colors || {};
   iconSet = new Set(data.icons || []);
   bgSet = new Set(data.backgrounds || []);
+  editableSet = new Set(data.editable || []);
   renderPersonas(data.personas || []);
   const solo = $("charList");
   const groups = $("groupList");
   solo.textContent = "";
   groups.textContent = "";
-  for (const name of data.solo) solo.appendChild(charButton(name));
+  // Only characters this account has chatted with. Every character still counts for links and groups below.
+  for (const name of data.sidebar || []) solo.appendChild(charButton(name));
+  if (!(data.sidebar || []).length) {
+    solo.appendChild(el("p", "Characters you chat with appear here. Pick one from the home page to start.", "muted"));
+  }
   for (const g of data.groups) groups.appendChild(g.private ? privateGroupRow(g) : charButton(g.name));
   $("groupBox").hidden = false;   // always shown, so any account can start its own group
   soloNames = data.solo || [];
@@ -644,9 +651,10 @@ async function loadCharacters() {
   // A card on the home page sends the name as ?c=; that wins over the last character used.
   const asked = new URLSearchParams(location.search).get("c");
   const saved = localStorage.getItem("rp_character");
-  const start = all.includes(asked) ? asked : (all.includes(saved) ? saved : (data.solo[0] || null));
+  const start = all.includes(asked) ? asked : (all.includes(saved) ? saved : ((data.sidebar || [])[0] || null));
+  if (!choose) { markActive(); return; }   // refresh only: keep the open chat
   if (start) await pickCharacter(start);
-  else { current = null; markActive(); }
+  else { current = null; markActive(); $("chatSection").hidden = true; }   // nothing to open yet: no empty chat window
 }
 
 // A character's background sits behind its chat, and the whole page takes it.
@@ -774,6 +782,8 @@ async function send(ev) {
   const mineBox = addLine(mine, text, "mine", new Date().toISOString());
   if (me && me.persona) colourLine(mineBox, me.persona.name);
   await streamTurn("/api/chat", { character: who, message: text }, who);
+  // A first message adds this character to the sidebar.
+  loadCharacters(false).catch(() => {});
 }
 
 // Stream one turn (a new message, or a regenerated reply) into the log, then reload the saved chat.
@@ -916,10 +926,10 @@ async function init() {
   }
   $("who").textContent = me.username;
   $("menuBtn").setAttribute("aria-expanded", String(!mobileNav()));
+  $("editBox").hidden = false;   // any account can create characters; the pencil shows only on the ones it may change
   if (me.is_admin) {
     $("adminLink").hidden = false;
     $("sandboxLink").hidden = false;
-    $("editBox").hidden = false;
   }
   renderModels();
   if (me.must_change) {

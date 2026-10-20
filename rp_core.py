@@ -390,6 +390,7 @@ class TurnResult:
     selector_note: str = None
     model: str = None
     prompt_tokens: object = "?"
+    cached_tokens: object = None
     response_tokens: object = "?"
     total_tokens: object = "?"
     turn_tokens: int = 0
@@ -479,6 +480,7 @@ class Engine:
         # Admin switches, set by the web app before each request. Memory is on by default.
         self.memory_enabled = True
         self.palace_enabled = True
+        self.palace_dir = None   # an account's own palace folder; None means ai_dir
         self.palace_text = ""
         self.persist_config = persist_config
         self.allow_root_user = allow_root_user
@@ -732,10 +734,12 @@ class Engine:
                     prompt += ("\n\n--- Pinned facts (kept as written; the memory refresh never changes them) ---\n" + pinned)
             except Exception as e:
                 self.log(f"[yellow]Could not load pinned.md: {e}[/yellow]")
-        if self.palace_text:
-            prompt += "\n\n--- Mind Palace (matched entries) ---\n" + self.palace_text
         if self.summary_text:
             prompt += "\n\n--- Earlier in this chat (running summary) ---\n" + self.summary_text
+        # Mind Palace changes most turns, so it sits after the stable parts. Providers cache the
+        # unchanged prefix; putting this first would break the cache on every message.
+        if self.palace_text:
+            prompt += "\n\n--- Mind Palace (matched entries) ---\n" + self.palace_text
         prompt += self.reply_length_clause()
         self.system_prompt = prompt
 
@@ -816,8 +820,9 @@ class Engine:
         # Matched entries depend on the newest messages.
         blocks = []
         if self.palace_enabled:
-            recent = [str(m.get("text") or "") for m in self.full_history[-palace.SCAN_MESSAGES:]]
-            blocks = palace.match(palace.load(self.ai_dir), recent + [str(processed or "")])
+            recent = [str(m.get("text") or "") for m in self.full_history[-palace.DEPTH_MAX:]]
+            entries, cfg = palace.load_all(self.palace_dir or self.ai_dir)
+            blocks = palace.match(entries, recent + [str(processed or "")], cfg["budget"], cfg["recursive"])
         # Rebuilt every turn, so an admin switch to memory or the palace takes effect at once.
         self.palace_text = "\n\n".join(blocks)
         self._build_system_prompt()
@@ -987,6 +992,7 @@ class Engine:
 
         usage = getattr(response, "usage_metadata", None)
         result.prompt_tokens = _usage(usage, "prompt_token_count")
+        result.cached_tokens = _usage(usage, "cached_content_token_count")
         result.response_tokens = _usage(usage, "candidates_token_count")
         result.total_tokens = _usage(usage, "total_token_count")
         result.turn_tokens = result.total_tokens if isinstance(result.total_tokens, int) else 0

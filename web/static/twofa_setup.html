@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Miso Chat">
+  <title>Set up two-factor sign-in · Miso Chat</title>
+  <script src="/static/theme-init.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#020307">
+</head>
+<body class="centered">
+  <button id="themeBtn" class="icon-btn theme-float" type="button" aria-label="Switch to light theme"></button>
+  <main class="card">
+    <h1>Set up two-factor sign-in</h1>
+    <p class="muted">This account must use two-factor sign-in. Add it to an authenticator app (Google Authenticator, Aegis, 1Password and similar): scan the code, or type the key in. Then enter the 6-digit code the app shows. Until this is done, nothing else in Miso Chat is available.</p>
+    <img id="qr" alt="QR code for your authenticator app" width="220" height="220">
+    <p>Key: <code id="secret" class="secret">loading…</code></p>
+    <form id="setupForm" class="stack">
+      <label>Code from the app <input id="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label>
+      <button type="submit">Turn on and continue</button>
+      <p id="err" class="error" aria-live="polite"></p>
+    </form>
+    <p class="muted"><a href="/login">Back to sign in</a></p>
+  </main>
+  <script src="/static/twofa_setup.js"></script>
+</body>
+</html>

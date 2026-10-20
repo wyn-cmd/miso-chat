@@ -43,6 +43,7 @@
       <div id="accountBox" class="side-section account-box">
         <h2>Account</h2>
         <div id="accountSlot"></div>
+        <p class="muted small"><a href="/api/client/miso_remote.py" download>Download the terminal client</a></p>
       </div>
       <div id="modelSection" class="side-section">
         <h2>Model &amp; thinking</h2>
@@ -53,7 +54,7 @@
         <p id="settingsMsg" class="muted"></p>
       </div>
       <div id="editBox" class="side-section" hidden>
-        <h2>Characters (admin)</h2>
+        <h2>Characters</h2>
         <button id="editNewBtn" class="ghost small" type="button">+ New character</button>
       </div>
     </aside>
@@ -64,7 +65,7 @@
       <p id="pwNote" class="muted"></p>
       <form id="pwForm" class="stack">
         <label>Current password <input type="password" id="pwOld" autocomplete="current-password" required></label>
-        <label>New password (8 characters or more) <input type="password" id="pwNew" autocomplete="new-password" minlength="8" required></label>
+        <label>New password (10 characters or more) <input type="password" id="pwNew" autocomplete="new-password" minlength="10" required></label>
         <div class="row">
           <button type="submit">Save password</button>
           <button id="backBtn" class="ghost" type="button" hidden>Back to chat</button>
@@ -148,11 +149,17 @@
           <p class="muted">Shown behind this character's chat and on its home page card. It is stored in its original colours; dark mode darkens it slightly on screen. PNG, JPEG or WebP, up to 10 MB.</p>
           <button id="edBgSave" class="ghost" type="button" disabled>Upload background</button>
           <p id="edBgErr" class="error"></p>
+          <p id="edBgNote" class="muted"></p>
         </div>
       </div>
       <fieldset id="edPalaceBox" class="icon-box palace-box" hidden>
         <legend>Mind Palace (database searching)</legend>
-        <p class="muted">Each entry joins the prompt only when one of its keys appears in the recent chat. Keys match whole words, ignoring case and accents, so list plurals too.</p>
+        <p class="muted">Each entry joins the prompt when its keys appear in the recent chat. Keys match whole words, ignoring case and accents, so list plurals too. Secondary keys narrow it further (see Logic). Always on entries join every reply.</p>
+        <div class="palace-settings">
+          <label class="inline"><input id="edPalaceRecursive" type="checkbox"> Recursive: a matched entry can trigger others</label>
+          <label class="inline">Character budget <input id="edPalaceBudget" type="number" min="500" max="12000" step="100" value="3000"> characters</label>
+        </div>
+        <label id="edPalaceWhoRow" class="side-label" hidden>Showing <select id="edPalaceWho" aria-label="Whose palace to show"></select></label>
         <div id="edPalaceList" class="palace-list"></div>
         <div class="palace-actions">
           <button id="edPalaceAdd" class="ghost" type="button">Add entry</button>
@@ -253,11 +260,16 @@
           <option value="circle">Circle</option>
         </select>
       </div>
+      <div class="sheet-row"><span>Terminal client</span><a href="/api/client/miso_remote.py" download>Download</a></div>
+      <div class="sheet-row"><span>Two-factor sign-in</span>
+        <span class="slider-ctl"><span id="twofaNote" class="muted"></span><button id="twofaBtn" class="ghost small" type="button" hidden>Turn on</button></span>
+      </div>
       <div id="charSettings" hidden>
         <h2>This character</h2>
         <div class="sheet-row slider-row"><label for="tempSlider">Creativity (temperature) <span id="tempVal" class="muted"></span></label>
           <span class="slider-ctl"><input id="tempSlider" type="range" min="0" max="1.5" step="0.05" aria-label="Creativity"><button id="tempReset" class="ghost small" type="button">Default</button></span>
         </div>
+        <div id="palaceRow" class="sheet-row"><span>Mind Palace (your entries)</span><button id="palaceOpen" class="ghost small" type="button">Open</button></div>
       </div>
       <h2>Chat history</h2>
       <div class="sheet-row slider-row"><label for="winSlider">Rolling window (messages) <span id="winVal" class="muted"></span></label>
@@ -307,6 +319,20 @@
       <button id="groupSave" type="button">Save</button>
     </div>
   </dialog>
+  <dialog id="palaceDlg" class="dlg" aria-labelledby="palaceDlgTitle">
+    <h2 id="palaceDlgTitle">Mind Palace</h2>
+    <p class="muted">Your own entries for this character. The character's starting palace was copied to your account the first time you chatted with it. Changes apply from your next message.</p>
+    <label class="inline"><input id="palRecursive" type="checkbox"> Recursive: a matched entry can trigger others</label>
+    <label class="inline">Character budget <input id="palBudget" type="number" min="500" max="12000" step="100"> characters</label>
+    <div id="palList" class="palace-list"></div>
+    <p id="palMsg" class="muted" aria-live="polite"></p>
+    <div class="dlg-actions">
+      <button id="palAdd" class="ghost small" type="button">Add entry</button>
+      <span class="grow"></span>
+      <button id="palClose" class="ghost" type="button">Close</button>
+      <button id="palSave" type="button">Save</button>
+    </div>
+  </dialog>
   <dialog id="treeDlg" class="dlg" aria-labelledby="treeTitle">
     <h2 id="treeTitle">Branch tree</h2>
     <label id="treeAccountRow" class="dlg-field" hidden>Account
@@ -323,5 +349,6 @@
   <script src="/static/markdown.js"></script>
   <script src="/static/app.js"></script>
   <script src="/static/editor.js"></script>
+  <script src="/static/security.js"></script>
 </body>
 </html>
