@@ -91,7 +91,13 @@ PRIORITY_MODELS = ["gemini-3.8-flash", "gemma-4-31b-it"]
 MEMORY_MODELS_HEAD = ["gemini-3.8-flash", "gemma-4-31b-it"]
 MEMORY_MODELS_TAIL = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
 
-DEFAULT_SUBSTITUTIONS = {}
+DEFAULT_SUBSTITUTIONS = {
+    "lactation": "sweet cream overflow",
+    "milk": "nectar",
+    "milking": "harvesting nectar",
+    "breasts": "chest",
+    "udder": "chest",
+}
 
 NARRATIVE_INSTRUCTION = (
     "\n\nCRITICAL NARRATIVE INSTRUCTION: Adopt a high-literary, impressionistic style. "
@@ -514,6 +520,7 @@ class Engine:
         self.character_prompt = ""
         self.is_group = False
         self.group_members = []
+        self.member_notes = {}         # per-member notes for an account's own group, keyed by folder name
         self.user_prompt = ""
         self.user_display_name = "You"
         self.user_color = "blue"
@@ -612,6 +619,18 @@ class Engine:
             except Exception as e:
                 self.log(f"[yellow]Could not load substitutions.json: {e}[/yellow]")
         self.safe_to_spicy = {v.lower(): k for k, v in self.spicy_to_safe.items()}
+
+    def apply_private_group(self, display, members, notes):
+        # An account's own group: members and notes come from its saved settings, not a character folder.
+        self.is_group = True
+        self.group_members = list(members)
+        self.member_notes = dict(notes)
+        self.member_memory = True
+        self.character_name = display
+        self.character_color = "magenta"
+        self.character_prompt = (f"You are managing a group chat group named {display} consisting of members: "
+                                 f"{', '.join(display_for(m) for m in self.group_members)}.")
+        self._build_system_prompt()
 
     def _load_character(self):
         self.character_name = display_for(self.ai_dir)
@@ -1064,10 +1083,25 @@ class Engine:
                         col = parts[1].strip().lower()
                         if col:
                             color = get_safe_color(col, "cyan")
+        note = self.member_notes.get(name)
+        if note:
+            prompt += "\n\n--- Note from the user for you in this group ---\n" + note
         return prompt + NARRATIVE_INSTRUCTION + DIALOGUE_INSTRUCTION + FORMAT_INSTRUCTION + self.reply_length_clause(), color
 
+    @staticmethod
+    def _ordered_mentions(text, labels):
+        # Members in the order the director named them. Whole names only, so "Ann" does not match "Anna".
+        lowered = text.lower()
+        found = []
+        for shown_name, folder in labels.items():
+            m = re.search(r"(?<!\w)" + re.escape(shown_name.lower()) + r"(?!\w)", lowered)
+            if m:
+                found.append((m.start(), folder))
+        return [folder for _, folder in sorted(found)]
+
     def _select_members(self, processed):
-        # Ask the director model which members speak. Returns (names, note).
+        # The director reads the whole context and returns who speaks, in what order. It uses the same model
+        # list as the members, so a DeepSeek or Claude pick runs the director on that provider too.
         members = self.group_members
         if not members:
             return [], None
@@ -1089,40 +1123,57 @@ class Engine:
                     snippet += f"\nMemory snippet:\n{_read_text(mem_file)[:300]}"
                 except Exception:
                     pass
+            if self.member_notes.get(name):
+                snippet += f"\nNote from the user about this member:\n{self.member_notes[name]}"
             bios.append(snippet)
 
+        group_memory = ""
+        if os.path.exists(self.memory_bank_file):
+            try:
+                group_memory = _read_text(self.memory_bank_file)[:2000]
+            except Exception:
+                group_memory = ""
         recent = self.full_history[-SELECTOR_WINDOW:]
         history_text = "\n".join(f"[{display_for(e['speaker']) if 'speaker' in e else e['role']}]: {e['text']}" for e in recent)
-        prompt = (
-            f"You are the director of group chat '{display_for(self.ai_dir)}'.\n"
-            f"Available members: {shown}\n\n"
-            f"Member details and memories:\n" + "\n---\n".join(bios) + "\n\n"
-            f"Recent chat history:\n{history_text}\n\n"
-            f"Current user prompt / input: {processed}\n\n"
-            f"CRITICAL INSTRUCTION: Decide how many members (between 1 and {len(members)}) should respond based on the user's prompt and chat context. "
-            f"Select the most relevant character(s) from {shown}.\n"
-            f"Return ONLY the names of the selected members separated by commas (e.g. CharacterA, CharacterB), with no extra text or explanation."
-        )
+        parts = [
+            f"You are the director of the group chat '{self.character_name}'.\n",
+            f"Available members: {shown}\n\n",
+            "Member details, notes and memories:\n", "\n---\n".join(bios), "\n\n",
+        ]
+        if self.summary_text:
+            parts.append(f"Chat summary so far:\n{self.summary_text}\n\n")
+        if group_memory:
+            parts.append(f"Group memory:\n{group_memory}\n\n")
+        parts += [
+            f"Recent chat history:\n{history_text}\n\n",
+            f"Current user prompt / input: {processed}\n\n",
+            f"CRITICAL INSTRUCTION: Decide which members respond to this input and the order they speak in, using the "
+            f"user's prompt and all the context above. Choose between 1 and {len(members)} members, only from {shown}. "
+            "Leave out any member who should not speak this turn.\n",
+            "Return ONLY the chosen names in speaking order, separated by commas (e.g. CharacterB, CharacterA), "
+            "with no extra text or explanation.",
+        ]
+        prompt = "".join(parts)
 
-        selected = []
-        for model in self.group_models:
-            try:
-                chat = self.client.chats.create(model=model, config=types.GenerateContentConfig(temperature=0.7))
-                text = _text(chat.send_message(prompt))
-                if text:
-                    lowered = text.strip().lower()
-                    found = [labels[k] for k in labels if k.lower() in lowered]
-                    unique = list(dict.fromkeys(found))
-                    if unique:
-                        selected = unique
-                    break
-            except Exception:
-                continue
-
+        # The director answers with the same model the members use: the pinned pick, else the first chain model.
+        # A failed call is not retried on another model; the turn falls back to one random member and says why.
+        director_model = (self.ordered_models(self.group_models) or [self.model_name])[0]
+        selected, failure = [], None
+        try:
+            self._count_request(director_model)
+            chat = self.client.chats.create(model=director_model, config=types.GenerateContentConfig(temperature=0.7))
+            text = _text(chat.send_message(prompt))
+            if text:
+                selected = self._ordered_mentions(text, labels)
+            else:
+                failure = "empty reply"
+        except Exception as err:
+            failure = str(err)[:160]
         if not selected:
             selected = [random.choice(members)]
-            return selected, f"Group chat selector fallback: selected {[display_for(s) for s in selected]} (OwO)"
-        return selected, f"Group chat active: AI director selected speakers: {[display_for(s) for s in selected]} (OwO)"
+            reason = f" ({failure})" if failure else " (no member names in the reply)"
+            return selected, f"Group chat selector fallback with {director_model}{reason}: selected {[display_for(s) for s in selected]} (OwO)"
+        return selected, f"Group chat active: director ({director_model}) selected speakers: {[display_for(s) for s in selected]} (OwO)"
 
     # ---- saving, undo, memory
 

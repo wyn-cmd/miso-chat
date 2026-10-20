@@ -103,6 +103,18 @@ Each saved message has a Branch button. It copies the chat up to and including t
 
 A branch is a full copy of this account's memory, pinned facts, rolling summary and chat history. After the copy, the two chats change independently. A chat can have up to 12 branches. Branches work the same way for groups.
 
+## Group chats
+
+Any account can make a group chat from the sidebar. A group takes two to eight characters and is private to the account that made it. Other accounts cannot see, open or change it. An account can have up to 20 groups.
+
+Each group turn starts with a director. The director reads the new message, the chat history, the summary, the memory and the member notes, then returns the speakers in the order they should answer. Each chosen member replies in that order, so a group can have one reply or several. The director uses the same model as the group members: whichever model the account has picked, or the first model in the chain if none is picked. If the director fails, one random member replies and the note in the chat says why. The director is used in the web app only.
+
+Per-member notes are set in the group dialog. Each note is private to the account and up to 500 characters. The director and the noted member both read it.
+
+## Branch tree
+
+The Tree button in a chat opens the branch tree. It shows the main chat and each branch, with the branch each one was copied from. Each account sees the tree for its own chats. Admins can open any account's tree, but only to read it. Branches made before this release show under the main chat.
+
 ## Reply length
 
 Admins set the reply length range on the admin page, from 10 to 4,000 tokens. Each account picks a target inside that range in its Settings. The default range is 50 to 1,000 tokens. Reasoning tokens are not counted. The target is a guide the model is asked to follow, not a hard cap.
@@ -115,7 +127,7 @@ Admins can import a zip made by this app (format `miso-character`, version 1). A
 
 ## Chat backgrounds
 
-Admins can upload a background for a character as a PNG, JPEG or WebP file up to 10 MB. The app darkens it to 45 per cent and resizes it to at most 1,280 pixels wide. It appears on the character's home card and behind its chat. A background is never read by OCR and is never used as the profile picture.
+Admins can upload a background for a character as a PNG, JPEG or WebP file up to 10 MB. The app resizes it to at most 1,280 pixels wide and keeps its colours; dark mode darkens the page slightly on screen. It appears on the character's home card and behind its chat. A background is never read by OCR and is never used as the profile picture.
 
 ## Characters and personas
 
@@ -128,7 +140,7 @@ Each character is a folder in the project root.
 - `memory.json` and `memory.md` are written by the app as the chat runs. Do not edit them while a chat is open.
 - `creator.json` names the account that created the character. Characters without it are credited to `admin`.
 - `profile.json` holds the public headline, summary and tags shown on the home page. It is written from the card when you use Auto-fill, and is never sent into the roleplay prompt.
-- `background.jpg` (optional) is set by upload in the editor. It is darkened and used on the home card and behind the chat.
+- `background.jpg` (optional) is set by upload in the editor. It is used on the home card and behind the whole chat page.
 - `palace.json` holds the Mind Palace entries.
 
 A group chat is a folder with a `group_config.json` that lists its members.

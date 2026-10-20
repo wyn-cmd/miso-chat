@@ -28,7 +28,7 @@ from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_T
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor, profiles, recommend, transfer, ocr, palace, draft, branches
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, draft, branches, private_groups
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, budget_days, recent_days, verify_password
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -360,15 +360,29 @@ def _admin_sandbox_root(st, name, uid):
     return sandbox.root_for(os.path.join(st.data_dir, "users", str(uid), folder))
 
 
-def _resolve_profile(st, name):
+def _resolve_profile(st, name, user=None):
     # Client names are display names; the folder name is the ID used on disk and in the engine.
+    # An account's own group is matched by its name and resolves to its group ID (grp-...).
     name = folder_for(str(name))
     solo, groups = scan_characters(st.char_root)
     if name in groups:
         return name, True
     if name in solo:
         return name, False
+    if user is not None:
+        own = private_groups.find_by_key(st.data_dir, user["id"], name, folder_for)
+        if own is not None:
+            return own["id"], True
     raise HTTPException(404, "Unknown character.")
+
+
+def _label(st, user, name):
+    # The name a person sees: a private group's own name, else the character's display name.
+    if name.startswith(private_groups.PREFIX):
+        item = private_groups.get(st.data_dir, user["id"], name)
+        if item is not None:
+            return item["name"]
+    return display_for(name)
 
 
 SWITCHES = ("memory_enabled", "palace_enabled")
@@ -418,6 +432,11 @@ def _slot(st, user, name, is_group):
     if chosen and (chosen in engine.fallback_models or chosen in engine.extra_models):
         engine.pin_model(chosen)   # a saved model choice applies to every chat until changed
     engine.load_profile()
+    if name.startswith(private_groups.PREFIX):
+        cfg = private_groups.get(st.data_dir, uid, name)
+        if cfg is None:
+            raise HTTPException(404, "Unknown group.")
+        engine.apply_private_group(cfg["name"], cfg["members"], private_groups.get_notes(st.data_dir, uid, name))
     slot = Slot(engine, threading.Lock())
     with st.slots_lock:
         return st.slots.setdefault(key, slot)
@@ -645,7 +664,7 @@ def _reply_target(st, uid):
 
 
 def _chat_settings_payload(st, user, name, is_group):
-    return {"character": display_for(name), "is_group": bool(is_group),
+    return {"character": _label(st, user, name), "is_group": bool(is_group),
             "temperature": _pref_float(st.store.get_pref(user["id"], "temp:" + name)),
             "temperature_default": GROUP_TEMPERATURE if is_group else SOLO_TEMPERATURE,
             "window": _pref_int(st.store.get_pref(user["id"], "window")),
@@ -671,7 +690,7 @@ def _export_now(st, user, name, is_group, fmt):
     slot = _slot(st, user, name, is_group)
     with slot.lock:
         messages = _history(slot.engine)
-    return _export_text(messages, display_for(name), fmt, time.strftime("%Y-%m-%d %H:%M"))
+    return _export_text(messages, _label(st, user, name), fmt, time.strftime("%Y-%m-%d %H:%M"))
 
 
 def _run_turn(st, user, name, slot, message, regen=False):
@@ -1048,7 +1067,9 @@ def make_app(client=None, data_dir=None, char_root=None):
         user = require(request)
         solo, groups = scan_characters(st.char_root)
         _queue_missing_profiles(st, user, solo)
-        return {"solo": [display_for(s) for s in solo], "groups": [{"name": display_for(g), "members": [display_for(x) for x in m]} for g, m in groups.items()],
+        return {"solo": [display_for(s) for s in solo], "groups": [{"name": display_for(g), "members": [display_for(x) for x in m]} for g, m in groups.items()]
+                + [{"name": i["name"], "members": [display_for(x) for x in i["members"]], "id": i["id"], "private": True}
+                   for i in private_groups.list_for(st.data_dir, user["id"])],
                 "cards": [_card_for(st, s) for s in solo],
                 "personas": _persona_list(st), "colors": _colour_map(st.char_root),
                 "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))],
@@ -1056,10 +1077,80 @@ def make_app(client=None, data_dir=None, char_root=None):
                 "recommended": [{"name": display_for(r["folder"]), "tags": r["tags"]} for r in
                                 recommend.recommend(st.char_root, st.data_dir, user["id"], solo)]}
 
+    def _group_context(user, exclude=None):
+        # Names a group must not reuse, and the characters it may hold.
+        solo, shared = scan_characters(st.char_root)
+        own = [i for i in private_groups.list_for(st.data_dir, user["id"]) if i["id"] != exclude]
+        taken = {folder_for(x) for x in solo + list(shared)} | {folder_for(i["name"]) for i in own}
+        return solo, taken
+
+    def _group_body(body):
+        members = body.get("members")
+        if not isinstance(members, list):
+            raise HTTPException(400, "Pick the characters for the group.")
+        return str(body.get("name", "")), [folder_for(str(m)) for m in members]
+
+    def _group_notes(body):
+        notes = body.get("notes") or {}
+        if not isinstance(notes, dict):
+            raise HTTPException(400, "Notes must be a list of member notes.")
+        return {folder_for(str(k)): v for k, v in notes.items()}
+
+    @app.get("/api/groups")
+    def groups_list(request: Request):
+        user = require(request)
+        out = []
+        for i in private_groups.list_for(st.data_dir, user["id"]):
+            out.append({"id": i["id"], "name": i["name"],
+                        "members": [{"key": m, "name": display_for(m)} for m in i["members"]],
+                        "notes": {display_for(k): v for k, v in private_groups.get_notes(st.data_dir, user["id"], i["id"]).items()}})
+        return {"groups": out, "max": private_groups.MAX_GROUPS, "min_members": private_groups.MIN_MEMBERS,
+                "max_members": private_groups.MAX_MEMBERS, "note_max": private_groups.NOTE_MAX}
+
+    @app.post("/api/groups")
+    async def group_create(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, members = _group_body(body)
+        solo, taken = _group_context(user)
+        try:
+            item = private_groups.create(st.data_dir, user["id"], name, members, solo, taken, folder_for)
+            private_groups.set_notes(st.data_dir, user["id"], item["id"], _group_notes(body), item["members"])
+        except private_groups.GroupError as err:
+            raise HTTPException(400, str(err))
+        return {"id": item["id"], "name": item["name"]}
+
+    @app.put("/api/groups/{gid}")
+    async def group_update(gid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, members = _group_body(body)
+        solo, taken = _group_context(user, exclude=gid)
+        try:
+            item = private_groups.update(st.data_dir, user["id"], gid, name, members, solo, taken, folder_for)
+            private_groups.set_notes(st.data_dir, user["id"], gid, _group_notes(body), item["members"])
+        except private_groups.GroupError as err:
+            raise HTTPException(400, str(err))
+        _drop_slot(st, user, gid)
+        return {"id": gid, "name": item["name"]}
+
+    @app.delete("/api/groups/{gid}")
+    async def group_delete(gid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        try:
+            private_groups.delete(st.data_dir, user["id"], gid)
+        except private_groups.GroupError as err:
+            raise HTTPException(400, str(err))
+        _drop_slot(st, user, gid)
+        return {"ok": True}
+
     @app.get("/api/history")
     def history(request: Request, character: str):
         user = require(request)
-        name, is_group = _resolve_profile(st, character)
+        name, is_group = _resolve_profile(st, character, user)
         slot = _slot(st, user, name, is_group)
         with slot.lock:
             return {"messages": _history(slot.engine)}
@@ -1068,11 +1159,11 @@ def make_app(client=None, data_dir=None, char_root=None):
     def context_info(request: Request, character: str):
         # Where the next prompt's rolling window starts, and an estimate of its size (see Engine.context_estimate).
         user = require(request)
-        name, is_group = _resolve_profile(st, character)
+        name, is_group = _resolve_profile(st, character, user)
         slot = _slot(st, user, name, is_group)
         with slot.lock:
             info = slot.engine.context_estimate()
-        info["character"] = display_for(name)
+        info["character"] = _label(st, user, name)
         return info
 
     @app.post("/api/chat")
@@ -1085,7 +1176,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(400, "Say something first.")
         if len(message) > MAX_MESSAGE:
             raise HTTPException(400, f"Keep messages under {MAX_MESSAGE} characters.")
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
         command = _parse_command(message)
         if command is not None:
             result = await run_in_threadpool(_run_command, st, user, name, is_group, *command)
@@ -1101,7 +1192,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
         _check_caps(st, user)
         slot = await run_in_threadpool(_slot, st, user, name, is_group)
 
@@ -1120,7 +1211,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
         _check_caps(st, user)
         slot = await run_in_threadpool(_slot, st, user, name, is_group)
 
@@ -1139,7 +1230,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
         _check_caps(st, user)
         slot = await run_in_threadpool(_slot, st, user, name, is_group)
         return StreamingResponse(_run_turn(st, user, name, slot, "", regen=True),
@@ -1151,7 +1242,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
         direction = body.get("direction")
         if direction not in (-1, 1):
             raise HTTPException(400, "Direction must be -1 or 1.")
@@ -1161,7 +1252,7 @@ def make_app(client=None, data_dir=None, char_root=None):
     def memory_get(request: Request, character: str):
         # The memory bank and pinned facts for this account's copy of a character.
         user = require(request)
-        name, _ = _resolve_profile(st, character)
+        name, _ = _resolve_profile(st, character, user)
         mem_path, pin_path = _memory_files(st, user, name)
         return {"memory": _read_or_empty(mem_path), "pinned": _read_or_empty(pin_path), "limit": MEMORY_LIMIT,
                 "summary": _read_summary(_summary_path(st, user, name))}
@@ -1172,7 +1263,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, _ = _resolve_profile(st, str(body.get("character", "")))
+        name, _ = _resolve_profile(st, str(body.get("character", "")), user)
         memory = str(body.get("memory", ""))
         pinned = str(body.get("pinned", ""))
         summary_given = "summary" in body
@@ -1279,7 +1370,7 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.get("/api/character-settings")
     async def character_settings_get(request: Request, character: str):
         user = require(request)
-        name, is_group = _resolve_profile(st, character)
+        name, is_group = _resolve_profile(st, character, user)
         return _chat_settings_payload(st, user, name, is_group)
 
     @app.post("/api/character-settings")
@@ -1288,7 +1379,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
         if "temperature" not in body:
             raise HTTPException(400, "Nothing to save.")
         raw = body["temperature"]
@@ -1317,7 +1408,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
         try:
             index = int(body.get("index"))
         except (TypeError, ValueError):
@@ -1347,7 +1438,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         user = require(request)
         if format not in ("md", "txt"):
             raise HTTPException(400, "Format must be md or txt.")
-        name, is_group = _resolve_profile(st, character)
+        name, is_group = _resolve_profile(st, character, user)
         body = await run_in_threadpool(_export_now, st, user, name, is_group, format)
         stem = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or "chat"
         filename = f"{stem}-{time.strftime('%Y-%m-%d')}.{format}"
@@ -1360,7 +1451,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
         return await run_in_threadpool(_undo_now, st, user, name, is_group)
 
     # ---- admin
@@ -1707,7 +1798,7 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.get("/api/branches")
     def branch_list(request: Request, character: str):
         user = require(request)
-        name, _ = _resolve_profile(st, character)
+        name, _ = _resolve_profile(st, character, user)
         return branches.listing(_branch_root(user, name))
 
     @app.post("/api/branch")
@@ -1716,7 +1807,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
 
         def work():
             slot = _slot(st, user, name, is_group)
@@ -1737,7 +1828,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
 
         def work():
             slot = _slot(st, user, name, is_group)
@@ -1758,7 +1849,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name, is_group = _resolve_profile(st, str(body.get("character", "")))
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
 
         def work():
             slot = _slot(st, user, name, is_group)
@@ -1773,5 +1864,21 @@ def make_app(client=None, data_dir=None, char_root=None):
                 slot.lock.release()
             return _branch_state(user, name, is_group)
         return await run_in_threadpool(work)
+
+    @app.get("/api/branches/tree")
+    def branch_tree(request: Request, character: str):
+        user = require(request)
+        name, _ = _resolve_profile(st, character, user)
+        return branches.tree(_branch_root(user, name))
+
+    @app.get("/api/admin/branches/tree")
+    def admin_branch_tree(request: Request, uid: int, character: str):
+        # Read-only for admins: shows another account's branch tree and changes nothing.
+        require(request, admin=True)
+        target = st.store.get_user(uid)
+        if target is None:
+            raise HTTPException(404, "Unknown account.")
+        name, _ = _resolve_profile(st, character, target)
+        return {"account": target["username"], **branches.tree(_branch_root(target, name))}
 
     return app
