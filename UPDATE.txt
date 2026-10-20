@@ -1,48 +1,21 @@
-Miso Chat 1.3.0 update
+Miso Chat 1.3.1-beta update
 
-This update brings the server to 1.3.0. It contains everything from 1.2.1 and from the 1.3.0 betas: the terminal client with
-character pictures, the version check, the sign-in protection with a per-address block, two-factor sign-in, encrypted
-backups, the Mind Palace upgrade, and the character changes. Any signed-in account can create characters and edit its own,
-a character can have a background picture (uploaded on the new-character form), each account has its own Mind Palace for
-each character, the home page search is ranked and shows 50 characters per page, the chat sidebar lists only characters
-you have chatted with, and the character info card uses the character's background.
+This update brings the server to 1.3.1-beta. It adds several backgrounds per character (added and removed in the
+character editor), random backgrounds on chats and cards, shared default backgrounds, face icons for characters with no
+picture, background brightness and bubble opacity sliders in Appearance, a grid of settings cards, and the phone Undo
+placement.
 
-The terminal client (client/miso_remote.py) connects only to a server with the same major and minor version. Terminal
-clients from 1.2.1 or earlier will not connect to 1.3.0, so download the 1.3.0 client from the web app or the release page.
+The version is still 1.3 at the major and minor level, so terminal clients from 1.3.0 keep connecting. Download the
+terminal client from the web app or the release page to get the matching file.
 
 1. Stop the web app.
-2. Back up before you update. Either make an encrypted backup from the admin page (see step 12), or copy data/ and your character folders by hand. This zip does not contain them.
+2. Back up before you update. Make an encrypted backup from the admin page, or copy data/ and your character folders
+   by hand. This zip does not contain them.
 3. Extract this zip into the existing project folder, overwriting the files. Do not extract into a new folder.
-   The zip leaves alone: .env, data/, every character folder, config.json, personas.json, substitutions.json,
-   device_id.json, peers.json, the request and token trackers, user_id.json and branches/.
-4. If you reach the server over plain http (not https), add MISO_COOKIE_SECURE=0 to .env before starting.
-   Without it, the session cookie is marked Secure and the browser will not send it over plain http, so nobody can sign in.
-   If you reach it over https (for example through Cloudflare), change nothing.
-5. This zip adds the client/ folder (miso_remote.py, which the web app offers as a download), unlock_account.py and restore_backup.py.
-   The terminal chat from older versions (roleplay.py and run.bash) is no longer part of the project.
-   If your server folder still has them, you can delete them.
-6. Install the packages again, because the requirements changed. The new packages are pyotp, qrcode and cryptography:
-   pip install -r requirements.txt
-   (Windows: .venv\Scripts\python.exe -m pip install -r requirements.txt   Linux: .venv/bin/python -m pip install -r requirements.txt)
-7. Chafa is optional. It draws character pictures in the terminal client. Without it the client and the web app
-   still work, and pictures are not shown. Linux: sudo apt install chafa. Windows: winget install hpjansson.Chafa
-8. Data changes are automatic on start. The users table gets two-factor columns, the sessions table gets a stage column,
-   and two tables are created: login_throttle and login_ip_throttle, plus backup_auth for the backup password.
-   Existing password hashes keep working and are upgraded at each account's next sign-in.
-   Passwords set from now on need at least 10 characters.
-9. MISO_SECRET_KEY is created in .env on the first start. Keep a copy of .env somewhere safe. Two-factor secrets cannot be
-   read without this key. A backup holds a copy of .env, so restoring a backup also restores the key.
-10. Address blocks: 15 consecutive wrong guesses from one address for one account block that address for that account until
-    an admin unlocks it. Behind Cloudflare, run cloudflared on the same machine as the web app, so the real address is read correctly.
-11. Each sign-in check uses about 64 MB of memory for a moment. A small server should be watched when several people sign in at once.
-12. Start the web app again. Check that the login page opens and an existing account can sign in. Check that the sidebar
-    download link for the terminal client gives miso_remote.py.
-    Then set up two-factor sign-in: an admin can turn it on for its own account from the admin users table (enable 2FA),
-    and any account can turn it on in Settings. An admin can require it on any account; that account sets it up on the set-up page straight after its password.
-    Set up the backup password on the admin page under Backups before the first backup. A backup is one .mbk file. It holds
-    .env, so keep it private.
-13. Restoring a backup: run python restore_backup.py BACKUP_FILE TARGET_FOLDER in an empty folder, install the requirements there,
-    and start the app from that folder. It asks for the backup password.
-14. Unlocking: on the admin page, a locked account or blocked address shows an "unlock sign-in" button, which clears the account lock
-    and every address block on that account. A lost phone is handled by the "reset 2FA" button on the same row.
-    If every admin is locked out, run this on the server: python unlock_account.py USERNAME
+   The zip leaves alone: .env, data/, every character folder, and the files you keep beside them.
+4. No packages changed. You do not need to install anything.
+5. Data changes are automatic on start. Backgrounds are stored in a backgrounds/ folder inside each character folder.
+   An existing background.jpg keeps working. New backgrounds go into backgrounds/.
+6. Start the web app again. Check that the login page opens and an existing account can sign in. Check that a character
+   card shows a background, that Settings shows the grid of cards, and that Appearance shows the two new sliders.
+7. The sliders are per account and start at the default, so nothing looks different until someone moves one.

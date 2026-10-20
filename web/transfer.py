@@ -16,7 +16,8 @@ VERSION = 1
 MAX_ZIP = 60 * 1024 * 1024         # the uploaded archive
 MAX_UNPACKED = 120 * 1024 * 1024   # the files inside it, summed before anything is extracted
 CARD_FILES = ("character.md", "context.md", "profile.json", "creator.json", "palace.json", "sandbox.json",
-              "background.jpg", "icon.png", "icon.jpg", "icon.webp")
+              "icon.png", "icon.jpg", "icon.webp")
+BG_MEMBER = re.compile(r"^backgrounds/[0-9a-f]{12}\.jpg$")   # one file per background in the archive
 HISTORY_FILES = ("memory.json", "memory.md", "pinned.md", "summary.json")
 HISTORY_DIR = "history/"
 NEUTRAL = "#8a8f98"
@@ -33,6 +34,9 @@ def export_zip(root, data_dir, uid, name, include_history):
     if not os.path.isfile(os.path.join(path, "character.md")):
         raise EditorError("No such character.")
     members = [(f, os.path.join(path, f)) for f in CARD_FILES if os.path.isfile(os.path.join(path, f))]
+    for bid in editor.background_ids(root, name):
+        arc = "background.jpg" if bid == editor.LEGACY_ID else editor.BG_DIR + "/" + bid + ".jpg"
+        members.append((arc, editor.background_path(root, name, bid)))
     has_history = False
     if include_history:
         state = _state_dir(data_dir, uid, os.path.basename(path))
@@ -68,6 +72,10 @@ def _text_member(zf, info, label, limit=20000):
     return text
 
 
+def _is_background(n):
+    return n == "background.jpg" or bool(BG_MEMBER.match(n))
+
+
 def _check_members(zf):
     # Only known file names, no paths, and a total size limit, all checked before anything is extracted.
     allowed = set(CARD_FILES) | {"manifest.json"} | {HISTORY_DIR + f for f in HISTORY_FILES}
@@ -76,7 +84,7 @@ def _check_members(zf):
         if info.is_dir():
             continue
         n = info.filename
-        if n not in allowed:
+        if n not in allowed and not _is_background(n):
             raise EditorError(f"Unexpected file in the archive: {n}")
         total += info.file_size
         if total > MAX_UNPACKED:
@@ -132,7 +140,7 @@ def import_zip(root, data_dir, uid, username, data, admin=True):
                 creator = c["creator"].strip()[:40]
 
         icon = next(((n, zf.read(members[n])) for n in ("icon.png", "icon.jpg", "icon.webp") if n in members), None)
-        background = zf.read(members["background.jpg"]) if "background.jpg" in members else None
+        backgrounds = [zf.read(members[n]) for n in sorted(members) if _is_background(n)]
 
         history = {}
         for f in HISTORY_FILES:
@@ -152,8 +160,8 @@ def import_zip(root, data_dir, uid, username, data, admin=True):
         editor.record_creator(path, creator)
         if icon is not None:
             editor.save_icon(root, name, icon[1])
-        if background is not None:
-            editor.save_background(root, name, background)
+        for data in backgrounds:
+            editor.add_background(root, name, data)
     except Exception:
         if created:
             shutil.rmtree(path, ignore_errors=True)

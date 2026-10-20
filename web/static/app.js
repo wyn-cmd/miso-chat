@@ -46,7 +46,8 @@ function applyFont(name) {
 // as the whole bubble (per browser). Text switches black or white by the colour's brightness.
 let colorMap = {};        // name -> "#rrggbb"
 let iconSet = new Set(); // characters that have an icon.png/jpg/webp on the server
-let bgSet = new Set();   // solo characters that have a background.jpg on the server
+let bgIds = {};   // solo character -> ids of its backgrounds on the server
+let defaultArt = [];   // shared default backgrounds, used when a character has none
 const BUBBLE_CHOICES = ["badge", "bubble"];
 
 function hexToRgb(hex) {
@@ -209,8 +210,7 @@ function setChatHeader(name) {
     img.src = "/api/icon/" + encodeURIComponent(name);
     icon.appendChild(img);
   } else {
-    icon.textContent = name.charAt(0).toUpperCase();
-    if (colorMap[name]) icon.style.background = colorMap[name];
+    icon.appendChild(faceIcon(colorMap[name]));
   }
 }
 
@@ -314,9 +314,10 @@ function startEdit(box, i, m) {
   });
 }
 
-// Settings sheet: this character's creativity, the rolling window, and export.
+// Settings sheet: the per-character rows show or hide with a note when no character is open.
 function loadCharSettings() {
-  $("charSettings").hidden = !current;
+  for (const n of document.querySelectorAll(".char-only")) n.hidden = !current;
+  for (const n of document.querySelectorAll(".needs-char")) n.hidden = !!current;
   $("palaceRow").hidden = !(current && soloNames.includes(current));
   for (const id of ["tempSlider", "tempReset", "winSlider", "winReset", "exportMd", "exportTxt"]) $(id).disabled = !current;
   $("charMsg").textContent = "";
@@ -480,7 +481,7 @@ function iconFor(name) {
     img.loading = "lazy";
     icon.appendChild(img);
   } else {
-    icon.textContent = name.charAt(0).toUpperCase();
+    icon.appendChild(faceIcon(colorMap[name]));
   }
   return icon;
 }
@@ -550,6 +551,7 @@ function renderModels() {
   $("thinkToggle").checked = !!(me && me.thinking);
   if (me && me.avatar_shape) applyAvatarShape(me.avatar_shape);
   $("avatarShape").value = (me && me.avatar_shape) || "squircle";
+  if (me) setLook(me.bg_shade || 0, me.bubble_opacity || 72);
   renderReplyLength();
 }
 
@@ -564,6 +566,27 @@ function renderReplyLength() {
   $("replyVal").textContent = v == null ? "(no target)" : `${v} tokens`;
   $("replyReset").disabled = v == null;
   $("replyNote").textContent = `An aim for how long each reply should be, in tokens, not counting reasoning. The model is guided, not cut off. The server admin sets the range: ${lo} to ${hi} tokens.`;
+}
+
+// Background brightness and bubble opacity: dragging previews at once, release saves to the account.
+function setLook(shade, bubble) {
+  const s = Math.max(-100, Math.min(100, Math.round(shade) || 0));
+  const b = Math.max(30, Math.min(100, Math.round(bubble) || 72));
+  applyLook(s, b);
+  $("shadeSlider").value = s;
+  $("shadeVal").textContent = s === 0 ? "Default" : s < 0 ? "Darker " + -s : "Lighter " + s;
+  $("bubbleSlider").value = b;
+  $("bubbleVal").textContent = b + "%";
+}
+
+async function saveLook(key, value) {
+  try {
+    const data = await api("POST", "/api/settings", { [key]: value });
+    me[key] = data[key];
+    $("settingsMsg").textContent = "Saved.";
+  } catch (err) {
+    $("settingsMsg").textContent = err.message;
+  }
 }
 
 async function saveAvatarShape(shape) {
@@ -632,7 +655,8 @@ async function loadCharacters(choose = true) {
   const data = await api("GET", "/api/characters");
   colorMap = data.colors || {};
   iconSet = new Set(data.icons || []);
-  bgSet = new Set(data.backgrounds || []);
+  bgIds = data.bg_ids || {};
+  defaultArt = data.default_backgrounds || [];
   editableSet = new Set(data.editable || []);
   renderPersonas(data.personas || []);
   const solo = $("charList");
@@ -662,8 +686,15 @@ function applyChatArt(name) {
   // The whole page takes the art too, so the bars beside the chat column show the same picture.
   const section = $("chatSection");
   if (!section) return;
-  if (name && bgSet.has(name)) {
-    const art = 'url("/api/background/' + encodeURIComponent(name) + '")';
+  const ids = name ? (bgIds[name] || []) : [];
+  // A character without backgrounds of its own, or no character at all, takes a shared default.
+  const pool = ids.length
+    ? ids.map((b) => "/api/background/" + encodeURIComponent(name) + "?b=" + encodeURIComponent(b))
+    : defaultArt;
+  if (pool.length) {
+    // One picture is chosen at random each time the page or character opens.
+    const url = pool[Math.floor(Math.random() * pool.length)];
+    const art = 'url("' + url + '")';
     section.style.setProperty("--chat-art", art);
     document.body.style.setProperty("--chat-art", art);
     section.classList.add("has-art");
@@ -930,6 +961,7 @@ async function init() {
   if (me.is_admin) {
     $("adminLink").hidden = false;
     $("sandboxLink").hidden = false;
+    $("setAdminCard").hidden = false;
   }
   renderModels();
   if (me.must_change) {
@@ -1070,6 +1102,12 @@ $("scrim").addEventListener("click", closeSidebar);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSidebar(); });
 $("fontSelect").addEventListener("change", (e) => applyFont(e.target.value));
 $("bubbleSelect").addEventListener("change", (e) => applyBubbleStyle(e.target.value));
+$("shadeSlider").addEventListener("input", () => setLook(Number($("shadeSlider").value), Number($("bubbleSlider").value)));
+$("shadeSlider").addEventListener("change", () => saveLook("bg_shade", Number($("shadeSlider").value)));
+$("bubbleSlider").addEventListener("input", () => setLook(Number($("shadeSlider").value), Number($("bubbleSlider").value)));
+$("bubbleSlider").addEventListener("change", () => saveLook("bubble_opacity", Number($("bubbleSlider").value)));
+$("shadeReset").addEventListener("click", () => { setLook(0, Number($("bubbleSlider").value)); saveLook("bg_shade", 0); });
+$("bubbleReset").addEventListener("click", () => { setLook(Number($("shadeSlider").value), 72); saveLook("bubble_opacity", 72); });
 applyFont(localStorage.getItem("rp_font"));
 $("sizeDown").addEventListener("click", () => applySize(chatSize - 1));
 $("sizeUp").addEventListener("click", () => applySize(chatSize + 1));
@@ -1194,14 +1232,18 @@ init();
   });
 })();
 
-// Phone settings sheet. On phones the chat bar's font, name badge and size controls, and the sidebar's model, thinking and
-// character-creation controls move into a sheet opened from the Settings button beside the usage line. On desktop they go
-// straight back to their places. The controls keep their listeners when they move.
+// Settings sheet. Ten cards (nine categories and Admin) open one category at a time. On phones the chat bar's font, name
+// badge and size controls, and the sidebar's model, persona, character tools and memory move into the sheet. On desktop
+// they move in only while the sheet is open and go back to their places when it closes.
 (function settingsSheet() {
   const phone = window.matchMedia("(max-width: 760px)");
   const sheet = document.getElementById("settingsSheet");
   const btn = document.getElementById("settingsBtn");
   const closeBtn = document.getElementById("sheetClose");
+  const backBtn = document.getElementById("setBack");
+  const title = document.getElementById("sheetTitle");
+  const grid = document.getElementById("setGrid");
+  const panels = [...sheet.querySelectorAll(".set-panel")];
   const parts = [["fontSelect", "font"], ["bubbleSelect", "badge"], ["sizeCtl", "size"],
                  ["modelSection", "model"], ["editBox", "characters"], ["personaBox", "persona"], ["memBtn", "memory"]].map(([id, slot]) => {
     const node = document.getElementById(id);
@@ -1210,9 +1252,30 @@ init();
     return { node, home, slot };
   });
 
+  // Show one category, or the grid of cards when name is null.
+  function show(name) {
+    grid.hidden = !!name;
+    for (const p of panels) p.hidden = p.dataset.panel !== name;
+    backBtn.hidden = !name;
+    const card = name && sheet.querySelector('.set-card[data-panel="' + name + '"] .set-name');
+    title.textContent = card ? card.textContent : "Settings";
+  }
+  function place() {
+    const inSheet = phone.matches || !sheet.hidden;
+    for (const p of parts) {
+      if (inSheet) {
+        const slot = sheet.querySelector('[data-slot="' + p.slot + '"]');
+        if (p.node.parentNode !== slot) slot.appendChild(p.node);
+      } else if (p.home.nextSibling !== p.node) {
+        p.home.parentNode.insertBefore(p.node, p.home.nextSibling);
+      }
+    }
+  }
   function open() {
     sheet.hidden = false;
     btn.setAttribute("aria-expanded", "true");
+    show(null);
+    place();
     loadCharSettings();
     closeBtn.focus();
   }
@@ -1220,24 +1283,22 @@ init();
     if (sheet.hidden) return;
     sheet.hidden = true;
     btn.setAttribute("aria-expanded", "false");
+    place();
     if (refocus) btn.focus();
-  }
-  function place() {
-    for (const p of parts) {
-      if (phone.matches) {
-        const slot = sheet.querySelector('[data-slot="' + p.slot + '"]');
-        if (p.node.parentNode !== slot) slot.appendChild(p.node);
-      } else if (p.home.nextSibling !== p.node) {
-        p.home.parentNode.insertBefore(p.node, p.home.nextSibling);
-      }
-    }
-    if (!phone.matches) close(false);
   }
 
   btn.addEventListener("click", open);
   closeBtn.addEventListener("click", () => close(true));
+  backBtn.addEventListener("click", () => { show(null); });
+  grid.addEventListener("click", (e) => {
+    const card = e.target.closest(".set-card");
+    if (card) { show(card.dataset.panel); backBtn.focus(); }
+  });
   sheet.addEventListener("click", (e) => { if (e.target === sheet) close(true); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(true); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || sheet.hidden) return;
+    if (grid.hidden) show(null); else close(true);   // Escape steps back from a category before closing
+  });
   document.getElementById("editNewBtn").addEventListener("click", () => close(false));
   if (phone.addEventListener) phone.addEventListener("change", place); else phone.addListener(place);
   place();
@@ -1280,7 +1341,7 @@ init();
   const headerChat = document.getElementById("headerChat");
   const accountSlot = document.getElementById("accountSlot");
   const section = document.getElementById("chatSection");
-  const parts = [["chatIcon", "chat"], ["chatTitle", "chat"], ["undoBtn", "chat"], ["rollBtn", "chat"], ["settingsBtn", "chat"], ["adminLink", "account"], ["pwBtn", "account"], ["logoutBtn", "account"]]
+  const parts = [["chatIcon", "chat"], ["chatTitle", "chat"], ["rollBtn", "chat"], ["settingsBtn", "chat"], ["adminLink", "account"], ["pwBtn", "account"], ["logoutBtn", "account"]]
     .map(([id, group]) => {
       const node = document.getElementById(id);
       const home = document.createComment("home:" + id);   // where the control belongs on desktop
@@ -1288,7 +1349,20 @@ init();
       return { node, home, group };
     });
 
+  // On phones the Undo button sits beside the Tree button; on desktop it returns to its own place.
+  const undo = document.getElementById("undoBtn");
+  const undoHome = document.createComment("home:undoBtn");
+  undo.parentNode.insertBefore(undoHome, undo);
+  const branchTree = document.getElementById("branchTree");
+  function placeUndo() {
+    if (phone.matches) {
+      if (undo.previousElementSibling !== branchTree) branchTree.parentNode.insertBefore(undo, branchTree.nextSibling);
+    } else if (undoHome.nextSibling !== undo) {
+      undoHome.parentNode.insertBefore(undo, undoHome.nextSibling);
+    }
+  }
   function place() {
+    placeUndo();
     const locked = document.body.classList.contains("locked");
     for (const p of parts) {
       let dest = null;

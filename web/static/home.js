@@ -76,30 +76,33 @@ function setSidebar(open) {
 
 function renderCards(cards) {
   const grid = $("homeGrid");
+  stopArt(grid);
   grid.textContent = "";
-  for (const card of cards) grid.appendChild(renderCard(card));
+  for (const card of cards) grid.appendChild(renderCard(card, grid));
 }
 
 // Suggestions from this account's chats. Each one reuses its gallery card plus the shared tags.
 function renderRecommended(recs, cards) {
   const byName = new Map(cards.map((c) => [c.name, c]));
   const grid = $("recGrid");
+  stopArt(grid);
   grid.textContent = "";
   for (const r of recs) {
     const card = byName.get(r.name);
     if (!card) continue;
-    const wrap = renderCard(card);
+    const wrap = renderCard(card, grid);
     wrap.querySelector(".home-text").appendChild(el("span", "Shares tags: " + r.tags.join(", "), "home-reason"));
     grid.appendChild(wrap);
   }
   $("homeRecs").hidden = grid.childElementCount === 0;
 }
 
-function renderCard(card) {
+function renderCard(card, container) {
   const wrap = el("div", "", "home-card");
-  if (card.has_background) {
+  const artIds = (card.backgrounds || []).length ? card.backgrounds : (card.default_backgrounds || []);
+  if (artIds.length) {
     wrap.classList.add("has-art");
-    wrap.style.setProperty("--card-art", 'url("/api/background/' + encodeURIComponent(card.name) + '")');
+    buildArt(wrap, card.name, artIds, container);
   }
 
   const open = el("button", "", "home-open");
@@ -115,7 +118,7 @@ function renderCard(card) {
     img.src = "/api/icon/" + encodeURIComponent(card.name);
     avatar.appendChild(img);
   } else {
-    avatar.textContent = card.name.charAt(0).toUpperCase() || "?";
+    avatar.appendChild(faceIcon(card.color));
   }
   open.appendChild(avatar);
 
@@ -146,11 +149,14 @@ function renderCard(card) {
 }
 
 function showInfo(card) {
-  // The character's background sits behind the card, darker at the bottom so the text reads.
+  // The character's backgrounds sit behind the dialog, darker at the bottom so the text reads.
   const dlg = $("infoDialog");
-  dlg.classList.toggle("has-art", !!card.has_background);
-  if (card.has_background) dlg.style.setProperty("--info-art", 'url("/api/background/' + encodeURIComponent(card.name) + '")');
-  else dlg.style.removeProperty("--info-art");
+  stopArt(dlg);
+  dlg.querySelector(":scope > .art-stack")?.remove();
+  const ids = (card.backgrounds || []).length ? card.backgrounds : (card.default_backgrounds || []);
+  dlg.classList.toggle("has-art", ids.length > 0);
+  if (ids.length) buildArt(dlg, card.name, ids, dlg);
+  dlg.addEventListener("close", () => stopArt(dlg), { once: true });
   $("infoTitle").textContent = card.name;
   $("infoHeadline").textContent = card.headline || "";
   $("infoCreator").textContent = "Created by " + (card.creator || "admin");
@@ -160,6 +166,70 @@ function showInfo(card) {
   $("infoBody").textContent = card.info || (card.pending ? "This character's profile is still being written." : "No profile yet. An admin can add one.");
   $("infoStart").onclick = () => openChat(card.name);
   $("infoDialog").showModal();
+}
+
+// ---- Background art. Each card or dialog shows one of its backgrounds at random, then fades to another
+// after 5 to 8 seconds. Reduced motion keeps the first random pick still.
+const ART_MIN_MS = 5000;
+const ART_SPREAD_MS = 3000;
+const artRuns = new Map();   // container -> list of stop functions
+const REDUCE_MOTION = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+
+function artPath(name, bid) {
+  if (bid.charAt(0) === "/") return bid;   // a shared default, already a path
+  return "/api/background/" + encodeURIComponent(name) + "?b=" + encodeURIComponent(bid);
+}
+
+function otherId(ids, current) {
+  const pool = ids.length > 1 ? ids.filter((x) => x !== current) : ids;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function stopArt(container) {
+  for (const stop of artRuns.get(container) || []) stop();
+  artRuns.delete(container);
+}
+
+// Two image layers fade into each other, with a shade on top. The stack sits behind the text.
+function buildArt(host, name, ids, container) {
+  const stack = el("span", "", "art-stack");
+  stack.setAttribute("aria-hidden", "true");
+  const layers = [el("span", "", "art-layer"), el("span", "", "art-layer")];
+  stack.append(...layers, el("span", "", "art-shade"));
+  host.prepend(stack);
+
+  let current = ids[Math.floor(Math.random() * ids.length)];
+  let front = 0;
+  layers[0].style.backgroundImage = 'url("' + artPath(name, current) + '")';
+  layers[0].classList.add("on");
+  if (ids.length < 2 || REDUCE_MOTION) return;
+
+  let timer = null;
+  let stopped = false;
+  const schedule = () => { timer = setTimeout(step, ART_MIN_MS + Math.random() * ART_SPREAD_MS); };
+  const step = () => {
+    timer = null;
+    if (stopped || !stack.isConnected) return;
+    if (document.hidden) { schedule(); return; }
+    const next = otherId(ids, current);
+    const pre = new Image();
+    pre.onload = () => {
+      if (stopped) return;
+      const back = layers[1 - front];
+      back.style.backgroundImage = 'url("' + artPath(name, next) + '")';
+      back.classList.add("on");
+      layers[front].classList.remove("on");
+      front = 1 - front;
+      current = next;
+      schedule();
+    };
+    pre.onerror = schedule;
+    pre.src = artPath(name, next);
+  };
+  schedule();
+  const stop = () => { stopped = true; clearTimeout(timer); };
+  if (!artRuns.has(container)) artRuns.set(container, []);
+  artRuns.get(container).push(stop);
 }
 
 function openChat(name) {

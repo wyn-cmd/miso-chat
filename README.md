@@ -4,6 +4,28 @@ Miso Chat is a roleplay chat app that talks to Gemini, with optional DeepSeek, l
 
 This is a personal project. It is built for use on one machine or a private network. It is not hardened for the open internet. See Security below.
 
+## Screenshots
+
+The pictures below use six made-up characters, with generated art and made-up chats. They show no real account, character or data.
+
+![Sign in](docs/screenshots/01-login-desktop.png)
+
+![Search and home page](docs/screenshots/02-search-desktop.png)
+
+![A chat on desktop](docs/screenshots/03-chat-desktop.png)
+
+![Settings grid on desktop](docs/screenshots/04-settings-grid-desktop.png)
+
+![Appearance settings with the background and bubble sliders](docs/screenshots/05-settings-appearance-desktop.png)
+
+![The character editor with several backgrounds](docs/screenshots/09-editor-backgrounds-desktop.png)
+
+![The character info card](docs/screenshots/08-info-card-desktop.png)
+
+![A chat on a phone](docs/screenshots/06-chat-phone.png)
+
+![Settings grid on a phone](docs/screenshots/07-settings-grid-phone.png)
+
 ## Requirements
 
 - Python 3.11 or newer. The code was tested with Python 3.11 on Windows.
@@ -130,7 +152,14 @@ Admins can import a zip made by this app (format `miso-character`, version 1). A
 
 ## Chat backgrounds
 
-Admins can upload a background for a character as a PNG, JPEG or WebP file up to 10 MB. The app resizes it to at most 1,280 pixels wide and keeps its colours; dark mode darkens the page slightly on screen. It appears on the character's home card and behind its chat. A background is never read by OCR and is never used as the profile picture.
+Admins add backgrounds to a character in the character editor. A character can have up to 10. Each file is a PNG, JPEG or WebP picture up to 10 MB, and the app resizes it to at most 1,280 pixels on its longest side. Remove one with its Remove button.
+
+- A chat picks one background at random each time it opens.
+- Home cards and the info card cycle through the backgrounds at random. Each change waits 5 to 8 seconds, then fades to the next picture. Reduced-motion settings keep one still picture.
+- A character with no backgrounds uses the shared defaults in `web/static/defaults/`. These cycle the same way.
+- Under Settings, Appearance, two sliders set the background brightness (darker or lighter) and the chat bubble opacity. Each account keeps its own values.
+
+A background is never read by OCR and is never used as the profile picture.
 
 ## Characters and personas
 
@@ -138,12 +167,12 @@ Each character is a folder in the project root.
 
 - `character.md` holds the card. The first line is `Character Persona: <Name>`, and a line `Colour: <name or #hex>` sets the colour used for the name badge and bubble.
 - `context.md` (optional) holds memories, places and situations, and is added to the prompt.
-- `icon.png` or `icon.jpg` (optional) is shown beside the name. Without one, the app shows a coloured initial.
+- `icon.png` or `icon.jpg` (optional) is shown beside the name. Without one, the app shows a face in the character's colour.
 - Names can hold any characters, such as `Dr. Fox: Night Form` or `Fox [Night]`. Windows folder names can't hold `< > : " / \ | ? *` or `%`, so those are percent-encoded in the folder name: `Dr. Fox: Night Form` lives in the folder `Dr. Fox%3A Night Form`. The name shown in chat comes from the folder name, or from the `Character Persona:` line when it is present.
 - `memory.json` and `memory.md` are written by the app as the chat runs. Do not edit them while a chat is open.
 - `creator.json` names the account that created the character. Characters without it are credited to `admin`.
 - `profile.json` holds the public headline, summary and tags shown on the home page. It is written from the card when you use Auto-fill, and is never sent into the roleplay prompt.
-- `background.jpg` (optional) is set by upload in the editor. It is used on the home card and behind the whole chat page.
+- `backgrounds/` (optional) holds up to 10 pictures, one JPEG file each, added and removed in the editor. A chat, a home card and the info card use them. An older `background.jpg` still works.
 - `palace.json` holds the Mind Palace entries.
 
 A group chat is a folder with a `group_config.json` that lists its members.
@@ -154,7 +183,7 @@ This copy ships with no character or persona folders. Create a character folder,
 
 ## Word substitutions
 
-An optional `substitutions.json` in the project root maps a word or phrase to a replacement, for example `{"old word": "new word"}`. Matching is whole-word and longest phrase first, and the replacement is applied to your messages before they are sent. This copy ships with no substitutions.
+An optional `substitutions.json` in the project root maps a word or phrase to a replacement, for example `{"old word": "new word"}`. Matching is whole-word and longest phrase first, and the replacement is applied to your messages before they are sent.
 
 ## Data and what is not included
 
