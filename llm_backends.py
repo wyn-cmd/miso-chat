@@ -384,21 +384,6 @@ def _claude_usage(usage):
     return usage_obj(prompt, usage.get("output_tokens"), None, read)
 
 
-def caching_for(model):
-    # (provider, how its prompt cache works). Used for logs and the cache report.
-    name = "gemini"
-    for prefix, label in PREFIXES.items():
-        if (model or "").startswith(prefix):
-            name = label
-            break
-    notes = {
-        "deepseek": "automatic prefix cache",
-        "local": "server prefix cache, on only if the server enables it",
-        "claude": "Claude Code manages its own cache",
-        "gemini": "implicit cache on Gemini 2.5 models; other models not verified",
-    }
-    return name, notes[name]
-
 
 # ---------------------------------------------------------------- routing
 
