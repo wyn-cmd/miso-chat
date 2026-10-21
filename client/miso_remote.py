@@ -28,7 +28,7 @@ PORTRAIT_ROWS = 40
 PORTRAIT_MAX_COLS = 100
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".miso_remote", "portraits")
 # Keep in step with VERSION at the project root. A server must share this major.minor.
-CLIENT_VERSION = "1.3.1-beta"
+CLIENT_VERSION = "1.3.1"
 
 
 class ApiError(Exception):

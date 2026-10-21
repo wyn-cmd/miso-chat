@@ -1,9 +1,10 @@
-Miso Chat 1.3.1-beta update
+Miso Chat 1.3.1 update
 
-This update brings the server to 1.3.1-beta. It adds several backgrounds per character (added and removed in the
+This update brings the server to 1.3.1. It adds several backgrounds per character (added and removed in the
 character editor), random backgrounds on chats and cards, shared default backgrounds, face icons for characters with no
 picture, background brightness and bubble opacity sliders in Appearance, a grid of settings cards, and the phone Undo
-placement.
+placement. It also removes an unused script (safe_save.py) and some unused internal helpers. Nothing a user sees changes
+because of that clean-up.
 
 The version is still 1.3 at the major and minor level, so terminal clients from 1.3.0 keep connecting. Download the
 terminal client from the web app or the release page to get the matching file.
@@ -16,6 +17,9 @@ terminal client from the web app or the release page to get the matching file.
 4. No packages changed. You do not need to install anything.
 5. Data changes are automatic on start. Backgrounds are stored in a backgrounds/ folder inside each character folder.
    An existing background.jpg keeps working. New backgrounds go into backgrounds/.
-6. Start the web app again. Check that the login page opens and an existing account can sign in. Check that a character
+6. Word substitutions: the new default list only goes into a new substitutions.json. An existing substitutions.json is
+   kept as it is. To use the new defaults on an existing server, merge them into your file by hand, or rename the file
+   and let the app write a fresh copy.
+7. Start the web app again. Check that the login page opens and an existing account can sign in. Check that a character
    card shows a background, that Settings shows the grid of cards, and that Appearance shows the two new sliders.
-7. The sliders are per account and start at the default, so nothing looks different until someone moves one.
+8. The sliders are per account and start at the default, so nothing looks different until someone moves one.
