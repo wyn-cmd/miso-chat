@@ -1,5 +1,7 @@
 # Miso Chat
 
+[![Visitors](https://komarev.com/ghpvc/?username=wyn-cmd-miso-chat&label=visitors&color=blue&style=flat)](https://github.com/wyn-cmd/miso-chat) ![Stars](https://img.shields.io/github/stars/wyn-cmd/miso-chat?style=flat) ![Forks](https://img.shields.io/github/forks/wyn-cmd/miso-chat?style=flat) ![Last commit](https://img.shields.io/github/last-commit/wyn-cmd/miso-chat?style=flat) ![License](https://img.shields.io/github/license/wyn-cmd/miso-chat?style=flat)
+
 Miso Chat is a roleplay chat app that talks to Gemini, with optional DeepSeek, local OpenAI-style server and Claude Code backends. It is a FastAPI web app for several accounts: each account has its own chat history, memory and persona choice, and the admin manages accounts, usage caps, token budgets, providers, character cards and icons, and a stats page.
 
 This is a personal project. It is built for use on one machine or a private network. It is not hardened for the open internet. See Security below.
@@ -41,6 +43,8 @@ The pictures below use six made-up characters, with generated art and made-up ch
     copy .env.example .env        (or: cp .env.example .env)
 
 Open `.env` and set `GEMINI_API_KEY`. The app reads `.env` when it starts. A value that is already set in the environment wins over the file.
+
+Gemini's free tier works for trying Miso Chat out. Get a key from Google AI Studio and set it as above. The free tier has low per-minute and per-day limits, so a busy chat or group chat can hit rate limits (HTTP 429). Some models have a small input-token cap on the free tier (Gemma 4 31B, for example), so pick a Gemini Flash or Flash-lite model if a turn fails. Not every model has been checked on the free tier, so test the models you plan to use.
 
 ### Tesseract on Windows
 
