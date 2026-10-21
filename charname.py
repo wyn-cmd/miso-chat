@@ -6,7 +6,6 @@
 # The folder name is the stable ID used on disk, in group_config.json, personas.json and inside the
 # web API. Ordinary names (letters, digits, spaces, _ - . and non-ASCII letters) map to themselves,
 # so existing folders keep their names.
-import os
 import re
 
 _FORBIDDEN = '<>:"/\\|?*%'
@@ -46,13 +45,6 @@ def display_for(folder):
     # Folder name -> display name. Every '%' in a folder name is an escape, so this is an exact inverse.
     return _ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), str(folder))
 
-
-def resolve_folder(arg, root="."):
-    # A character or group argument from the command line: an existing folder name, or a display name.
-    if os.path.isdir(os.path.join(root, arg)):
-        return arg
-    encoded = folder_for(arg)
-    return encoded
 
 
 def check_display(name):
