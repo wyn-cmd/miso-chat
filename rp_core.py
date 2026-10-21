@@ -14,7 +14,6 @@ import json
 import time
 import random
 import copy
-import shutil
 import threading
 import datetime
 from dataclasses import dataclass, field
@@ -91,7 +90,13 @@ PRIORITY_MODELS = ["gemini-3.8-flash", "gemma-4-31b-it"]
 MEMORY_MODELS_HEAD = ["gemini-3.8-flash", "gemma-4-31b-it"]
 MEMORY_MODELS_TAIL = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
 
-DEFAULT_SUBSTITUTIONS = {}
+DEFAULT_SUBSTITUTIONS = {
+    
+    
+    
+    
+    
+}
 
 NARRATIVE_INSTRUCTION = (
     "\n\nCRITICAL NARRATIVE INSTRUCTION: Adopt a high-literary, impressionistic style. "
@@ -229,12 +234,6 @@ def get_safe_color(col, fallback="#00ffff"):
     return mapping.get(col, fallback)
 
 
-def timestamp_now():
-    now = datetime.datetime.now()
-    hour = str(int(now.strftime("%I")))
-    ampm = "p.m." if now.strftime("%p").lower() == "pm" else "a.m."
-    return f"{now.day}/{now.month}/{now.strftime('%y')} {hour}:{now.strftime('%M')} {ampm}"
-
 
 def safety_settings():
     dangerous = (types.HarmCategory.DANGEROUS_CONTENT
@@ -249,13 +248,6 @@ def safety_settings():
 
 
 # ---------------------------------------------------------------- history
-
-def _load_json_file(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
 
 
 def _write_history(path, history):
@@ -564,37 +556,6 @@ class Engine:
         # group chats skip Gemma (its free tier is too small), but keep every other backend
         self.group_models = [m for m in models if "gemma" not in m.lower()]
         return models
-
-    def create_profile_folder(self):
-        # Make a new character folder with a starter character.md and empty memory.json.
-        os.makedirs(self.ai_dir, exist_ok=True)
-        self.log(f"[yellow]AI profile folder '{self.ai_dir}' not found. Creating it...[/yellow]")
-        if os.path.exists("character.md"):
-            shutil.copy("character.md", self.character_file)
-        else:
-            with open(self.character_file, "w", encoding="utf-8") as f:
-                f.write("# Character Persona: " + display_for(self.ai_dir) + "\nColour: Cyan\n- **Personality:** Immersive roleplay partner.")
-        if not os.path.exists(self.memory_file):
-            with open(self.memory_file, "w", encoding="utf-8") as f:
-                json.dump([], f)
-        self.created = True
-
-    def generate_summary(self):
-        # Short intro for a freshly created character. Not counted as a request, as before.
-        name = self.character_name
-        self.log(f"[dim magenta]🧠 Generating character summary for {name} using {self.model_name}... (owo)[/dim magenta]")
-        fallback = f"**{name}**\n\n{self.character_prompt}"
-        try:
-            summary_prompt = (
-                f"You are an expert narrative architect. Read the character profile below and provide a concise, engaging summary of {name}, "
-                "detailing their name, appearance, personality, and setting in a rich, immersive narrative overview.\n\n"
-                f"Character Profile:\n{self.character_prompt}"
-            )
-            resp = self.client.models.generate_content(model=self.model_name, contents=summary_prompt)
-            text = _text(resp)
-            return text.strip() if text else fallback
-        except Exception:
-            return fallback
 
     def load_profile(self):
         # Read substitutions, character, user persona, memory bank and history from disk.

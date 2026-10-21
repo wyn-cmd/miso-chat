@@ -2,6 +2,41 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.3.1 - 2026-10-20
+
+The first full release of the 1.3.1 line. It includes everything in 1.3.1-beta and the changes from its beta follow-ups, plus the clean-up below. It keeps the 1.3 protocol, so terminal clients from 1.3.0 still connect.
+
+### Added
+
+- Character backgrounds (up to 10 per character), random picks on chat open and timed cycling on cards.
+- Face icons for characters with no picture, in the character's colour.
+- Appearance sliders for background brightness and chat bubble opacity, kept per account.
+- Settings as a grid of category cards.
+- Default word substitutions in `rp_core.py` for a short private list of words. New installs get them in `substitutions.json`. Existing installs keep their own file, so they do not change unless you merge the defaults in by hand.
+
+### Changed
+
+- Chat look and creativity sit under Appearance and Character. Persona is a card of its own.
+- On phones the Undo button sits beside the Tree button.
+- The terminal client's `CLIENT_VERSION` now matches the server version (1.3.1).
+
+### Removed
+
+- `safe_save.py`. It was a standalone script that nothing in the app imported. Memory banks are saved by the app's own writers, which were not changed.
+- Unused internal helpers (`resolve_folder`, `caching_for`, `timestamp_now`, `_load_json_file`, and two `rp_core.py` methods that were never called). No route, response or screen changed.
+
+### Upgrading
+
+Follow `UPDATE.txt`. Keep `.env` safe: it holds `MISO_SECRET_KEY`, and two-factor secrets cannot be read without it.
+
+## 1.3.1-beta-3 - 2026-10-20
+
+A beta follow-up to 1.3.1-beta. It keeps the 1.3 protocol, so terminal clients from 1.3.0 still connect.
+
+### Changed
+
+- Default word substitutions in `rp_core.py`: an optional private list.
+
 ## 1.3.1-beta - 2026-10-20
 
 A beta that adds character backgrounds, face icons, appearance sliders and a settings grid. It keeps the 1.3 protocol, so terminal clients from 1.3.0 still connect.
