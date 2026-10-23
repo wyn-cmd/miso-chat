@@ -39,6 +39,9 @@ async function openEditor(name) {
   $("edBgErr").textContent = "";
   $("edBgSave").disabled = true;
   pendingBgs = [];
+  pendingIcon = null;
+  pendingPalace = [];
+  $("edImportMsg").textContent = "";
   $("edBgNote").textContent = "";
   $("edExportErr").textContent = "";
   if (name) {
@@ -136,6 +139,32 @@ async function saveCharacter(ev) {
       body.name = $("edName").value.trim();
       saved = await api("POST", "/api/admin/characters", body);
       editing = saved.name;
+      // An imported card's picture and lorebook are saved now that the character folder exists.
+      if (pendingIcon) {
+        try {
+          const r = await fetch("/api/admin/characters/" + encodeURIComponent(saved.name) + "/icon", {
+            method: "POST",
+            headers: { "X-Requested-With": "roleplay", "Content-Type": "application/octet-stream" },
+            credentials: "same-origin",
+            body: await pendingIcon.arrayBuffer(),
+          });
+          if (!r.ok) throw new Error("the picture was not saved");
+        } catch (err) {
+          $("edErr").textContent = "Created " + saved.name + ", but " + err.message + ".";
+        }
+        pendingIcon = null;
+        $("edImportFile").value = "";
+      }
+      if (pendingPalace.length) {
+        palaceEntries = pendingPalace;
+        pendingPalace = [];
+        renderPalace();
+        try {
+          await savePalace();
+        } catch (err) {
+          $("edErr").textContent = "Created " + saved.name + ", but the lorebook was not saved: " + err.message;
+        }
+      }
       if (pendingBgs.length) {
         // The folder exists now, so the queued backgrounds are sent in the order chosen.
         let failed = "";
@@ -385,6 +414,57 @@ async function removeBackground(item) {
   }
 }
 
+// ---- Import a character card (SillyTavern JSON or PNG). The picture and lorebook wait for Create.
+let pendingIcon = null;    // the imported PNG, saved as the character's picture once it exists
+let pendingPalace = [];    // the imported lorebook, saved as Mind Palace entries once it exists
+
+async function importCard() {
+  const file = $("edImportFile").files[0];
+  if (!file) {
+    $("edImportMsg").textContent = "Choose a .json or .png card first.";
+    return;
+  }
+  $("edImportMsg").textContent = "Reading the card.";
+  $("edImportBtn").disabled = true;
+  try {
+    const r = await fetch("/api/admin/character-import", {
+      method: "POST",
+      headers: {
+        "X-Requested-With": "roleplay",
+        "Content-Type": file.type || "application/octet-stream",
+        "X-Filename": encodeURIComponent(file.name),
+      },
+      credentials: "same-origin",
+      body: file,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || "The card could not be imported.");
+    const hasText = $("edCard").value.trim() || $("edHeadline").value.trim() || $("edInfo").value.trim();
+    if (hasText && !confirm("Replace the card, context, headline, summary and tags with the imported card? A name you typed is kept.")) {
+      $("edImportMsg").textContent = "Kept your text. Nothing was changed.";
+      return;
+    }
+    if (data.name && !$("edName").value.trim()) $("edName").value = data.name;
+    $("edCard").value = data.character;
+    $("edContext").value = data.context;
+    $("edHeadline").value = data.headline;
+    $("edInfo").value = data.info;
+    setTags(data.tags);
+    pendingIcon = data.icon ? file : null;
+    pendingPalace = data.palace || [];
+    const parts = ["Card imported. Check it, then Create."];
+    if (pendingIcon) parts.push("The PNG will be the picture.");
+    if (pendingPalace.length) parts.push(`${pendingPalace.length} lorebook entries will be saved to the Mind Palace.`);
+    $("edImportMsg").textContent = parts.concat(data.notes || []).join(" ");
+  } catch (err) {
+    $("edImportMsg").textContent = err.message;
+  } finally {
+    $("edImportBtn").disabled = false;
+  }
+}
+
+$("edImportBtn").addEventListener("click", importCard);
+
 // ---- Draft from a file: fills the new-character form for review. Nothing is saved until Create.
 async function draftFromFile() {
   const file = $("edDraftFile").files[0];
@@ -453,6 +533,10 @@ function renderPalaceList(list, entries, readOnly) {
   entries.forEach((entry, index) => {
     const wrap = document.createElement("div");
     wrap.className = "palace-entry";
+    // The id and the automatic flag are not shown as fields, but they must survive an edit.
+    wrap.dataset.id = entry.id || "";
+    wrap.dataset.auto = entry.auto ? "1" : "";
+    if (entry.auto) wrap.appendChild(palaceField("p", { class: "muted palace-auto", text: "Added automatically" }));
     const title = palaceField("input", { placeholder: "Title (optional)", "aria-label": "Entry title", "data-field": "title" });
     title.value = entry.title;
     const keys = palaceField("input", { placeholder: "Keys, comma separated", "aria-label": "Keys that trigger this entry", "data-field": "keys" });
@@ -512,6 +596,8 @@ function readPalaceList(list) {
     const field = (name) => wrap.querySelector(`[data-field="${name}"]`);
     const list = (name) => field(name).value.split(",").map((k) => k.trim()).filter(Boolean);
     return {
+      id: wrap.dataset.id || "",
+      auto: wrap.dataset.auto === "1",
       title: field("title").value.trim(),
       keys: list("keys"),
       secondary: list("secondary"),
@@ -736,12 +822,25 @@ async function openMyPalace() {
     const data = await api("GET", "/api/character-palace?character=" + encodeURIComponent(current));
     $("palRecursive").checked = !!data.recursive;
     $("palBudget").value = data.budget;
+    $("palEpisodes").checked = data.episodes !== false;
+    setAutoFields(data.auto);
     renderPalaceList($("palList"), data.entries, false);
   } catch (err) {
     $("chatErr").textContent = err.message;
     return;
   }
   $("palaceDlg").showModal();
+}
+
+// The automatic-entry controls in the Mind Palace dialog.
+function setAutoFields(auto) {
+  $("palAutoOn").checked = !!(auto && auto.enabled);
+  $("palAutoEvery").value = auto ? auto.every : 3;
+  $("palAutoLimit").value = auto ? auto.limit : 20;
+}
+
+function readAutoFields() {
+  return { enabled: $("palAutoOn").checked, every: Number($("palAutoEvery").value), limit: Number($("palAutoLimit").value) };
 }
 
 async function saveMyPalace() {
@@ -752,7 +851,10 @@ async function saveMyPalace() {
       entries: readPalaceList($("palList")),
       recursive: $("palRecursive").checked,
       budget: Number($("palBudget").value),
+      auto: readAutoFields(),
+      episodes: $("palEpisodes").checked,
     });
+    setAutoFields(data.auto);
     renderPalaceList($("palList"), data.entries, false);
     $("palMsg").textContent = "Saved. Applies from your next message.";
   } catch (err) {

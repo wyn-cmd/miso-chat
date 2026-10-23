@@ -23,7 +23,7 @@ import pytz
 from google.genai import types
 from charname import display_for
 import sandbox
-from web import palace
+from web import palace, episodes, memory_bank, dreams
 
 
 def _mk(text):
@@ -121,6 +121,16 @@ GROUP_RULE = (
     "\n\nCRITICAL: You are part of a group chat. Provide a unique response to the user's input. "
     "Do not repeat what other group members have already said in this turn. Focus on your "
     "specific character's perspective."
+)
+MEMORY_CHANGES_PROMPT = (
+    "You keep a roleplay character's memory bank (memory.md) up to date. You are given the existing memory bank "
+    "and the latest messages. Reply with changes only, one per line, in exactly these forms:\n"
+    "ADD: [Section] one new fact, written as one line. Section is one of: Locations, Relationships, "
+    "Major Plot Points, Key Facts, Secrets / Hidden Motivations.\n"
+    "UPDATE: the exact existing line => the corrected line\n"
+    "REMOVE: the exact existing line, only when the chat shows it is no longer true\n"
+    "Track every location visited or mentioned, with its state and events. Add only what is new and lasting. "
+    "Do not repeat facts already in the bank. If nothing has changed, reply NONE. Write nothing else."
 )
 MEMORY_PROMPT = (
     "You are an expert narrative architect. Update and evolve the existing memory bank in Markdown format (memory.md) using the provided new roleplay history snippet (the last 10 messages). "
@@ -499,6 +509,18 @@ class Engine:
         self.summary_text = ""
         self.summary_covered = 0           # how many messages from the start the summary already covers
         self._load_summary()
+        self.episodes_file = os.path.join(self.state_dir, "episodes.json")
+        self.episodes = []                 # episodic memory: messages that left the window, cut into short episodes
+        self.episodes_covered = 0          # how many messages from the start are already in an episode
+        self.episodes_enabled = True       # the admin switch; the character's own switch is read each turn
+        self.episodes_on = True            # the switch in effect for this turn: admin switch and the palace setting
+        self.episode_text = ""
+        self.episode_vectors = {}          # query text hash -> vector, for the few turns that need a similarity search
+        self.dream_file = os.path.join(self.state_dir, "dream.json")
+        self.dream_calls = 0               # model calls the last dream made, for the server's dream cap
+        last = _read_json(self.dream_file, {})
+        self.dream_len = int(last.get("len", 0)) if isinstance(last, dict) else 0   # history length at the last dream
+        self._load_episodes()
         self.group_config_file = os.path.join(ai_dir, "group_config.json")
         # per account and character, next to memory.json; only when the character's flag is on
         self.sandbox_root = sandbox.root_for(self.state_dir) if sandbox.is_enabled(ai_dir) else None
@@ -713,6 +735,8 @@ class Engine:
         # unchanged prefix; putting this first would break the cache on every message.
         if self.palace_text:
             prompt += "\n\n--- Mind Palace (matched entries) ---\n" + self.palace_text
+        if self.episode_text:
+            prompt += "\n\n--- Earlier moments that match this conversation (episodic memory) ---\n" + self.episode_text
         prompt += self.reply_length_clause()
         self.system_prompt = prompt
 
@@ -798,7 +822,40 @@ class Engine:
             blocks = palace.match(entries, recent + [str(processed or "")], cfg["budget"], cfg["recursive"])
         # Rebuilt every turn, so an admin switch to memory or the palace takes effect at once.
         self.palace_text = "\n\n".join(blocks)
+        self._refresh_episodes(processed)
         self._build_system_prompt()
+
+    def _refresh_episodes(self, processed):
+        # Episodic memory for this turn. Keywords first, which costs nothing. Only when they find nothing, and some
+        # episodes have vectors, is the new message embedded and matched by similarity.
+        _, pcfg = palace.load_all(self.palace_dir or self.ai_dir)
+        self.episodes_on = self.episodes_enabled and pcfg["episodes"]
+        self.episode_text = ""
+        if not (self.episodes_on and self.episodes):
+            return
+        visible_from = max(0, len(self.full_history) - self.window_size())
+        texts = [str(m.get("text") or "") for m in self.full_history[-episodes.SCAN_MESSAGES:]] + [str(processed or "")]
+        blocks = episodes.recall_keywords(self.episodes, texts, visible_from)
+        if not blocks and str(processed or "").strip() and any(e.get("vec") for e in self.episodes):
+            query = self._query_vector(str(processed))
+            if query:
+                blocks = episodes.recall_vectors(self.episodes, query, visible_from)
+        self.episode_text = "\n\n".join(blocks)
+
+    def _query_vector(self, text):
+        # One embedding for the message being sent, reused if the same text is asked again. None when it fails.
+        key = episodes.query_key(text)
+        if key in self.episode_vectors:
+            return self.episode_vectors[key]
+        vectors = episodes.embed(self.client, [text])
+        if vectors is None:
+            return None
+        self._count_request(episodes.EMBED_MODEL)
+        self._count_tokens(episodes.estimate_tokens([text]), episodes.EMBED_MODEL)
+        if len(self.episode_vectors) >= 32:
+            self.episode_vectors = {}
+        self.episode_vectors[key] = vectors[0]
+        return vectors[0]
 
     def send(self, processed, on_delta=None, on_think=None):
         self._refresh_palace(processed)
@@ -1178,6 +1235,10 @@ class Engine:
         del self.full_history[last_user:]
         with open(self.memory_file, "w", encoding="utf-8") as f:
             json.dump(self.full_history, f, indent=2, ensure_ascii=False)
+        # Episodes that described the removed messages are dropped, so they never describe other ones.
+        self.episodes = episodes.prune(self.episodes, len(self.full_history))
+        self.episodes_covered = min(self.episodes_covered, len(self.full_history))
+        self._save_episodes()
         return True
 
     def _scene_system(self, base):
@@ -1240,6 +1301,65 @@ class Engine:
         self.save()
         return text
 
+    def dream(self):
+        # Offline reflection: tidies this character's memory bank and automatic palace entries, and links facts.
+        # The model calls made here do not go through _count_request or _count_tokens, so they are not counted
+        # as the user's requests or tokens. The caller counts them against the server's own dream cap.
+        # Returns the record of the dream, or None when there was nothing worth doing.
+        self.dream_calls = 0
+        if self.is_group or len(self.full_history) - self.dream_len < dreams.MIN_NEW:
+            return None
+        pdir = self.palace_dir or self.ai_dir
+        entries, cfg = palace.load_all(pdir)
+        auto = [e for e in entries if e["auto"] and e["id"]]
+        memory = _read_text(self.memory_bank_file) if os.path.exists(self.memory_bank_file) else ""
+        recent = [e["text"] for e in self.episodes[-dreams.EPISODES_READ:]]
+        prompt = dreams.build_prompt(memory, auto, recent)
+        models = []
+        for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
+            if m and m not in models:
+                models.append(m)
+        text = None
+        for m in models:
+            self.dream_calls += 1
+            try:
+                chat = self.client.chats.create(
+                    model=m,
+                    config=types.GenerateContentConfig(system_instruction=dreams.SYSTEM, temperature=0.5,
+                                                       safety_settings=safety_settings()))
+                text = _text(chat.send_message(prompt))
+                if text and text.strip():
+                    break
+            except Exception as err:
+                self.log(f"[yellow]Dream with {m} failed: {err}[/yellow]")
+                text = None
+        if not text:
+            return None
+        changes, drops, note = dreams.parse(text)
+        counts = {"added": 0, "updated": 0, "removed": 0}
+        if changes or memory.strip():
+            merged, counts = memory_bank.apply(memory, changes)
+            with open(self.memory_bank_file, "w", encoding="utf-8") as f:
+                f.write(merged)
+        dropped = 0
+        if drops:
+            keep = [e for e in entries if not (e["auto"] and e["id"] in drops)]
+            dropped = len(entries) - len(keep)
+            if dropped:
+                palace.save(pdir, keep, {"recursive": cfg["recursive"], "budget": cfg["budget"],
+                                         "auto": cfg["auto"], "episodes": cfg["episodes"]})
+        self.dream_len = len(self.full_history)
+        record = {"len": self.dream_len, "when": _now_iso(), "note": note, "added": counts["added"],
+                  "updated": counts["updated"], "removed": counts["removed"], "dropped": dropped}
+        _write_json(self.dream_file, record)
+        self._build_system_prompt()
+        return record
+
+    def ask(self, system, prompt):
+        # One call with the scene in view, not saved to the chat. Returns the text the model wrote.
+        text, _ = self._one_shot(self._scene_system(system), prompt)
+        return text
+
     def roll_event(self):
         # Add one random event to the chat as a narrator note. It is saved, so the next reply sees it.
         text, _ = self._one_shot(self._scene_system(ROLL_SYSTEM), "Write the random event now.")
@@ -1277,6 +1397,37 @@ class Engine:
         if self.temperature_override is not None:
             return self.temperature_override
         return GROUP_TEMPERATURE if self.is_group else SOLO_TEMPERATURE
+
+    def _load_episodes(self):
+        data = _read_json(self.episodes_file, {})
+        if isinstance(data, dict) and isinstance(data.get("episodes"), list):
+            self.episodes = [e for e in data["episodes"] if isinstance(e, dict) and {"start", "end", "keys", "text"} <= e.keys()]
+            self.episodes_covered = max(0, int(data.get("covered", 0) or 0))
+
+    def _save_episodes(self):
+        _write_json(self.episodes_file, {"covered": self.episodes_covered, "episodes": self.episodes})
+
+    def _add_episodes(self, cutoff):
+        # Messages before cutoff have left the recent window, so they are cut into episodes once.
+        if cutoff <= self.episodes_covered:
+            return
+        run = self.full_history[self.episodes_covered:cutoff]
+        _, pcfg = palace.load_all(self.palace_dir or self.ai_dir)
+        if self.episodes_enabled and pcfg["episodes"]:
+            speakers = [self.character_name, self.user_display_name] + ([display_for(m) for m in self.group_members] if self.is_group else [])
+            new = episodes.make(run, self.episodes_covered, speakers)
+            # One batch call for all the new episodes. If it fails they are kept, and found by keyword only.
+            if new:
+                vectors = episodes.embed(self.client, [e["text"] for e in new])
+                if vectors is not None:
+                    self._count_request(episodes.EMBED_MODEL)
+                    self._count_tokens(episodes.estimate_tokens([e["text"] for e in new]), episodes.EMBED_MODEL)
+                    for e, v in zip(new, vectors):
+                        e["vec"] = v
+            self.episodes = episodes.trim(self.episodes + new)
+        # With episodic memory off, these messages still count as covered, so turning it on later does not backfill.
+        self.episodes_covered = cutoff
+        self._save_episodes()
 
     def _load_summary(self):
         data = _read_json(self.summary_file, {})
@@ -1414,14 +1565,14 @@ class Engine:
                     except Exception:
                         pass
 
-                prompt = MEMORY_PROMPT
+                prompt = MEMORY_CHANGES_PROMPT
                 if existing:
                     prompt += f"\n\nExisting Memory Bank (memory.md):\n{existing}"
                 prompt += f"\n\nNew History Snippet to Analyze:\n{snippet}"
                 if want_summary:
                     prompt += (f"\n\nRunning summary so far (earlier in this chat):\n{self.summary_text or '(none yet)'}"
                                f"\n\nMessages that have just left the recent window, oldest first:\n{self.safe_text(summary_turns)}"
-                               "\n\nAfter the memory bank, on its own line write === SUMMARY ===, then the updated running summary: "
+                               "\n\nAfter the memory changes, on its own line write === SUMMARY ===, then the updated running summary: "
                                "plain prose under 250 words covering what happened, decisions made and facts now established. "
                                "Keep the points from the existing summary that still matter.")
 
@@ -1451,12 +1602,16 @@ class Engine:
                     self.log(f"[yellow]Model {m} returned empty response. Skipping update.[/yellow]")
                     continue
 
+                # The reply is a list of changes, applied to the bank. Facts it does not mention are kept.
+                merged, counts = memory_bank.apply(existing, text)
                 with open(self.memory_bank_file, "w", encoding="utf-8") as f:
-                    f.write(text)
+                    f.write(merged)
                 if summary_text:
                     self._save_summary(summary_text, cutoff)
+                self._add_episodes(cutoff)
                 self._build_system_prompt()
-                self.log("[dim green]Successfully updated memory.md![/dim green]")
+                self.log(f"[dim green]Updated memory.md: {counts['added']} added, {counts['updated']} updated, "
+                         f"{counts['removed']} removed.[/dim green]")
                 return
             except Exception as e:
                 self.log(f"[yellow]Error with model {m}: {e}[/yellow]")
