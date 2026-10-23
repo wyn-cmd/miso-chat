@@ -57,6 +57,11 @@
         <label>Longest reply length users can pick (tokens) <input id="s_reply_max_tokens" type="number" min="10" max="4000" required></label>
       <label class="inline"><input id="s_memory_enabled" type="checkbox"> Memory bank (memory.md and pinned facts)</label>
       <label class="inline"><input id="s_palace_enabled" type="checkbox"> Mind Palace (database searching: keyword entries)</label>
+      <label class="inline"><input id="s_episodes_enabled" type="checkbox"> Episodic memory (earlier moments recalled by keyword)</label>
+      <label class="inline"><input id="s_dreams_enabled" type="checkbox"> Autonomous dreaming in quiet hours (off by default)</label>
+      <label>Dream every how many days <input id="s_dream_every_days" type="number" min="1" max="30" required></label>
+      <label>Dream model calls across the server per day <input id="s_dream_daily_cap" type="number" min="1" required></label>
+      <p class="muted">Dreams tidy each character's memory during its quiet hours. Their model calls are not counted against any user's requests or tokens, so this cap is the only limit on them. Set it to what you are willing to spend per day.</p>
       <p class="muted">Both are on by default. Turning one off stops it being read, refreshed and shown to users.</p>
       <label>Budget alert webhook (optional) <input id="s_budget_webhook_url" type="url" maxlength="500" placeholder="https://hooks.example.com/..."></label>
       <p class="muted">Posted as JSON when a user's daily, weekly or monthly token budget reaches 80% and again at 100%. Leave empty to turn it off.</p>

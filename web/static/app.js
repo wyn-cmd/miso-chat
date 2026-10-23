@@ -428,7 +428,7 @@ function loadCharSettings() {
   for (const n of document.querySelectorAll(".char-only")) n.hidden = !current;
   for (const n of document.querySelectorAll(".needs-char")) n.hidden = !!current;
   $("palaceRow").hidden = !(current && soloNames.includes(current));
-  for (const id of ["tempSlider", "tempReset", "winSlider", "winReset", "exportMd", "exportTxt", "exportJson", "exportEpub", "exportPdf", "pinSave", "pinSettingText", "ciEnabled", "ciSave", "ciAt", "ciStart", "ciEnd"]) $(id).disabled = !current;
+  for (const id of ["tempSlider", "tempReset", "winSlider", "winReset", "exportMd", "exportTxt", "exportJson", "exportEpub", "exportPdf", "pinSave", "pinSettingText", "ciEnabled", "ciSave", "ciAt", "ciStart", "ciEnd", "dreamEnabled", "dreamSave", "dreamStart", "dreamEnd"]) $(id).disabled = !current;
   $("charMsg").textContent = "";
   if (!current) return;
   api("GET", "/api/character-settings?character=" + encodeURIComponent(current))
@@ -1618,6 +1618,56 @@ function showCheckinNote(data) {
 }
 
 $("checkinCard").addEventListener("click", openCheckin);
+
+// Autonomous dreaming: the quiet hours for this character, saved with the browser's time zone.
+let dreamFor = null;
+
+function showDreamLast(data) {
+  $("dreamServerNote").hidden = data.server_on;
+  $("dreamEvery").textContent = data.every_days === 1 ? "A dream can run each night." : `A dream runs at most once every ${data.every_days} days.`;
+  const last = data.last;
+  if (!last) {
+    $("dreamLast").textContent = "No dream yet.";
+    return;
+  }
+  const when = last.when ? new Date(last.when).toLocaleDateString() : "";
+  $("dreamLast").textContent = `Last dream ${when}: ${last.note || "nothing needed tidying"} (${last.added} added, ${last.updated} updated, ${last.removed} removed, ${last.dropped} palace entries dropped).`;
+}
+
+async function openDreams() {
+  if (busy || !current) return;
+  const who = current;
+  $("dreamMsg").textContent = "";
+  try {
+    const data = await api("GET", "/api/dreams?character=" + encodeURIComponent(who));
+    dreamFor = who;
+    $("dreamEnabled").checked = data.enabled;
+    $("dreamStart").value = data.start;
+    $("dreamEnd").value = data.end;
+    showDreamLast(data);
+  } catch (err) {
+    $("dreamMsg").textContent = err.message;
+  }
+}
+
+$("dreamCard").addEventListener("click", openDreams);
+$("dreamSave").addEventListener("click", async () => {
+  if (!dreamFor || busy) return;
+  $("dreamMsg").textContent = "";
+  try {
+    const data = await api("POST", "/api/dreams", {
+      character: dreamFor,
+      enabled: $("dreamEnabled").checked,
+      start: $("dreamStart").value,
+      end: $("dreamEnd").value,
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
+    showDreamLast(data);
+    $("dreamMsg").textContent = "Saved.";
+  } catch (err) {
+    $("dreamMsg").textContent = err.message;
+  }
+});
 $("ciSave").addEventListener("click", async () => {
   if (!ciFor || busy) return;
   $("ciMsg").textContent = "";
@@ -1906,16 +1956,25 @@ async function openGroupDialog(gid) {
   $("groupBgMsg").textContent = "";
   $("groupBgFile").value = "";
   $("groupBgRemove").hidden = !(item && item.has_background);
+  $("groupIconBox").hidden = !item;
+  $("groupIconMsg").textContent = "";
+  $("groupIconFile").value = "";
+  $("groupIconRemove").hidden = !(item && item.has_icon);
   $("groupDlg").showModal();
   $("groupName").focus();
 }
 
-// Sends a private group's background picture, or removes it, then reloads the lists so the chat picks it up.
-async function changeGroupBackground(method, file) {
+// Sends a private group's picture or background, or removes it, then reloads the lists so the chat shows it.
+// kind is "icon" (the sidebar picture) or "background" (behind the chat).
+async function changeGroupArt(kind, method, file) {
   if (!groupEditing) return;
-  $("groupBgMsg").textContent = method === "DELETE" ? "Removing…" : "Uploading…";
+  const icon = kind === "icon";
+  const msg = $(icon ? "groupIconMsg" : "groupBgMsg");
+  const remove = $(icon ? "groupIconRemove" : "groupBgRemove");
+  const input = $(icon ? "groupIconFile" : "groupBgFile");
+  msg.textContent = method === "DELETE" ? "Removing…" : "Uploading…";
   try {
-    const r = await fetch("/api/groups/" + encodeURIComponent(groupEditing) + "/background", {
+    const r = await fetch("/api/groups/" + encodeURIComponent(groupEditing) + "/" + kind, {
       method,
       headers: { "X-Requested-With": "roleplay", "Content-Type": "application/octet-stream" },
       credentials: "same-origin",
@@ -1927,20 +1986,26 @@ async function changeGroupBackground(method, file) {
       throw apiError(r.status, data);
     }
     const data = await r.json();
-    $("groupBgRemove").hidden = !data.has_background;
-    $("groupBgMsg").textContent = data.has_background ? "Background saved." : "Background removed.";
-    $("groupBgFile").value = "";
+    const has = icon ? data.has_icon : data.has_background;
+    remove.hidden = !has;
+    msg.textContent = has ? (icon ? "Picture saved." : "Background saved.") : (icon ? "Picture removed." : "Background removed.");
+    input.value = "";
     await loadCharacters(false);
     applyChatArt(current);
   } catch (err) {
-    $("groupBgMsg").textContent = err.message;
+    msg.textContent = err.message;
   }
 }
 $("groupBgFile").addEventListener("change", () => {
   const file = $("groupBgFile").files[0];
-  if (file) changeGroupBackground("POST", file);
+  if (file) changeGroupArt("background", "POST", file);
 });
-$("groupBgRemove").addEventListener("click", () => changeGroupBackground("DELETE"));
+$("groupBgRemove").addEventListener("click", () => changeGroupArt("background", "DELETE"));
+$("groupIconFile").addEventListener("change", () => {
+  const file = $("groupIconFile").files[0];
+  if (file) changeGroupArt("icon", "POST", file);
+});
+$("groupIconRemove").addEventListener("click", () => changeGroupArt("icon", "DELETE"));
 
 // Rebuilds one note box per ticked character. Text already typed is kept when a tick changes.
 function renderGroupNotes(known) {

@@ -2,6 +2,31 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.4.0 - 2026-10-24
+
+The first release of 1.4. It brings together the three betas and the features added since. Upgrading from 1.3.1 needs a backup first, and the terminal client must be the 1.4.0 file. See UPDATE.txt.
+
+### Added
+- Memory that stays. The memory bank is updated by changes (added, corrected and removed lines) rather than rewritten, so a refresh cannot silently drop facts it did not mention. Pinned facts have their own card in Settings and are never changed by a refresh.
+- Episodic memory. Earlier moments of a chat, cut into short episodes when they leave the recent window, come back when their keys or, failing that, their meaning comes up again. Each character can switch it off in its Mind Palace, and an admin can switch it off for the whole server.
+- Automatic Mind Palace entries. A character can add up to three suggested entries every few turns, keeping the one that comes up most, up to a limit that replaces entries when full, and can correct its own automatic entries. Off by default, and the entries are marked as automatic.
+- Autonomous dreaming. In a character's quiet hours it tidies its memory bank, links facts, and drops automatic palace entries that repeat or contradict others. Off by default. Admins set the server's cap on dream model calls per day and how many days apart dreams run. Dream calls are not counted against any user's requests or tokens.
+- Scheduled check-ins. A character can message its user once a day, at a set time or at a random time in a range, marked as a check-in. A red count shows missed ones on the sidebar and home cards.
+- Budget alerts. An amber warning at 80% of a daily, weekly or monthly token window and a red one at 100%, shown in the chat and optionally posted to an admin webhook.
+- Chat export as EPUB and PDF, next to Markdown, text and JSON.
+- Importing SillyTavern-style character cards (JSON, or PNG with the card inside, in the v1, v2 and v3 layouts) into the new-character form. The picture and the lorebook are carried over.
+- Group chat pictures and backgrounds, set by the owner of a private group. Group chats can be renamed and their members and notes changed without losing either.
+- Admin switches for episodic memory and dreaming, and a Mind Palace setting for automatic entries.
+
+### Changed
+- Mind Palace whole-word keys match common English endings: plurals, past and -ing forms, -er nouns and the spelling changes they need (cat and cats, love and loved, stop and stopped, city and cities). Irregular forms can be written as alternatives in one key, such as `mouse|mice`.
+- Terminal client messages have two blank lines between them, and the character's picture is drawn larger, up to 164 columns and 66 rows.
+- The terminal client is 1.4.0. The server still accepts clients with the same major and minor version.
+
+### Fixed
+- The terminal prompt no longer flickers while typing. Each keystroke redraws the prompt box in one write, with the cursor hidden during the redraw.
+- A memory update that removes a duplicate fact keeps the fact. A removal now removes one line at a time.
+
 ## 1.4.0-beta-3 - 2026-10-23
 
 A third beta of 1.4. It is not a release, and it still needs a live test with a model key.
