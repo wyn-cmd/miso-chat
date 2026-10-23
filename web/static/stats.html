@@ -72,6 +72,36 @@
     </section>
 
     <section>
+      <h2>Token split (selected range)</h2>
+      <p class="muted">Input is every prompt token. Cached input is the part the provider reports as a prompt-cache hit;
+        the uncached figure is the rest. Output is the reply. Seconds is model time, summed per turn.</p>
+      <table>
+        <thead><tr><th>Provider key</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Seconds</th></tr></thead>
+        <tbody id="splitBody"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>DeepSeek cost estimate</h2>
+      <div class="controls">
+        <label>Currency
+          <select id="currencySel" aria-label="Price currency">
+            <option value="usd">USD</option>
+            <option value="cny">CNY</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted">Every token that went to the DeepSeek key, priced from the cached, uncached and output split.
+        Rates are published DeepSeek rates per million tokens, mapped onto this server's DeepSeek model ids, so read
+        the figures as an estimate rather than a bill.</p>
+      <table>
+        <thead><tr><th>Model</th><th>Calls</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Seconds</th><th>Est. cost</th></tr></thead>
+        <tbody id="dsBody"></tbody>
+      </table>
+      <p id="dsNote" class="muted"></p>
+    </section>
+
+    <section>
       <h2>Accounts today</h2>
       <table>
         <thead><tr><th>Account</th><th>API calls</th><th>Tokens</th><th>Messages</th></tr></thead>

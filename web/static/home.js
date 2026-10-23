@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 const POLL_MS = 8000;      // how often to check for profiles still being written
 const POLL_LIMIT = 12;     // stop after about a minute and a half
 let polls = 0;
+let favOnly = false;             // search shows only favourited characters when on
 let allCards = [];          // every solo card from the last load; search and tag filters work on these
 let allRecs = [];
 const selectedTags = new Set();
@@ -53,17 +54,38 @@ function renderSidebar(data) {
   solo.textContent = "";
   groups.textContent = "";
   // Only characters this account has chatted with; the search page below lists every character.
-  for (const name of data.sidebar || []) solo.appendChild(sidebarButton(name, data.colors || {}));
-  for (const g of data.groups || []) groups.appendChild(sidebarButton(g.name, data.colors || {}));
+  const favs = new Set(data.favourites || []);
+  const icons = new Set(data.icons || []);
+  for (const name of data.sidebar || []) solo.appendChild(sidebarButton(name, data.colors || {}, favs, icons));
+  for (const g of data.groups || []) groups.appendChild(sidebarButton(g.name, data.colors || {}, null, icons));
   $("groupBox").hidden = !(data.groups || []).length;
+  paintUnread();
 }
 
-function sidebarButton(name, colors) {
+// The character's picture when it has one (the same picture as its home card), otherwise its colour face.
+function sidebarIcon(name, colors, icons) {
+  const icon = el("span", "", "char-icon" + (icons.has(name) ? "" : " placeholder"));
+  if (icons.has(name)) {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.src = "/api/icon/" + encodeURIComponent(name);
+    img.loading = "lazy";
+    icon.appendChild(img);
+  } else {
+    icon.appendChild(faceIcon(colors[name]));
+  }
+  return icon;
+}
+
+function sidebarButton(name, colors, favs, icons) {
   const b = el("button", "", "char-item");
   b.type = "button";
   b.dataset.name = name;
+  b.dataset.chatName = name;
   if (colors[name]) b.style.setProperty("--dot", colors[name]);
+  b.appendChild(sidebarIcon(name, colors, icons || new Set()));
   b.appendChild(el("span", name, "char-name"));
+  if (favs) b.appendChild(favStar(name, favs.has(name), async (on) => { await setFavourite(name, on); await refreshAll(); }));
   b.addEventListener("click", () => openChat(name));
   return b;
 }
@@ -97,18 +119,35 @@ function renderRecommended(recs, cards) {
   $("homeRecs").hidden = grid.childElementCount === 0;
 }
 
+// The creator handle. Admin accounts have no profile, so their handle stays plain text.
+function creatorHandle(name, linkable) {
+  const creator = name || "admin";
+  if (linkable === false || creator.toLowerCase() === "admin") return el("span", "@" + creator, "home-creator");
+  const a = el("a", "@" + creator, "home-creator creator-link");
+  a.href = "/u/" + encodeURIComponent(creator);
+  a.title = "View " + creator + "'s profile";
+  a.addEventListener("click", (e) => e.stopPropagation());
+  return a;
+}
+
 function renderCard(card, container) {
   const wrap = el("div", "", "home-card");
+  wrap.dataset.chatName = card.name;   // where the missed check-in dot goes
   const artIds = (card.backgrounds || []).length ? card.backgrounds : (card.default_backgrounds || []);
   if (artIds.length) {
     wrap.classList.add("has-art");
     buildArt(wrap, card.name, artIds, container);
   }
 
-  const open = el("button", "", "home-open");
-  open.type = "button";
+  const open = el("div", "", "home-open");
+  open.setAttribute("role", "button");
+  open.setAttribute("tabindex", "0");
   open.setAttribute("aria-label", "Chat with " + card.name);
   open.addEventListener("click", () => openChat(card.name));
+  open.addEventListener("keydown", (e) => {
+    if (e.target !== open) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openChat(card.name); }
+  });
 
   const avatar = el("span", "", "home-avatar");
   avatar.style.setProperty("--avatar-ring", card.color || "");
@@ -125,18 +164,24 @@ function renderCard(card, container) {
   const text = el("span", "", "home-text");
   const title = el("span", "", "home-title");
   title.appendChild(el("span", card.name, "home-name"));
-  title.appendChild(el("span", "@" + (card.creator || "admin"), "home-creator"));
+  title.appendChild(creatorHandle(card.creator, card.creator_profile));
+  if (card.popular) title.appendChild(el("span", "popular", "char-badge"));
   text.appendChild(title);
   if (card.has_profile) {
     text.appendChild(el("span", card.headline, "home-headline"));
   } else {
     text.appendChild(el("span", card.pending ? "Profile is being written..." : "No profile yet.", "home-headline muted"));
   }
+  text.appendChild(el("span", "\u2605 " + (card.stars || 0).toLocaleString() + "  \u00b7  " + (card.messages || 0).toLocaleString() + " messages", "home-stats"));
   const tags = el("span", "", "home-tags");
   for (const t of card.tags || []) tags.appendChild(el("span", t, "home-tag"));
   text.appendChild(tags);
   open.appendChild(text);
   wrap.appendChild(open);
+
+  const star = favStar(card.name, !!card.favourite, async (on) => { await setFavourite(card.name, on); await refreshAll(); });
+  star.classList.add("home-fav");
+  wrap.appendChild(star);
 
   const info = el("button", "i", "home-info");
   info.type = "button";
@@ -144,6 +189,7 @@ function renderCard(card, container) {
   info.setAttribute("aria-label", "About " + card.name);
   info.addEventListener("click", () => showInfo(card));
   wrap.appendChild(info);
+  paintDot(wrap);
 
   return wrap;
 }
@@ -159,7 +205,9 @@ function showInfo(card) {
   dlg.addEventListener("close", () => stopArt(dlg), { once: true });
   $("infoTitle").textContent = card.name;
   $("infoHeadline").textContent = card.headline || "";
-  $("infoCreator").textContent = "Created by " + (card.creator || "admin");
+  const infoCreator = $("infoCreator");
+  infoCreator.textContent = "Created by ";
+  infoCreator.appendChild(creatorHandle(card.creator, card.creator_profile));
   const tags = $("infoTags");
   tags.textContent = "";
   for (const t of card.tags || []) tags.appendChild(el("span", t, "home-tag"));
@@ -245,6 +293,8 @@ $("logoutBtn").addEventListener("click", async () => {
 });
 
 init();
+refreshUnread();
+setInterval(refreshUnread, 60000);
 
 // Lower-case, accent-free text, so "pokemon" finds "Pokémon".
 function norm(s) {
@@ -259,7 +309,8 @@ function matchesSearch(card, terms) {
 // A card must match every search word and carry every selected tag.
 function visibleCards() {
   const terms = norm($("homeSearch").value).trim().split(/\s+/).filter(Boolean);
-  return allCards.filter((c) => matchesSearch(c, terms) && [...selectedTags].every((t) => (c.tags || []).includes(t)));
+  return allCards.filter((c) => matchesSearch(c, terms) && [...selectedTags].every((t) => (c.tags || []).includes(t))
+    && (!favOnly || !!c.favourite));
 }
 
 function applyFilters() {
@@ -269,7 +320,7 @@ function applyFilters() {
   const start = (page - 1) * PAGE_SIZE;
   renderCards(cards.slice(start, start + PAGE_SIZE));
   renderRecommended(allRecs, cards);
-  const filtering = $("homeSearch").value.trim() !== "" || selectedTags.size > 0;
+  const filtering = $("homeSearch").value.trim() !== "" || selectedTags.size > 0 || favOnly;
   $("homeCount").textContent = filtering ? `Showing ${cards.length} of ${allCards.length} characters` : "";
   $("homeEmpty").hidden = allCards.length > 0;
   $("homeNoMatch").hidden = !(allCards.length > 0 && cards.length === 0);
@@ -313,6 +364,21 @@ function renderTagFilter() {
 }
 
 $("homeSearch").addEventListener("input", () => { page = 1; applyFilters(); });
+$("favOnly").addEventListener("click", () => {
+  favOnly = !favOnly;
+  $("favOnly").setAttribute("aria-pressed", String(favOnly));
+  $("favOnly").classList.toggle("on", favOnly);
+  page = 1;
+  applyFilters();
+});
+
+// Re-read the characters after a favourite changes, so the sidebar, cards and search all agree.
+async function refreshAll() {
+  const data = await api("GET", "/api/characters");
+  allCards = data.cards || [];
+  renderSidebar(data);
+  applyFilters();
+}
 $("tagFilterBtn").addEventListener("click", () => {
   const open = $("tagPanel").hidden;
   $("tagPanel").hidden = !open;

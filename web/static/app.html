@@ -30,6 +30,7 @@
   <div class="shell">
     <aside id="sidebar" class="sidebar" aria-label="Characters">
       <h2>Characters</h2>
+      <div class="side-head"><button id="sideBack" class="ghost small" type="button" aria-label="Back">&larr; Back</button></div>
       <div id="charList" class="char-list"></div>
       <div id="groupBox">
         <h2>Group chats</h2>
@@ -39,6 +40,20 @@
       <div id="personaBox" hidden>
         <h2>Persona (you)</h2>
         <div id="personaList" class="char-list"></div>
+        <button id="newPersonaBtn" class="ghost small" type="button">+ New persona</button>
+        <form id="personaForm" class="persona-form" hidden>
+          <h3 id="personaFormTitle">New persona</h3>
+          <label>Name <input id="pfName" maxlength="40" required></label>
+          <label>Colour <input id="pfColour" type="color" value="#8b9bb4"></label>
+          <label>Description <textarea id="pfDesc" rows="5" maxlength="1500" placeholder="Who you are in the story: looks, personality, how you talk."></textarea></label>
+          <label>Picture <input id="pfPic" type="file" accept="image/png,image/jpeg"></label>
+          <div class="persona-form-actions">
+            <button id="pfSave" class="small" type="submit">Save</button>
+            <button id="pfDelete" class="ghost small" type="button" hidden>Delete</button>
+            <button id="pfCancel" class="ghost small" type="button">Cancel</button>
+          </div>
+          <p id="pfMsg" class="muted"></p>
+        </form>
       </div>
       <div id="accountBox" class="side-section account-box">
         <h2>Account</h2>
@@ -180,6 +195,10 @@
           <span id="chatIcon" class="char-icon chat-icon placeholder" aria-hidden="true"></span>
           <h1 id="chatTitle" class="chat-title"></h1>
         <span id="usage" class="muted"></span>
+        <span id="tokenBar" class="token-meter" title="Token budget" hidden>
+          <span class="bar-track"><span id="tokenFill" class="bar-fill"></span></span>
+          <span id="tokenText" class="muted"></span>
+        </span>
           <button id="settingsBtn" class="ghost settings-btn" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-controls="settingsSheet" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke-width="3"/></svg></button>
           <select id="fontSelect" class="font-select" aria-label="Chat font" title="Chat font">
             <option value="sans">Sans-serif</option>
@@ -203,6 +222,10 @@
         <button id="rollBtn" class="ghost" type="button" title="Roll: the model adds a random event to the scene">Roll</button>
         <button id="undoBtn" class="ghost" type="button">Undo</button>
       </div>
+      <div id="budgetAlert" class="budget-alert" role="status" hidden>
+        <span id="budgetAlertText"></span>
+        <button id="budgetAlertClose" class="ghost" type="button" aria-label="Dismiss budget warning">Dismiss</button>
+      </div>
       <div id="log" class="log" aria-live="polite"></div>
       <form id="chatForm" class="composer">
         <div class="msg-wrap">
@@ -211,6 +234,7 @@
         </div>
         <button id="sendBtn" type="submit" aria-label="Send" title="Send"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/></svg></button>
       </form>
+      <div id="deskMeters" class="desk-meters"></div>
       <p id="chatErr" class="error"></p>
     </section>
     <section id="memSection" hidden>
@@ -253,16 +277,44 @@
         <button class="set-card" type="button" data-panel="account"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 11h14v10H5z"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span><span class="set-name">Account</span><span class="set-note">Two-factor sign-in</span></button>
         <button class="set-card" type="button" data-panel="appearance"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.8 1.7-1.6 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5c0-4.4-4-7.4-9-7.4z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7.5" r="1"/><circle cx="15" cy="8" r="1"/></svg></span><span class="set-name">Appearance</span><span class="set-note">Colour, icon shape, font, size</span></button>
         <button class="set-card" type="button" data-panel="character"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></span><span class="set-name">Character</span><span class="set-note">Memory, model, creativity, characters</span></button>
+        <button id="pinCard" class="set-card" type="button" data-panel="pinned"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3H7l3-3-1-6z"/><path d="M12 12v9"/></svg></span><span class="set-name">Pinned facts</span><span class="set-note">Kept in every prompt, never forgotten</span></button>
+        <button id="checkinCard" class="set-card" type="button" data-panel="checkin"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M19 4l2 2"/></svg></span><span class="set-name">Check-in</span><span class="set-note">The character messages you once a day</span></button>
         <button class="set-card" type="button" data-panel="persona"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9.5" cy="11" r="2"/><path d="M6.5 16c.6-1.4 1.7-2 3-2s2.4.6 3 2"/><path d="M15 10h3M15 13h3"/></svg></span><span class="set-name">Persona</span><span class="set-note">Who you are in chats</span></button>
         <button class="set-card" type="button" data-panel="palace"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9 10v8M15 10v8M19 10v8"/><path d="M3 20h18"/></svg></span><span class="set-name">Mind Palace</span><span class="set-note">Your entries for this character</span></button>
         <button class="set-card" type="button" data-panel="history"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="set-name">Chat history</span><span class="set-note">Window, reply length</span></button>
-        <button class="set-card" type="button" data-panel="export"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span><span class="set-name">Export</span><span class="set-note">This chat as Markdown or text</span></button>
+        <button class="set-card" type="button" data-panel="export"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span><span class="set-name">Export</span><span class="set-note">This chat as Markdown, text, JSON, EPUB or PDF</span></button>
         <button class="set-card" type="button" data-panel="client"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/></svg></span><span class="set-name">Terminal client</span><span class="set-note">Download</span></button>
         <button id="setAdminCard" class="set-card" type="button" data-panel="admin" hidden><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6l8-3z"/></svg></span><span class="set-name">Admin</span><span class="set-note">Character sandboxes</span></button>
       </div>
       <section class="set-panel" data-panel="account" hidden>
+        <div id="profileSettings" hidden>
+          <div class="sheet-row"><span>Your profile</span><a id="profileLink" class="button-link" href="#">View profile</a></div>
+          <label class="profile-field">About you
+            <textarea id="profileBio" rows="4" maxlength="1000" placeholder="A sentence or two about you."></textarea>
+          </label>
+          <div class="row"><span id="profileBioCount" class="muted"></span><span class="spacer"></span><button id="profileBioSave" class="ghost small" type="button">Save description</button></div>
+          <div class="sheet-row"><span>Profile picture</span>
+            <span class="profile-upload">
+              <img id="profileAvatarPreview" class="profile-thumb" alt="" hidden>
+              <input id="profilePic" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Profile picture">
+              <button id="profilePicRemove" class="ghost small" type="button" hidden>Remove</button>
+            </span>
+          </div>
+          <div class="sheet-row"><span>Profile background</span>
+            <span class="profile-upload">
+              <img id="profileBgPreview" class="profile-thumb wide" alt="" hidden>
+              <input id="profileBg" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Profile background">
+              <button id="profileBgRemove" class="ghost small" type="button" hidden>Remove</button>
+            </span>
+          </div>
+          <label class="inline"><input id="profileLikes" type="checkbox"> Let other accounts see the characters I've liked</label>
+          <p id="profileMsg" class="muted" aria-live="polite"></p>
+        </div>
         <div class="sheet-row"><span>Two-factor sign-in</span>
           <span class="slider-ctl"><span id="twofaNote" class="muted"></span><button id="twofaBtn" class="ghost small" type="button" hidden>Turn on</button></span>
+        </div>
+        <div class="sheet-row"><span>Token usage</span>
+          <button id="tokenUsageBtn" class="ghost small" type="button">View usage</button>
         </div>
       </section>
       <section class="set-panel" data-panel="appearance" hidden>
@@ -294,6 +346,24 @@
         </div>
         <div data-slot="characters"></div>
       </section>
+      <section class="set-panel" data-panel="pinned" hidden>
+        <p class="muted needs-char">Open a character or group chat to pin facts for it.</p>
+        <p class="muted">Pinned facts go at the end of the system prompt on every reply, so the character never forgets them. Keep them short.</p>
+        <label>Pinned facts <textarea id="pinSettingText" rows="8" maxlength="20000"></textarea></label>
+        <p><button id="pinSave" class="ghost small" type="button">Save pinned facts</button> <span id="pinMsg" class="muted" role="status"></span></p>
+      </section>
+      <section class="set-panel" data-panel="checkin" hidden>
+        <p class="muted needs-char">Open a character to set its check-in.</p>
+        <p class="muted">Off by default. When it is on, the character sends you one message a day, asking how you are and picking up from the chat. The message is marked as a check-in, and a red dot on the character shows how many you have missed until you open the chat. If the server is not running at the chosen time, that day's check-in is skipped.</p>
+        <label class="check-row"><input id="ciEnabled" type="checkbox"> Send a check-in each day</label>
+        <fieldset class="dlg-field">
+          <legend>When</legend>
+          <label class="check-row"><input type="radio" name="ciMode" value="at" checked> At a set time <input id="ciAt" type="time" aria-label="Check-in time"></label>
+          <label class="check-row"><input type="radio" name="ciMode" value="random"> At a random time between <input id="ciStart" type="time" aria-label="Random range start"> and <input id="ciEnd" type="time" aria-label="Random range end"></label>
+        </fieldset>
+        <p><button id="ciSave" class="ghost small" type="button">Save check-in</button> <span id="ciMsg" class="muted" role="status"></span></p>
+        <p id="ciNote" class="muted"></p>
+      </section>
       <section class="set-panel" data-panel="persona" hidden>
         <div data-slot="persona"></div>
       </section>
@@ -314,7 +384,7 @@
       <section class="set-panel" data-panel="export" hidden>
         <p class="muted needs-char">Open a character to export its chat.</p>
         <div class="sheet-row"><span>Export this chat</span>
-          <span class="slider-ctl"><button id="exportMd" class="ghost small" type="button">Markdown</button><button id="exportTxt" class="ghost small" type="button">Text</button></span>
+          <span class="slider-ctl"><button id="exportMd" class="ghost small" type="button">Markdown</button><button id="exportTxt" class="ghost small" type="button">Text</button><button id="exportJson" class="ghost small" type="button">JSON</button><button id="exportEpub" class="ghost small" type="button">EPUB</button><button id="exportPdf" class="ghost small" type="button">PDF</button></span>
         </div>
       </section>
       <section class="set-panel" data-panel="client" hidden>
@@ -339,6 +409,12 @@
       <legend>Notes for each character</legend>
       <p class="muted">Only you see these. The director and the character both read them when the group replies.</p>
       <div id="groupNotes"></div>
+    </fieldset>
+    <fieldset id="groupBgBox" class="dlg-field" hidden>
+      <legend>Background</legend>
+      <p class="muted">Shown behind this group's chat. Only you see it. A new picture replaces the old one.</p>
+      <input id="groupBgFile" type="file" accept="image/*" aria-label="Group background picture">
+      <p><button id="groupBgRemove" class="ghost small" type="button" hidden>Remove background</button> <span id="groupBgMsg" class="muted" role="status"></span></p>
     </fieldset>
     <p id="groupMsg" class="error-msg" role="alert"></p>
     <div class="dlg-actions">
@@ -372,6 +448,14 @@
     <div class="dlg-actions">
       <span class="grow"></span>
       <button id="treeClose" class="ghost" type="button">Close</button>
+    </div>
+  </dialog>
+  <dialog id="tokenUsageDlg" class="dlg" aria-labelledby="tokenUsageTitle">
+    <h2 id="tokenUsageTitle">Token usage</h2>
+    <div id="tokenUsageBody"></div>
+    <div class="dlg-actions">
+      <span class="grow"></span>
+      <button id="tokenUsageClose" class="ghost" type="button">Close</button>
     </div>
   </dialog>
   <script src="/static/common.js"></script>

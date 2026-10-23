@@ -6,6 +6,9 @@ const PROVIDER_NAMES = {
 };
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString();
+const money = (value, currency) => `${Number(value || 0).toFixed(4)} ${currency.toUpperCase()}`;
+let lastPayload = null;
+let currency = localStorage.getItem("miso.stats.currency") === "cny" ? "cny" : "usd";
 
 function el(tag, text, cls) {
   const node = document.createElement(tag);
@@ -123,6 +126,60 @@ function render(d) {
     block.appendChild(ul);
     gb.appendChild(block);
   }
+
+  renderSplit(d);
+  renderDeepSeek(d);
+}
+
+// The cached/uncached/output split per provider key.
+function renderSplit(d) {
+  const body = $("splitBody");
+  body.textContent = "";
+  const sum = { input_tokens: 0, cached_tokens: 0, output_tokens: 0, seconds: 0 };
+  for (const p of d.providers) {
+    const v = d.totals[p] || {};
+    const input = Number(v.input_tokens || 0);
+    const cached = Math.min(Number(v.cached_tokens || 0), input);
+    sum.input_tokens += input;
+    sum.cached_tokens += cached;
+    sum.output_tokens += Number(v.output_tokens || 0);
+    sum.seconds += Number(v.seconds || 0);
+    const tr = row([PROVIDER_NAMES[p], fmt(input), fmt(cached), fmt(Math.max(0, input - cached)),
+      fmt(v.output_tokens), Number(v.seconds || 0).toFixed(1)]);
+    if (p === d.provider) tr.classList.add("active");
+    body.appendChild(tr);
+  }
+  body.appendChild(row(["Total", fmt(sum.input_tokens), fmt(sum.cached_tokens),
+    fmt(Math.max(0, sum.input_tokens - sum.cached_tokens)), fmt(sum.output_tokens), sum.seconds.toFixed(1)]));
+}
+
+// DeepSeek cost estimate. Both currencies arrive from the server; the select only picks which to show.
+function renderDeepSeek(d) {
+  const body = $("dsBody");
+  body.textContent = "";
+  const ds = d.deepseek || { models: [], totals: { cost: {} } };
+  if (!ds.models.length) {
+    body.appendChild(row(["No DeepSeek usage in this range", "", "", "", "", "", ""]));
+    $("dsNote").textContent = "";
+    return;
+  }
+  for (const m of ds.models) {
+    const cached = Math.min(Number(m.cached_tokens || 0), Number(m.input_tokens || 0));
+    const label = m.fallback_rates ? `${m.model} (fallback rates)` : m.model;
+    body.appendChild(row([label, fmt(m.requests), fmt(cached), fmt(Math.max(0, Number(m.input_tokens) - cached)),
+      fmt(m.output_tokens), Number(m.seconds || 0).toFixed(1), money(m.cost[currency], currency)]));
+  }
+  const t = ds.totals;
+  const tr = row(["Total", fmt(t.requests), fmt(t.cached_tokens),
+    fmt(Math.max(0, Number(t.input_tokens || 0) - Number(t.cached_tokens || 0))), fmt(t.output_tokens),
+    Number(t.seconds || 0).toFixed(1), money(t.cost[currency], currency)]);
+  tr.classList.add("active");
+  body.appendChild(tr);
+  const rates = (ds.prices && ds.prices["deepseek-flash"] && ds.prices["deepseek-flash"][currency]) || null;
+  $("dsNote").textContent = rates
+    ? `Per million tokens in ${currency.toUpperCase()}: cached input ${rates.cache_hit}, uncached input ${rates.cache_miss}, `
+      + `output ${rates.output}. Off-peak discounts and your own plan are not included.`
+    : "No rates are loaded for this currency.";
 }
 
 async function load() {
@@ -131,6 +188,7 @@ async function load() {
   const days = $("daysSel").value;
   try {
     const d = await api("GET", `/api/admin/stats?days=${encodeURIComponent(days)}&provider=${encodeURIComponent(provider)}`);
+    lastPayload = d;
     render(d);
     $("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
   } catch (err) {
@@ -141,4 +199,10 @@ async function load() {
 $("providerSel").addEventListener("change", load);
 $("daysSel").addEventListener("change", load);
 $("reloadBtn").addEventListener("click", load);
+$("currencySel").value = currency;
+$("currencySel").addEventListener("change", () => {
+  currency = $("currencySel").value === "cny" ? "cny" : "usd";
+  localStorage.setItem("miso.stats.currency", currency);
+  if (lastPayload) renderDeepSeek(lastPayload);
+});
 load();

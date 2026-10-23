@@ -194,3 +194,70 @@ function el(tag, text, cls) {
   if (cls) node.className = cls;
   return node;
 }
+
+// Favourite star: a span (not a button) so it can sit inside the sidebar's character buttons.
+// onToggle(newValue) does the save and returns when it is done.
+function favStar(name, on, onToggle) {
+  const s = el("span", on ? "\u2605" : "\u2606", "fav-star" + (on ? " on" : ""));
+  s.setAttribute("role", "button");
+  s.setAttribute("tabindex", "0");
+  s.setAttribute("aria-pressed", String(!!on));
+  s.setAttribute("aria-label", (on ? "Unfavourite " : "Favourite ") + name);
+  s.title = on ? "Remove from favourites" : "Add to favourites";
+  const go = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (s.dataset.busy) return;
+    s.dataset.busy = "1";
+    try { await onToggle(!on); } finally { delete s.dataset.busy; }
+  };
+  s.addEventListener("click", go);
+  s.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") go(e); });
+  return s;
+}
+
+async function setFavourite(name, on) {
+  return api("POST", "/api/favourites", { name, on });
+}
+
+// Missed check-ins: a red dot with the count on each character that has some waiting. Any element with
+// data-chat-name (a sidebar button or a home card) gets the dot; opening the chat clears it.
+let unreadMap = {};
+async function refreshUnread() {
+  try {
+    const data = await api("GET", "/api/checkins/unread");
+    unreadMap = data.unread || {};
+  } catch (err) {
+    // keep the dots already shown
+  }
+  paintUnread();
+}
+function paintUnread() {
+  for (const node of document.querySelectorAll("[data-chat-name]")) paintDot(node);
+}
+// The dot on one element, set from the last refresh; called when an element is drawn as well as on refresh.
+function paintDot(node) {
+  const n = unreadMap[node.dataset.chatName] || 0;
+  let dot = node.querySelector(":scope > .unread-dot");
+  if (!n) {
+    if (dot) dot.remove();
+    return;
+  }
+  if (!dot) {
+    dot = el("span", "", "unread-dot");
+    node.appendChild(dot);
+  }
+  dot.textContent = n > 9 ? "9+" : String(n);
+  dot.title = `${n} missed check-in${n === 1 ? "" : "s"}`;
+  dot.setAttribute("aria-label", dot.title);
+}
+async function markRead(name) {
+  if (!unreadMap[name]) return;
+  delete unreadMap[name];
+  paintUnread();
+  try {
+    await api("POST", "/api/checkins/read", { character: name });
+  } catch (err) {
+    refreshUnread();
+  }
+}

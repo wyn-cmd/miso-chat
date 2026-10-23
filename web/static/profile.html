@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Miso Chat">
+  <meta name="apple-mobile-web-app-title" content="Miso Chat">
+  <title>Profile - Miso Chat</title>
+  <script src="/static/theme-init.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#020307">
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">Miso Chat</a>
+    <span id="who" class="muted"></span>
+    <span class="spacer"></span>
+    <a id="adminLink" href="/admin" hidden>Admin</a>
+    <a href="/">Characters</a>
+    <button id="logoutBtn" class="ghost" type="button">Log out</button>
+    <button id="themeBtn" class="icon-btn" type="button" aria-label="Switch to light theme"></button>
+  </header>
+  <main class="profile-main">
+    <p id="loading" class="muted">Loading profile…</p>
+    <p id="profileErr" class="error" role="alert"></p>
+    <section id="profileCard" class="profile-hero" hidden aria-labelledby="profileName">
+      <span id="profileArt" class="profile-art" aria-hidden="true"></span>
+      <span class="profile-shade" aria-hidden="true"></span>
+      <div class="profile-hero-body">
+        <span id="profileAvatar" class="profile-avatar" aria-hidden="true"></span>
+        <div class="profile-headline">
+          <h1 id="profileName"></h1>
+          <p id="profileMeta" class="muted"></p>
+          <p id="profileBio" class="profile-bio"></p>
+          <div class="row">
+            <a id="profileEdit" class="button-link" href="/chat?settings=account" hidden>Edit profile</a>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section id="charactersSection" hidden>
+      <h2 id="charactersTitle">Characters</h2>
+      <div id="characterGrid" class="profile-grid"></div>
+      <p id="charactersEmpty" class="muted" hidden></p>
+    </section>
+    <section id="likesSection" hidden>
+      <h2>Liked characters</h2>
+      <p id="likesNote" class="muted"></p>
+      <div id="likesGrid" class="profile-grid"></div>
+    </section>
+    <p><a href="/">Back to all characters</a></p>
+  </main>
+  <script src="/static/common.js"></script>
+  <script src="/static/profile.js"></script>
+</body>
+</html>
