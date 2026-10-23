@@ -18,7 +18,7 @@ MAX_UNPACKED = 120 * 1024 * 1024   # the files inside it, summed before anything
 CARD_FILES = ("character.md", "context.md", "profile.json", "creator.json", "palace.json", "sandbox.json",
               "icon.png", "icon.jpg", "icon.webp")
 BG_MEMBER = re.compile(r"^backgrounds/[0-9a-f]{12}\.jpg$")   # one file per background in the archive
-HISTORY_FILES = ("memory.json", "memory.md", "pinned.md", "summary.json")
+HISTORY_FILES = ("memory.json", "memory.md", "pinned.md", "summary.json", "episodes.json")
 HISTORY_DIR = "history/"
 NEUTRAL = "#8a8f98"
 COLOUR_LINE = re.compile(r"(?im)^\s*[-*]?\s*colou?r\s*:\s*(#[0-9a-f]{6})\b")

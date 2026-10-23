@@ -109,15 +109,47 @@ OCR reads the text in a picture, so screenshots with plain, dark-on-light or lig
 
 ## Mind Palace
 
-The Mind Palace is keyword database searching for a character. Each entry has a title, one or more keys, and content. The entry joins the prompt only when one of its keys appears in the last six messages (or the entry's own scan depth, up to 30), including the one you are sending. Keys match whole words, ignoring case and accents. A key `Vesper` matches "Vesper" but not "Vespers", so list plurals as separate keys. Each character has a budget, 3,000 characters by default and 500 to 12,000 in its settings. Up to 24 entries are matched in a turn. When the budget is full, the lowest-order entries are dropped.
+The Mind Palace is keyword database searching for a character. Each entry has a title, one or more keys, and content. The entry joins the prompt only when one of its keys appears in the last six messages (or the entry's own scan depth, up to 30), including the one you are sending. Keys match whole words, ignoring case and accents. Common English endings are matched too: a key `cat` matches "cats", `love` matches "loved" and "loving", `stop` matches "stopped", and `city` matches "cities". A key `Vesper` still does not match "Vespertine". For an irregular form, put both in one key, such as `mouse|mice`. Each character has a budget, 3,000 characters by default and 500 to 12,000 in its settings. Up to 24 entries are matched in a turn. When the budget is full, the lowest-order entries are dropped.
 
 Edit it in the character editor, under Mind Palace, once the character exists. It is saved as `palace.json` in the character folder and goes with the character on export. Matching uses no model calls.
 
 An entry can also have secondary keys, combined with the main keys by AND or NOT logic: and any, and all, not any and not all. An entry can be always on, switched off without being deleted, and given its own scan depth and insertion order. When recursion is on for the character, a matched entry's text can trigger other entries, up to three steps deep.
 
+### Automatic entries
+
+A character can also add to its own Mind Palace. Automatic entries are off by default. Turn them on in Settings, Mind Palace, under Automatic entries. Every few turns (1 to 10, three by default) the model reads the recent chat and suggests up to three entries. Only the suggestion whose keys come up most in the last 30 messages is kept. The model can also correct an automatic entry when the chat changes what it says, up to two corrections per check.
+
+The account keeps up to 20 automatic entries by default, 1 to 60 in the settings. When the limit is reached, the model must name one automatic entry to replace. Automatic entries are marked "Added automatically" in the list, and you can edit or delete them like any other entry. Your own entries are never changed by the model. Automatic entries apply to characters, not group chats, and each check is one model request counted against the account.
+
+### Episodic memory
+
+Earlier moments of a chat can come back when they become relevant again. When messages leave the 25-message window, they are cut into short episodes of six messages, each with a few keys: the names and distinctive words in it. A later message that touches those keys brings the best matching episodes back into the prompt, up to three and about 1,500 characters.
+
+When the keys find nothing, the new message is compared with the episodes by meaning, using an embedding from `gemini-embedding-001` at 256 dimensions. Episodes are embedded in one batch when the memory refresh cuts them, not on every message, and only the message being sent is embedded on a turn. Each message is shortened to 200 characters before it is embedded. An episode that failed to embed is still found by its keys.
+
+Episodic memory is on by default. Each character can switch it off in Settings, Mind Palace, and an admin can switch it off for the whole server on the admin page. Turning it off stops recall and embedding, and the messages are not cut into episodes while it is off.
+
 ## Admin switches
 
-On the admin page, under Settings, two switches apply to the whole app: memory bank and Mind Palace. Both are on by default. Turn one off and it is no longer read, refreshed or shown to users. Turning memory off also hides the Memory button. Any combination works, including both off.
+On the admin page, under Settings, these switches apply to the whole app:
+
+- Memory bank. On by default. Turning it off stops the memory being read, refreshed or shown, and also hides the Memory button.
+- Mind Palace. Turning it off stops the palace being read or shown to anyone.
+- Episodic memory. Turning it off stops recall and episode embedding for everyone.
+- Autonomous dreaming. Off by default. See Dreams below.
+
+The admin page also sets the dream frequency and the server's daily cap on dream model calls.
+
+## Memory
+
+A character has four kinds of memory, and each one has a different job.
+
+- **Recent window.** The last 25 messages (40 in group chats) go to the model word for word.
+- **Memory bank (`memory.md`).** Long-term facts about the people, places and history of the chat. It is refreshed every 18 messages from the last 30 messages. The refresh does not rewrite the file: the model replies with changes only (added facts, corrected lines and removed lines), and the app applies them. A fact the model does not mention is kept. The memory bank is limited to 20,000 characters.
+- **Pinned facts.** Facts you pin in Settings, Pinned facts. They are sent with every reply, so the character never forgets them, and the refresh never changes them.
+- **Running summary and episodes.** Messages that leave the window are folded into a running summary, and cut into episodes that can be recalled (see Episodic memory under Mind Palace).
+
+Automatic palace entries and dreams add to the memory over time. See Mind Palace and Dreams.
 
 ## Home page
 
@@ -141,6 +173,8 @@ Each group turn starts with a director. The director reads the new message, the 
 
 Per-member notes are set in the group dialog. Each note is private to the account and up to 500 characters. The director and the noted member both read it.
 
+A group's picture and background are set by its owner in the group's Edit dialog. The picture shows beside the group in the sidebar, and the background sits behind its chat. Either can be removed there. Groups can be renamed, and their members and notes changed, without losing the picture or background.
+
 ## Branch tree
 
 The Tree button in a chat opens the branch tree. It shows the main chat and each branch, with the branch each one was copied from. Each account sees the tree for its own chats. Admins can open any account's tree, but only to read it. Branches made before this release show under the main chat.
@@ -163,13 +197,37 @@ Each account can see its usage under Settings, Account, Token usage (View usage)
 
 The admin stats page also splits the tokens the way providers bill them: cached input (a prompt-cache hit), uncached input and output, with the model time spent on each turn. That split starts with this version, so earlier days show 0 there. For tokens that went to the DeepSeek key it adds a cost estimate per model, in USD or CNY, from published DeepSeek rates per million tokens. The rates are mapped onto this server's DeepSeek model ids and leave out off-peak discounts, so read the figure as an estimate. To use your own rates, set the `deepseek_prices` setting to JSON in the same shape as the table in `web/pricing.py`.
 
+## Scheduled check-ins
+
+A character can message you once a day on its own. Check-ins are off by default. Open Settings, Check-in, choose a character's check-in and turn it on. You can have it at a set time, or at a random time within a range, in the time zone saved from your browser.
+
+The check-in is written from the time since you last wrote, and it is saved in the chat marked as a check-in. Missed check-ins show as a red count on the character's sidebar button and home card. Opening the chat marks them read. If the server is not running at the chosen time, that day's check-in is skipped. Check-ins run inside the server, with no cron job. Each one is a model request counted against your account like any other message.
+
+## Budget alerts
+
+When a daily, weekly or monthly token window reaches 80% of its limit, the token meter in the top bar turns amber, and a warning appears above the chat, for example "You have 20% of your daily token budget left". At 100% the warning turns red and says new messages are blocked until the window resets. You can close the warning until the page is reloaded.
+
+Admins can also set a webhook on the admin Limits page. The server posts a JSON message to it when an account reaches 80% or 100% of a window, once per window per level. The body has a `text` field and a `content` field, so Slack-style and Discord-style receivers can both read it.
+
+## Dreams
+
+Dreams are offline reflection. In a character's quiet hours the model reviews the character's recent memories and tidies them: it removes duplicate or wrong facts, adds links between facts under a Connections section, and drops automatic Mind Palace entries that repeat or contradict others. Pinned facts and your own palace entries are never changed.
+
+Dreams are off by default. An admin turns them on, and sets how many days apart they run (1 to 30) and how many dream model calls the whole server may make each Pacific day (40 by default). An account turns them on for each character in Settings, Dreams, and sets the quiet hours, 02:00 to 06:00 by default, in the time zone saved from the browser.
+
+A dream runs once in each window, and only after at least six new messages. When several characters are due, those that have never dreamed go first, and the rest run in random order. Dream calls are not counted against any user's requests or tokens. The server cap is the only limit on them, so set it to what you are willing to spend. Dreams run only while the server is running.
+
 ## Import and export
 
 Admins can export a character as a zip file. The zip holds the card, icon, background, profile, creator and Mind Palace files. Tick the history option to include this account's chat history and memory too.
 
-A chat can be exported from Settings, Export, as Markdown, plain text or JSON. The JSON file holds the character name, the export time and every message with its speaker, role, time, thinking text where it was kept, and the swipe position.
+A chat can be exported from Settings, Export, as Markdown, plain text, JSON, EPUB or PDF. The JSON file holds the character name, the export time and every message with its speaker, role, time, thinking text where it was kept, and the swipe position. The EPUB and PDF files hold the same chat, laid out for reading.
 
 Admins can import a zip made by this app (format `miso-character`, version 1). An import never overwrites a character with the same name. Chat history from the zip is restored only into an account that has no history for that character yet. Zips are limited to 60 MB, and to 120 MB when unpacked.
+
+## Importing a character card
+
+In the new-character form, the Import card section reads a SillyTavern-style card: a `.json` file, or a `.png` with the card in its text, in the v1, v2 and v3 layouts. The name, card, scenario, summary, tags and lorebook fill the form for you to check. A PNG becomes the character's picture, and lorebook entries become Mind Palace entries once the character is created. Nothing is saved until you press Create. Opening messages are not imported, because Miso has no greeting message, and the import report says so.
 
 ## Chat backgrounds
 
@@ -210,6 +268,8 @@ An optional `substitutions.json` in the project root maps a word or phrase to a 
 
 `data/` holds the database, accounts, sessions, per-user chat history and memory, and provider keys. `.env` holds your Gemini key and `MISO_SECRET_KEY`. Both are git-ignored in `.gitignore`. Keep them out of any repository or shared folder. Backups include both, encrypted with the backup password.
 
+Each account's memory, pinned facts, episodes, palace state, check-in and dream records live in its own folder under `data/users/`. None of it is part of the repository.
+
 ## Terminal client
 
 `client/miso_remote.py` is a command-line chat client for a running server. It uses only the Python standard library. Character pictures need the optional chafa program. It lists the same characters, personas and groups as the web app and keeps the same chat history.
@@ -220,9 +280,11 @@ Run it with the server address:
 
 Options: `--username`, `--character` (open a character or group straight away) and `--persona`. Use an https address for any server other than localhost. The password is typed at a prompt and is never saved. If two-factor sign-in is on for the account, the client then asks for the 6-digit code from the authenticator app; the first sign-in with it required shows the key once to add to the app. Type `/help` inside the client for its commands.
 
-It checks the server's version before it asks for a password. It works only with a server that has the same major and minor version: 1.3.0 and 1.3.4 work together, but 1.2.1 and 1.3.0 do not. Download the client from the server's web app, which always matches that server.
+It checks the server's version before it asks for a password. It works only with a server that has the same major and minor version: 1.4.0 and 1.4.2 work together, but 1.3.1 and 1.4.0 do not. Download the client from the server's web app, which always matches that server.
 
 Replies show quoted speech in green, `*italic*` and `**bold**`, and each character's reply sits in a box in that character's colour. Colours and italics need a terminal with 24-bit colour and italic support, such as Windows Terminal; other terminals show plain text.
+
+Messages in the terminal client are separated by two blank lines, and the character's picture is drawn larger, up to 164 columns and 66 rows.
 
 A chat opens with the character's picture, then the last two messages, and keeps its prompt at the bottom of the window while the chat scrolls above it. Under the prompt is one line: the model that answered, the clock, a bar for whichever token budget is closest to its limit, and an estimate of the next prompt's size that updates as you type. The estimate is about four characters per token, so treat it as a rough figure. On a narrow window the parts drop out from the left, the clock first.
 
@@ -289,6 +351,10 @@ This copy does not include the automated test suite. A basic static check is:
 - Home page recommendations are based on tags and message counts only. They do not read the character cards.
 - Token counts in the context marker are estimates, about four characters per token.
 - Gemma 4 31B on the free tier has a small input limit. Group chats do not use it.
+- Episode embeddings use `gemini-embedding-001` at 256 dimensions. The similarity floor for a recall was chosen without live results and should be checked against them.
+- Automatic palace entries, memory changes and dream changes are decided by the model. Review them in the Mind Palace and the memory bank.
+- Dreams and check-ins run only while the server is running.
+- Card import does not bring over opening messages.
 
 ## Credits and licences
 
