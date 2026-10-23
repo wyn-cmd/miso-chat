@@ -110,6 +110,16 @@ CREATE TABLE IF NOT EXISTS checkins (
     unread INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, character)
 );
+CREATE TABLE IF NOT EXISTS dreams (
+    user_id INTEGER NOT NULL,
+    character TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    start_min INTEGER NOT NULL DEFAULT 120,
+    end_min INTEGER NOT NULL DEFAULT 360,
+    tz TEXT NOT NULL DEFAULT '',
+    last_day TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, character)
+);
 CREATE TABLE IF NOT EXISTS backup_auth (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     verifier TEXT NOT NULL
@@ -141,6 +151,10 @@ DEFAULT_SETTINGS = {
     "tier_config": "",           # JSON: per tier monthly token cap, allowed providers, blocked models (admin Tiers page)
     "deepseek_prices": "",       # JSON: overrides the DeepSeek rate table in web/pricing.py (per million tokens)
     "palace_enabled": "1",       # Mind Palace keyword entries: 1 on, 0 off
+    "episodes_enabled": "1",     # episodic memory, recalled by keyword: 1 on, 0 off
+    "dreams_enabled": "0",       # autonomous dreaming in quiet hours: 1 on, 0 off (off until an admin turns it on)
+    "dream_every_days": "1",     # dreams run once every this many days at the least, 1 to 30
+    "dream_daily_cap": "40",     # most model calls the dreams may make across the server each Pacific day
     "budget_webhook_url": "",    # where budget alerts (80% and 100% of a window) are posted as JSON; empty = off
 }
 
@@ -652,6 +666,25 @@ class Store:
 
     def checkin_enabled_rows(self):
         return self._run("SELECT * FROM checkins WHERE enabled = 1", fetch="all")
+
+    # Autonomous dreaming: one row per account and character. Columns are set through dream_update.
+    DREAM_FIELDS = ("enabled", "start_min", "end_min", "tz", "last_day")
+
+    def dream_get(self, user_id, character):
+        return self._run("SELECT * FROM dreams WHERE user_id = ? AND character = ?", (user_id, character), fetch="one")
+
+    def dream_update(self, user_id, character, **fields):
+        bad = set(fields) - set(self.DREAM_FIELDS)
+        if bad:
+            raise ValueError(f"unknown dream fields: {sorted(bad)}")
+        self._run("INSERT OR IGNORE INTO dreams (user_id, character) VALUES (?, ?)", (user_id, character))
+        if fields:
+            cols = ", ".join(f"{k} = ?" for k in fields)
+            self._run(f"UPDATE dreams SET {cols} WHERE user_id = ? AND character = ?",
+                      (*fields.values(), user_id, character))
+
+    def dream_enabled_rows(self):
+        return self._run("SELECT * FROM dreams WHERE enabled = 1", fetch="all")
 
     # A stored value for a key that has no default (per-account state, such as the last budget alert sent).
     def get_state(self, key):
