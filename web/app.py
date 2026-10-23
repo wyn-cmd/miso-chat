@@ -19,6 +19,7 @@ import shutil
 import sys
 import threading
 import time
+import urllib.request
 from dataclasses import dataclass
 
 from fastapi import FastAPI, HTTPException, Request
@@ -31,8 +32,9 @@ from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_T
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor, profiles, recommend, transfer, ocr, palace, draft, branches, private_groups, secure, backup
-from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, budget_days, recent_days, verify_password, needs_rehash
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins
+import pytz
+from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, TIERS, TIER_MONTHLY_TOKENS, budget_days, recent_days, verify_password, needs_rehash
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHAR_ROOT = os.path.dirname(HERE)
@@ -118,22 +120,48 @@ def _colour_map(root):
     return out
 
 
-def _persona_list(st):
-    return [{"name": display_for(n), "color": colour_of(st.char_root, n) or NEUTRAL_HEX} for n in load_personas(st.char_root)]
+def _own_icon(st, user, pid):
+    try:
+        return editor.icon_path(user_personas.root_for(st.data_dir, user["id"]), pid) is not None
+    except editor.EditorError:
+        return False
+
+
+def _persona_list(st, user):
+    out = [{"id": n, "name": display_for(n), "color": colour_of(st.char_root, n) or NEUTRAL_HEX, "own": False, "icon": False}
+           for n in load_personas(st.char_root)]
+    for item in user_personas.list_for(st.data_dir, user["id"]):
+        out.append({"id": item["id"], "name": item["name"], "color": item["colour"], "own": True,
+                    "description": item["description"], "icon": _own_icon(st, user, item["id"])})
+    return out
 
 
 def _persona_for(st, user):
-    # The persona this account plays as. Never chosen yet: the first persona. Chosen as none: None.
+    # The persona this account plays as. Never chosen yet: the first shared persona. Chosen as none: None.
     personas = load_personas(st.char_root)
     raw = st.store.get_pref(user["id"], "persona")
     if raw is None:
         return personas[0] if personas else None
+    if user_personas.is_own_id(raw):
+        return raw if user_personas.get(st.data_dir, user["id"], raw) else None
     return raw if raw in personas else None
 
 
 def _persona_info(st, user):
     name = _persona_for(st, user)
-    return {"name": display_for(name), "color": colour_of(st.char_root, name) or NEUTRAL_HEX} if name else None
+    if not name:
+        return None
+    if user_personas.is_own_id(name):
+        item = user_personas.get(st.data_dir, user["id"], name)
+        return {"id": name, "name": item["name"], "color": item["colour"], "own": True} if item else None
+    return {"id": name, "name": display_for(name), "color": colour_of(st.char_root, name) or NEUTRAL_HEX, "own": False}
+
+
+def _persona_dir(st, user, persona):
+    # The engine reads the persona card from this folder. Shared personas are relative to the character root.
+    if user_personas.is_own_id(persona):
+        return user_personas.folder_for_persona(st.data_dir, user["id"], persona)
+    return persona
 
 
 def _shade_pref(store, uid):
@@ -402,10 +430,60 @@ def _effective_cap(st, user):
     return int(st.store.get_setting("user_daily_cap"))
 
 
+PROVIDER_ALL = ["gemini", "deepseek", "local", "claude"]
+TIER_PROVIDERS_DEFAULT = {"free": ["gemini", "local"], "lite": PROVIDER_ALL, "standard": PROVIDER_ALL, "pro": PROVIDER_ALL}
+# Daily and weekly token budgets, as a percentage of the monthly budget, when the admin sets no figure for an account.
+DEFAULT_DAILY_PCT = 10
+DEFAULT_WEEKLY_PCT = 20
+
+
+def _tier_config(st):
+    # Each tier's monthly token cap, daily and weekly shares of it, the providers it may use, and models it may not use.
+    # Saved by the admin Tiers page.
+    raw = st.store.get_setting("tier_config") or ""
+    try:
+        saved = json.loads(raw) if raw else {}
+    except ValueError:
+        saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+    out = {}
+    for t in TIERS:
+        s = saved.get(t) if isinstance(saved.get(t), dict) else {}
+        out[t] = {"monthly_tokens": int(s.get("monthly_tokens", TIER_MONTHLY_TOKENS[t])),
+                  "daily_pct": int(s.get("daily_pct", DEFAULT_DAILY_PCT)),
+                  "weekly_pct": int(s.get("weekly_pct", DEFAULT_WEEKLY_PCT)),
+                  "providers": [p for p in s.get("providers", TIER_PROVIDERS_DEFAULT[t]) if p in PROVIDER_ALL],
+                  "blocked_models": [m for m in s.get("blocked_models", []) if isinstance(m, str)]}
+    return out
+
+
+def _tier_limit(st, tier):
+    # Monthly token cap for a tier; None for admins (no tier, no cap).
+    return None if tier is None else _tier_config(st)[tier]["monthly_tokens"]
+
+
+def _model_allowed(st, user, model):
+    # May this account's tier use this model? Admins may use any. Gemini's automatic model is 'gemini'.
+    tier = _tier_of(user)
+    if tier is None:
+        return True
+    cfg = _tier_config(st)[tier]
+    return provider_of(model) in cfg["providers"] and (not model or model not in cfg["blocked_models"])
+
+
+def _tier_of(user):
+    # An account with no stored tier counts as lite, except admins: they have no cap unless one is set.
+    if user["tier"]:
+        return user["tier"]
+    return None if user["is_admin"] else "lite"
+
+
 def _usage_summary(st, user):
     used = st.store.usage_today(user["id"])
     return {"requests_today": used["requests"], "request_cap": _effective_cap(st, user),
-            "tokens_today": used["tokens"], "token_display_limit": TOKEN_DISPLAY_LIMIT}
+            "tokens_today": used["tokens"], "token_display_limit": TOKEN_DISPLAY_LIMIT,
+            "token_budgets": _budget_view(st, user)}
 
 
 BUDGET_KINDS = (
@@ -415,14 +493,132 @@ BUDGET_KINDS = (
 )
 
 
-def _budget_status(st, user):
-    # For each window: the admin's token budget (None = no budget), tokens used in it, and when it resets.
-    out = []
-    for kind, column, reset in BUDGET_KINDS:
+def _budget_limits(st, user):
+    # The token budget for each window (None = no budget). Monthly: the admin's figure, else the tier cap.
+    # Daily and weekly: the admin's figure, else a share of this account's monthly budget.
+    tier = _tier_of(user)
+    monthly = user.get("token_monthly")
+    if monthly is None:
+        monthly = _tier_limit(st, tier)
+    cfg = _tier_config(st).get(tier, {})
+    pcts = {"daily": cfg.get("daily_pct", DEFAULT_DAILY_PCT), "weekly": cfg.get("weekly_pct", DEFAULT_WEEKLY_PCT)}
+    out = {"monthly": monthly}
+    for kind, column in (("daily", "token_daily"), ("weekly", "token_weekly")):
+        pct = pcts[kind]
         budget = user.get(column)
+        if budget is None and monthly is not None:
+            budget = monthly * pct // 100
+        out[kind] = budget
+    return out
+
+
+def _budget_status(st, user):
+    # For each window: its token budget (None = no budget), tokens used in it, and when it resets.
+    limits = _budget_limits(st, user)
+    out = []
+    for kind, _column, reset in BUDGET_KINDS:
+        budget = limits[kind]
         used = st.store.usage_tokens(user["id"], budget_days(kind)) if budget is not None else 0
         out.append({"kind": kind, "budget": budget, "used": used, "reset": reset})
     return out
+
+
+def _budget_view(st, user):
+    # The account's budgets for the page: the tier, and each window's limit and use (None where there is no budget).
+    view = {"tier": _tier_of(user), "daily": None, "weekly": None, "monthly": None}
+    for b in _budget_status(st, user):
+        if b["budget"] is not None:
+            view[b["kind"]] = {"limit": b["budget"], "used": b["used"], "reset": b["reset"]}
+    return view
+
+
+BUDGET_WARN_LEVELS = (80, 100)   # percent of a window's budget used at which the webhook is sent
+
+
+# Posts one JSON message to the budget webhook. Runs on its own thread so a slow receiver never holds a turn.
+# The body carries "text" (read by Slack-style receivers) and "content" (Discord-style), plus the fields.
+def _post_budget_webhook(url, text, fields):
+    body = json.dumps({"text": text, "content": text, **fields}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST",
+                                 headers={"Content-Type": "application/json", "User-Agent": "miso-chat"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            resp.read(1)
+    except (OSError, ValueError) as err:
+        log(f"budget webhook failed: {err}")
+
+
+# After a turn: if a window has reached 80% or 100% of its budget, post to the webhook. Each window sends
+# once per period per level (a day, a week from Monday, a month from the 1st), so a busy account is not spammed.
+def _check_budget_alerts(st, user):
+    url = st.store.get_setting("budget_webhook_url")
+    if not url:
+        return
+    for b in _budget_status(st, user):
+        if not b["budget"]:
+            continue
+        share = b["used"] / b["budget"]
+        level = max((lv for lv in BUDGET_WARN_LEVELS if share * 100 >= lv), default=None)
+        if level is None:
+            continue
+        period = budget_days(b["kind"])[-1]     # the earliest day in the window: its start
+        key = f"budget_alert:{user['id']}:{b['kind']}"
+        sent_period, _, sent_level = st.store.get_state(key).partition(":")
+        if sent_period == period and int(sent_level or 0) >= level:
+            continue
+        st.store.set_setting(key, f"{period}:{level}")
+        left = max(0, b["budget"] - b["used"])
+        pct_left = max(0, round(100 - share * 100))
+        text = (f"{user['username']} has used {min(100, round(share * 100))}% of the {b['kind']} token budget. "
+                f"{pct_left}% left ({left:,} tokens), {b['reset']}.")
+        fields = {"username": user["username"], "window": b["kind"], "level": level,
+                  "used": b["used"], "limit": b["budget"], "percent_left": pct_left}
+        threading.Thread(target=_post_budget_webhook, args=(url, text, fields), daemon=True).start()
+
+
+# Where a private group chat keeps its files and backgrounds: under the owner's folder, keyed by the group id.
+def _private_group_root(st, uid):
+    return os.path.join(st.data_dir, "users", str(uid))
+
+
+# Background ids for every name that has one: characters, shared group chats, and the account's own group chats.
+# Keyed by the name the pages show. Names with no backgrounds are left out.
+def _background_ids_for(st, user, solo, groups):
+    out = {}
+    for n in list(solo) + list(groups):
+        ids = editor.background_ids(st.char_root, display_for(n))
+        if ids:
+            out[display_for(n)] = ids
+    for item in private_groups.list_for(st.data_dir, user["id"]):
+        ids = editor.background_ids(_private_group_root(st, user["id"]), item["id"])
+        if ids:
+            out[item["name"]] = ids
+    return out
+
+
+# Makes one scheduled check-in for an account's character, in the same chat its turns use. Skipped when the
+# account is disabled, has no password change yet, or is over its request cap or token budget. Returns True
+# when the message was saved and marked unread.
+def _fire_checkin(st, uid, name):
+    user = st.store.get_user(uid)
+    if user is None or user["disabled"] or user["must_change"]:
+        return False
+    used = st.store.usage_today(uid)["requests"]
+    if used >= _effective_cap(st, user):
+        log(f"check-in for {name} (user {uid}) skipped: daily request cap reached")
+        return False
+    if _budget_block(st, user):
+        log(f"check-in for {name} (user {uid}) skipped: token budget used up")
+        return False
+    slot = _slot(st, user, name, False)
+    if not slot.lock.acquire(timeout=120):
+        return False   # a reply has held the chat for two minutes: leave this check-in out
+    try:
+        slot.engine.checkin()
+    finally:
+        slot.lock.release()
+    st.store.checkin_add_unread(uid, name)
+    return True
 
 
 def _budget_block(st, user):
@@ -436,21 +632,89 @@ def _budget_block(st, user):
 
 def _count_model_call(st, uid, model):
     # One model call made for this user. Counts toward their usage and the per-minute limit.
-    st.store.add_usage(uid, requests=1, provider=provider_of(model))
+    st.store.add_usage(uid, requests=1, provider=provider_of(model), model=model)
     with st.rpm_lock:
         st.rpm.append(time.time())
+
+
+def _creator_linkable(st, creator):
+    # Only a real, enabled, non-admin account has a profile page to open.
+    user = st.store.find_user(creator)
+    return bool(user and not user["is_admin"] and not user["disabled"])
 
 
 def _card_for(st, folder):
     # What the home page shows for a character. Never the character.md text.
     prof = profiles.read_profile(os.path.join(st.char_root, folder))
     name = display_for(folder)
+    creator = editor.creator_of(os.path.join(st.char_root, folder))
     return {"name": name, "headline": prof["headline"] if prof else "", "info": prof["info"] if prof else "",
             "tags": prof["tags"] if prof else [], "has_profile": prof is not None,
             "pending": folder in st.profiles.pending(), "has_icon": _has_icon(st.char_root, name),
             "has_background": _has_background(st.char_root, name), "backgrounds": editor.background_ids(st.char_root, name), "default_backgrounds": _default_art(),
             "color": colour_of(st.char_root, folder) or NEUTRAL_HEX,
-            "creator": editor.creator_of(os.path.join(st.char_root, folder))}
+            "creator": creator, "creator_profile": _creator_linkable(st, creator)}
+
+
+def _account_files(st, uid):
+    avatar = account_profiles.avatar_path(st.data_dir, uid)
+    background = account_profiles.background_path(st.data_dir, uid)
+    return avatar, background
+
+
+def _account_profile_meta(st, uid):
+    profile = account_profiles.read(st.data_dir, uid)
+    avatar, background = _account_files(st, uid)
+    return {"description": profile["description"], "likes_visible": profile["likes_visible"],
+            "has_avatar": avatar is not None, "has_background": background is not None,
+            "avatar_version": account_profiles.version(avatar),
+            "background_version": account_profiles.version(background)}
+
+
+def _created_cards(st, viewer, username):
+    solo, _ = scan_characters(st.char_root)
+    favs = st.store.favourites_of(viewer["id"])
+    out = []
+    for folder in solo:
+        creator = editor.creator_of(os.path.join(st.char_root, folder))
+        if creator.lower() != username.lower():
+            continue
+        card = _card_for(st, folder)
+        card["favourite"] = card["name"] in favs
+        out.append(card)
+    return out
+
+
+def _liked_cards(st, viewer, uid):
+    solo, _ = scan_characters(st.char_root)
+    by_name = {display_for(folder): folder for folder in solo}
+    favs = st.store.favourites_of(viewer["id"])
+    out = []
+    for name in sorted(st.store.favourites_of(uid)):
+        folder = by_name.get(name)
+        if folder is None:
+            continue   # the character was deleted after it was starred
+        card = _card_for(st, folder)
+        card["favourite"] = name in favs
+        out.append(card)
+    return out
+
+
+def _account_target(st, username):
+    target = st.store.find_user(username)
+    if target is None or target["is_admin"] or target["disabled"]:
+        raise HTTPException(404, "This account does not have a profile.")
+    return target
+
+
+def _account_view(st, viewer, target):
+    is_self = viewer["id"] == target["id"]
+    view = {"username": target["username"], "created_at": target["created_at"],
+            "is_self": is_self, "characters": _created_cards(st, viewer, target["username"]),
+            **_account_profile_meta(st, target["id"])}
+    # Liked characters are private unless the account turns sharing on. The owner always sees their own.
+    view["liked"] = _liked_cards(st, viewer, target["id"]) if (is_self or view["likes_visible"]) else None
+    return view
 
 
 def _known_tags(st):
@@ -556,15 +820,16 @@ def _slot(st, user, name, is_group):
     os.makedirs(state_dir, exist_ok=True)
 
     def on_request(model=None):
-        st.store.add_usage(uid, requests=1, provider=provider_of(model))
+        st.store.add_usage(uid, requests=1, provider=provider_of(model), model=model)
         with st.rpm_lock:
             st.rpm.append(time.time())
 
-    def on_tokens(n, model=None):
-        st.store.add_usage(uid, tokens=n, provider=provider_of(model))
+    def on_tokens(n, model=None, detail=None):
+        # detail carries the input/cached/output split and the turn's seconds, when the provider reports them.
+        st.store.add_usage(uid, tokens=n, provider=provider_of(model), model=model, **(detail or {}))
         return (st.store.usage_today(uid)["tokens"], TOKEN_DISPLAY_LIMIT)
 
-    engine = Engine(st.client, name, persona, log=lambda m: None, state_dir=state_dir,
+    engine = Engine(st.client, name, _persona_dir(st, user, persona), log=lambda m: None, state_dir=state_dir,
                     on_request=on_request, on_tokens=on_tokens, allow_root_user=False,
                     member_memory=False, persist_config=False)
     _apply_switches(st, engine)
@@ -574,6 +839,7 @@ def _slot(st, user, name, is_group):
         palace.copy_starting(os.path.join(st.char_root, name), engine.palace_dir)
     engine.extra_models = _extra_models(st)
     engine.discover_models()
+    engine.extra_models = [m for m in engine.extra_models if _model_allowed(st, user, m)]
     engine.thinking = thinking
     engine.window_override = _pref_int(st.store.get_pref(uid, "window"))
     engine.temperature_override = _pref_float(st.store.get_pref(uid, "temp:" + name))
@@ -700,6 +966,8 @@ def _history(engine):
         item = {"speaker": speaker, "role": role, "text": engine.restore(e.get("text", ""))}
         if e.get("thinking"):
             item["thinking"] = e["thinking"]
+        if e.get("scheduled"):
+            item["scheduled"] = True   # a check-in the character sent on its own schedule
         if e.get("role") == "user" and e.get("speaker") != "narrator":
             variants = e.get("variants") or []
             item["variant"] = {"index": int(e.get("variant", len(variants) - 1)) + 1 if variants else 1,
@@ -823,6 +1091,10 @@ def _chat_settings_payload(st, user, name, is_group):
 
 
 def _export_text(messages, title, fmt, when):
+    if fmt == "json":
+        # A machine-readable copy: the same fields the chat view gets, plus where they came from.
+        return json.dumps({"character": title, "exported": when, "messages": messages},
+                          ensure_ascii=False, indent=2) + "\n"
     if fmt == "md":
         lines = [f"# {title}", "", f"Exported {when}", ""]
         for m in messages:
@@ -840,7 +1112,13 @@ def _export_now(st, user, name, is_group, fmt):
     slot = _slot(st, user, name, is_group)
     with slot.lock:
         messages = _history(slot.engine)
-    return _export_text(messages, _label(st, user, name), fmt, time.strftime("%Y-%m-%d %H:%M"))
+    title, when = _label(st, user, name), time.strftime("%Y-%m-%d %H:%M")
+    # EPUB and PDF come back as bytes; the text formats as str.
+    if fmt == "epub":
+        return exporting.epub_bytes(messages, title, when)
+    if fmt == "pdf":
+        return exporting.pdf_bytes(messages, title, when)
+    return _export_text(messages, title, fmt, when)
 
 
 def _run_turn(st, user, name, slot, message, regen=False):
@@ -901,9 +1179,12 @@ def _run_turn(st, user, name, slot, message, regen=False):
                     detail = (result.error or "no answer")[:200]
                     events.put(("error", {"code": "model_failed", "message": f"No model answered: {detail}"}))
                     return
+                if result.replies and not regen:   # a new user message was accepted: count it for the character
+                    _count_character_message(st, user, name)
                 if result.replies:   # the user's message and each reply, for the stats page
                     st.store.add_usage(user["id"], messages=(0 if regen else 1) + len(result.replies),
-                                       provider=provider_of(result.replies[-1].model))
+                                       provider=provider_of(model_used), model=model_used)
+                _check_budget_alerts(st, user)
                 events.put(("done", {
                     "replies": [{"speaker": r.speaker, "color": r.color, "text": r.display, "model": r.model,
                                  "thinking": r.thinking}
@@ -979,6 +1260,8 @@ def _run_command(st, user, name, is_group, word, arg):
                 return {"notice": f"'{arg}' matches more than one model: {', '.join(chosen)}. Be more specific."}
             if not chosen:
                 return {"notice": "No model name given."}
+            if not _model_allowed(st, user, chosen):
+                return {"notice": f"Your tier can't use {chosen}. Ask an admin about a higher tier."}
             eng.pin_model(chosen)
             note = "" if chosen in eng.fallback_models else " It isn't in the discovered list, so the fallback chain takes over if it fails."
             return {"notice": f"Model pinned for this chat: {chosen}.{note}"}
@@ -995,6 +1278,76 @@ def _run_command(st, user, name, is_group, word, arg):
             _drop_slot(st, user, name)   # the next reply reloads the new memory.md
             return {"notice": "memory.md refreshed."}
     return {"notice": "Nothing to do."}
+
+
+def _popular_set(totals):
+    # Top 10% of characters by user-sent messages, counting only characters with at least one message.
+    ranked = sorted((n for n in totals.values() if n > 0), reverse=True)
+    if not ranked:
+        return set()
+    cutoff = ranked[max(1, math.ceil(len(ranked) * 0.1)) - 1]
+    return {name for name, n in totals.items() if n > 0 and n >= cutoff}
+
+
+def _members_of(st, user, name):
+    # Solo folder, public group, or this account's private group: the solo characters whose counts it feeds.
+    solo, groups = scan_characters(st.char_root)
+    if name in solo:
+        members = [name]
+    elif name in groups:
+        members = list(groups[name])
+    else:
+        members = []
+        for item in private_groups.list_for(st.data_dir, user["id"]):
+            if item["id"] == name:
+                members = list(item["members"])
+                break
+    return [m for m in dict.fromkeys(members) if m in solo]
+
+
+def _count_character_message(st, user, name):
+    # Called once per accepted user message in a chat (not regenerations, memory saves or autofill).
+    # A group message counts once for each member character.
+    for member in _members_of(st, user, name):
+        st.store.bump_char_message(display_for(member))
+
+
+def _backfill_character_messages(st):
+    # One-off: rebuild the counts from the user-sent entries already saved, for solo chats and every group.
+    key = "char_messages_backfilled_v2"
+    if st.store.get_setting(key) == "1":
+        return
+    import json, os
+    solo, groups = scan_characters(st.char_root)
+    root = os.path.join(st.data_dir, "users")
+    totals = {}
+    if os.path.isdir(root):
+        for uid in os.listdir(root):
+            try:
+                private = private_groups.list_for(st.data_dir, int(uid))
+            except ValueError:
+                private = []
+            jobs = [(f, [f]) for f in solo]
+            jobs += [(g, list(m)) for g, m in groups.items()]
+            jobs += [(item["id"], list(item["members"])) for item in private]
+            for folder, members in jobs:
+                try:
+                    with open(os.path.join(root, uid, folder, "memory.json"), encoding="utf-8") as f:
+                        data = json.load(f)
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(data, list):
+                    continue
+                n = sum(1 for it in data if isinstance(it, dict) and it.get("role") == "user" and it.get("text"))
+                if not n:
+                    continue
+                for m in dict.fromkeys(members):
+                    if m in solo:
+                        totals[display_for(m)] = totals.get(display_for(m), 0) + n
+    st.store.clear_char_messages()
+    for name, n in totals.items():
+        st.store.bump_char_message(name, n)
+    st.store.set_setting(key, "1")
 
 
 def make_app(client=None, data_dir=None, char_root=None):
@@ -1028,7 +1381,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         resp.headers["Referrer-Policy"] = "same-origin"
         if request.url.path.startswith("/api/"):
             resp.headers["Cache-Control"] = "no-store"
-        elif request.url.path == "/" or request.url.path.startswith(("/static/", "/login", "/admin", "/2fa-setup")):
+        elif request.url.path == "/" or request.url.path.startswith(("/static/", "/login", "/admin", "/2fa-setup", "/u/")):
             # pages and assets must revalidate, so an old cached copy never hides a new layout
             resp.headers["Cache-Control"] = "no-cache"
         return resp
@@ -1043,6 +1396,10 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.get("/chat")
     def chat_page():
         return page("app.html")
+
+    @app.get("/u/{username}")
+    def account_profile_page(username: str):
+        return page("profile.html")
 
     @app.get("/login")
     def login_page():
@@ -1114,11 +1471,29 @@ def make_app(client=None, data_dir=None, char_root=None):
         for d in day_list:
             r = by_day.get(d, {})
             series.append({"day": d, "requests": int(r.get("requests") or 0),
-                           "tokens": int(r.get("tokens") or 0), "messages": int(r.get("messages") or 0)})
-        totals = {p: {"requests": 0, "tokens": 0, "messages": 0} for p in PROVIDER_KEYS}
+                           "tokens": int(r.get("tokens") or 0), "messages": int(r.get("messages") or 0),
+                           "input_tokens": int(r.get("input_tokens") or 0),
+                           "cached_tokens": int(r.get("cached_tokens") or 0),
+                           "output_tokens": int(r.get("output_tokens") or 0),
+                           "seconds": float(r.get("seconds") or 0.0)})
+        totals = {p: {"requests": 0, "tokens": 0, "messages": 0, "input_tokens": 0, "cached_tokens": 0,
+                      "output_tokens": 0, "seconds": 0.0} for p in PROVIDER_KEYS}
         for r in st.store.usage_by_provider(day_list):
             totals[r["provider"]] = {"requests": int(r["requests"] or 0), "tokens": int(r["tokens"] or 0),
-                                     "messages": int(r["messages"] or 0)}
+                                     "messages": int(r["messages"] or 0),
+                                     "input_tokens": int(r.get("input_tokens") or 0),
+                                     "cached_tokens": int(r.get("cached_tokens") or 0),
+                                     "output_tokens": int(r.get("output_tokens") or 0),
+                                     "seconds": float(r.get("seconds") or 0.0)}
+        # The cached/cache-miss/output split, and the DeepSeek cost estimate built from it. The split covers
+        # every provider, because the tables list them all whether or not one is selected above.
+        for r in st.store.usage_breakdown(day_list):
+            entry = totals.get(r["provider"])
+            if entry is not None:
+                for key in ("input_tokens", "cached_tokens", "output_tokens", "seconds"):
+                    entry[key] = int(r.get(key) or 0) if key != "seconds" else float(r.get(key) or 0.0)
+        prices = pricing.load(st.store)
+        deepseek = pricing.summary(st.store.usage_model_totals(day_list, "deepseek"), prices)
         today = day_list[-1]
         characters, groups = _character_stats(st)
         return {
@@ -1127,9 +1502,11 @@ def make_app(client=None, data_dir=None, char_root=None):
             "today": {"day": today, "global_requests": int(st.store.global_requests_today()),
                       "global_cap": int(st.store.get_setting("global_daily_cap")),
                       "users": st.store.usage_users_on(today, provider)},
+            "deepseek": deepseek,
             "characters": characters, "groups": groups,
             "note": "Per-provider counts start when this update went live. Earlier usage is counted as Gemini, "
-                    "with no message counts.",
+                    "with no message counts. The token split (cached input, uncached input, output) starts with "
+                    "this update too, so earlier days show 0 there.",
         }
 
     # ---- session
@@ -1258,9 +1635,11 @@ def make_app(client=None, data_dir=None, char_root=None):
             info["avatar_shape"] = _avatar_shape(store, user["id"])
             info["bg_shade"] = _shade_pref(store, user["id"])
             info["bubble_opacity"] = _bubble_pref(store, user["id"])
-            info["models"] = {"gemini": "auto", "extra": _extra_models(st)}
+            info["models"] = {"gemini": "auto", "extra": [m for m in _extra_models(st) if _model_allowed(st, user, m)]}
             info["model"] = store.get_pref(user["id"], "model") or ""   # the saved choice, so the picker reloads it
-            info["personas"] = _persona_list(st)
+            info["personas"] = _persona_list(st, user)
+            if not user["is_admin"]:
+                info["profile"] = _account_profile_meta(st, user["id"])
         resp = JSONResponse(info)
         token = request.cookies.get(COOKIE)
         if store.session_remembered(token):
@@ -1287,6 +1666,95 @@ def make_app(client=None, data_dir=None, char_root=None):
         _set_session_cookie(resp, token, remember)
         return resp
 
+    # ---- account profiles
+
+    @app.post("/api/account/profile")
+    async def account_profile_set(request: Request):
+        _csrf(request)
+        user = require(request)
+        if user["is_admin"]:
+            raise HTTPException(403, "Admin accounts do not have a profile.")
+        body = _read_body(await request.json())
+        has_description = "description" in body
+        has_likes = "likes_visible" in body
+        if not has_description and not has_likes:
+            raise HTTPException(400, "Nothing to save.")
+        if has_likes and not isinstance(body["likes_visible"], bool):
+            raise HTTPException(400, "The liked characters setting must be on or off.")
+        try:
+            account_profiles.update(st.data_dir, user["id"],
+                                    description=body.get("description") if has_description else None,
+                                    likes_visible=body.get("likes_visible") if has_likes else None)
+        except account_profiles.AccountProfileError as err:
+            raise HTTPException(400, str(err))
+        return _account_profile_meta(st, user["id"])
+
+    @app.post("/api/account/avatar")
+    async def account_avatar_save(request: Request):
+        _csrf(request)
+        user = require(request)
+        if user["is_admin"]:
+            raise HTTPException(403, "Admin accounts do not have a profile.")
+        try:
+            account_profiles.save_avatar(st.data_dir, user["id"], await request.body())
+        except editor.EditorError as err:
+            raise HTTPException(400, str(err))
+        return _account_profile_meta(st, user["id"])
+
+    @app.delete("/api/account/avatar")
+    def account_avatar_remove(request: Request):
+        _csrf(request)
+        user = require(request)
+        if user["is_admin"]:
+            raise HTTPException(403, "Admin accounts do not have a profile.")
+        account_profiles.remove_avatar(st.data_dir, user["id"])
+        return _account_profile_meta(st, user["id"])
+
+    @app.post("/api/account/background")
+    async def account_background_save(request: Request):
+        _csrf(request)
+        user = require(request)
+        if user["is_admin"]:
+            raise HTTPException(403, "Admin accounts do not have a profile.")
+        try:
+            account_profiles.save_background(st.data_dir, user["id"], await request.body())
+        except editor.EditorError as err:
+            raise HTTPException(400, str(err))
+        return _account_profile_meta(st, user["id"])
+
+    @app.delete("/api/account/background")
+    def account_background_remove(request: Request):
+        _csrf(request)
+        user = require(request)
+        if user["is_admin"]:
+            raise HTTPException(403, "Admin accounts do not have a profile.")
+        account_profiles.remove_background(st.data_dir, user["id"])
+        return _account_profile_meta(st, user["id"])
+
+    @app.get("/api/account-avatar/{username}")
+    def account_avatar_get(username: str, request: Request):
+        require(request)
+        target = _account_target(st, username)
+        path = account_profiles.avatar_path(st.data_dir, target["id"])
+        if path is None:
+            raise HTTPException(404, "No profile picture.")
+        return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "private, max-age=300"})
+
+    @app.get("/api/account-background/{username}")
+    def account_background_get(username: str, request: Request):
+        require(request)
+        target = _account_target(st, username)
+        path = account_profiles.background_path(st.data_dir, target["id"])
+        if path is None:
+            raise HTTPException(404, "No profile background.")
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
+
+    @app.get("/api/account/{username}")
+    def account_profile(username: str, request: Request):
+        viewer = require(request)
+        target = _account_target(st, username)
+        return _account_view(st, viewer, target)
+
     # ---- characters and chat
 
     @app.get("/api/characters")
@@ -1297,14 +1765,25 @@ def make_app(client=None, data_dir=None, char_root=None):
         # The search order is the same for every list on this page; sidebar holds only characters this account has chatted with.
         ranked = recommend.order(st.char_root, st.data_dir, user["id"], solo)
         chatted = set(recommend.chatted(st.data_dir, user["id"], solo))
+        favs = st.store.favourites_of(user["id"])
+        _backfill_character_messages(st)
+        totals = st.store.char_message_totals()
+        stars = st.store.favourite_counts()
+        pop = _popular_set(totals)
+        bg_ids = _background_ids_for(st, user, solo, groups)
         return {"solo": [display_for(s) for s in solo], "groups": [{"name": display_for(g), "members": [display_for(x) for x in m]} for g, m in groups.items()]
                 + [{"name": i["name"], "members": [display_for(x) for x in i["members"]], "id": i["id"], "private": True}
                    for i in private_groups.list_for(st.data_dir, user["id"])],
-                "cards": [_card_for(st, s) for s in ranked],
-                 "sidebar": [display_for(s) for s in ranked if s in chatted],
-                "personas": _persona_list(st), "colors": _colour_map(st.char_root),
+                "cards": [dict(_card_for(st, s), favourite=display_for(s) in favs,
+                        stars=stars.get(display_for(s), 0), messages=totals.get(display_for(s), 0),
+                        popular=display_for(s) in pop) for s in ranked],
+                "favourites": sorted(favs),
+                "popular": sorted(pop),
+                "stars": stars,
+                 "sidebar": [display_for(s) for s in ranked if s in chatted or display_for(s) in favs],
+                "personas": _persona_list(st, user), "colors": _colour_map(st.char_root),
                 "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))],
-                "backgrounds": [display_for(n) for n in solo if _has_background(st.char_root, display_for(n))], "default_backgrounds": _default_art(), "bg_ids": {display_for(n): editor.background_ids(st.char_root, display_for(n)) for n in solo if _has_background(st.char_root, display_for(n))},
+                "backgrounds": list(bg_ids), "default_backgrounds": _default_art(), "bg_ids": bg_ids,
                 "editable": [display_for(s) for s in solo if can_edit_card(user, os.path.join(st.char_root, s))],
                 "recommended": [{"name": display_for(r["folder"]), "tags": r["tags"]} for r in
                                 recommend.recommend(st.char_root, st.data_dir, user["id"], solo)]}
@@ -1333,7 +1812,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         user = require(request)
         out = []
         for i in private_groups.list_for(st.data_dir, user["id"]):
-            out.append({"id": i["id"], "name": i["name"],
+            out.append({"id": i["id"], "name": i["name"], "has_background": bool(editor.background_ids(_private_group_root(st, user["id"]), i["id"])),
                         "members": [{"key": m, "name": display_for(m)} for m in i["members"]],
                         "notes": {display_for(k): v for k, v in private_groups.get_notes(st.data_dir, user["id"], i["id"]).items()}})
         return {"groups": out, "max": private_groups.MAX_GROUPS, "min_members": private_groups.MIN_MEMBERS,
@@ -1352,6 +1831,35 @@ def make_app(client=None, data_dir=None, char_root=None):
         except private_groups.GroupError as err:
             raise HTTPException(400, str(err))
         return {"id": item["id"], "name": item["name"]}
+
+    # A private group's background: one picture, shown behind its chat. A new one replaces the old.
+    @app.post("/api/groups/{gid}/background")
+    async def group_background_save(gid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        if private_groups.get(st.data_dir, user["id"], gid) is None:
+            raise HTTPException(404, "That group no longer exists.")
+        data = await request.body()
+        root = _private_group_root(st, user["id"])
+        os.makedirs(os.path.join(root, gid), exist_ok=True)
+        try:
+            for bid in editor.background_ids(root, gid):
+                editor.remove_background(root, gid, bid)
+            editor.add_background(root, gid, data)
+        except editor.EditorError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "has_background": True}
+
+    @app.delete("/api/groups/{gid}/background")
+    def group_background_remove(gid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        if private_groups.get(st.data_dir, user["id"], gid) is None:
+            raise HTTPException(404, "That group no longer exists.")
+        root = _private_group_root(st, user["id"])
+        for bid in editor.background_ids(root, gid):
+            editor.remove_background(root, gid, bid)
+        return {"ok": True, "has_background": False}
 
     @app.put("/api/groups/{gid}")
     async def group_update(gid: str, request: Request):
@@ -1524,9 +2032,15 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        choice = folder_for(str(body.get("persona", ""))) if body.get("persona") else ""
-        if choice and choice not in load_personas(st.char_root):
-            raise HTTPException(400, "Unknown persona.")
+        raw_choice = str(body.get("persona", "") or "")
+        if user_personas.is_own_id(raw_choice):
+            if not user_personas.get(st.data_dir, user["id"], raw_choice):
+                raise HTTPException(400, "Unknown persona.")
+            choice = raw_choice
+        else:
+            choice = folder_for(raw_choice) if raw_choice else ""
+            if choice and choice not in load_personas(st.char_root):
+                raise HTTPException(400, "Unknown persona.")
         # the chat sessions cache the history in memory; a persona switch rebuilds them from disk,
         # so no reply may be streaming, and no stale cached copy may survive to be saved over newer messages
         with st.slots_lock:
@@ -1536,7 +2050,87 @@ def make_app(client=None, data_dir=None, char_root=None):
             for k in mine:
                 st.slots.pop(k, None)
         store.set_pref(user["id"], "persona", choice)
-        return {"persona": _persona_info(st, user), "personas": _persona_list(st)}
+        return {"persona": _persona_info(st, user), "personas": _persona_list(st, user)}
+
+    # ---- personas one account makes for itself (private to that account)
+    def _free_persona_sessions(st, user, pid):
+        # Cached sessions that use this persona are dropped so the next message reads the new card.
+        with st.slots_lock:
+            mine = [k for k in st.slots if k[0] == user["id"] and k[2] == pid]
+            if any(st.slots[k].lock.locked() for k in mine):
+                raise HTTPException(409, "Wait for the current reply to finish first.")
+            for k in mine:
+                st.slots.pop(k, None)
+
+    def _persona_reply(user):
+        return {"persona": _persona_info(st, user), "personas": _persona_list(st, user)}
+
+    @app.post("/api/personas")
+    async def persona_create(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        try:
+            item = user_personas.create(st.data_dir, user["id"], body.get("name"), body.get("colour"), body.get("description"))
+        except user_personas.PersonaError as err:
+            raise HTTPException(400, str(err))
+        return dict(_persona_reply(user), id=item["id"])
+
+    @app.post("/api/personas/{pid}")
+    async def persona_update(pid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        if not user_personas.is_own_id(pid):
+            raise HTTPException(404, "No such persona.")
+        _free_persona_sessions(st, user, pid)
+        try:
+            user_personas.update(st.data_dir, user["id"], pid, body.get("name"), body.get("colour"), body.get("description"))
+        except user_personas.PersonaError as err:
+            raise HTTPException(400, str(err))
+        return _persona_reply(user)
+
+    @app.post("/api/personas/{pid}/delete")
+    async def persona_delete(pid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        if not user_personas.is_own_id(pid):
+            raise HTTPException(404, "No such persona.")
+        _free_persona_sessions(st, user, pid)
+        try:
+            user_personas.delete(st.data_dir, user["id"], pid)
+        except user_personas.PersonaError as err:
+            raise HTTPException(404, str(err))
+        if st.store.get_pref(user["id"], "persona") == pid:
+            st.store.set_pref(user["id"], "persona", "")   # the deleted persona was in use: play as none
+        return _persona_reply(user)
+
+    @app.post("/api/personas/{pid}/icon")
+    async def persona_icon_upload(pid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        if not user_personas.is_own_id(pid) or not user_personas.get(st.data_dir, user["id"], pid):
+            raise HTTPException(404, "No such persona.")
+        data = await request.body()
+        try:
+            editor.save_icon(user_personas.root_for(st.data_dir, user["id"]), pid, data)
+        except editor.EditorError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True}
+
+    @app.get("/api/persona-icon/{pid}")
+    def persona_icon(pid: str, request: Request):
+        user = require(request)
+        if not user_personas.is_own_id(pid) or not user_personas.get(st.data_dir, user["id"], pid):
+            raise HTTPException(404, "No such persona.")
+        try:
+            path = editor.icon_path(user_personas.root_for(st.data_dir, user["id"]), pid)
+        except editor.EditorError:
+            raise HTTPException(404, "No icon.")
+        if path is None:
+            raise HTTPException(404, "No icon.")
+        media = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg"}.get(os.path.splitext(path)[1].lower())
+        return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=300"})
 
     @app.post("/api/settings")
     async def set_settings(request: Request):
@@ -1683,15 +2277,17 @@ def make_app(client=None, data_dir=None, char_root=None):
 
     @app.get("/api/export")
     async def export_chat(request: Request, character: str, format: str = "md"):
-        # The chat as a Markdown or plain-text file, saved by the browser.
+        # The chat as a Markdown, plain-text, JSON, EPUB or PDF file, saved by the browser.
         user = require(request)
-        if format not in ("md", "txt"):
-            raise HTTPException(400, "Format must be md or txt.")
+        if format not in ("md", "txt", "json", "epub", "pdf"):
+            raise HTTPException(400, "Format must be md, txt, json, epub or pdf.")
         name, is_group = _resolve_profile(st, character, user)
         body = await run_in_threadpool(_export_now, st, user, name, is_group, format)
         stem = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or "chat"
         filename = f"{stem}-{time.strftime('%Y-%m-%d')}.{format}"
-        media = "text/markdown; charset=utf-8" if format == "md" else "text/plain; charset=utf-8"
+        media = {"md": "text/markdown; charset=utf-8", "txt": "text/plain; charset=utf-8",
+                 "json": "application/json; charset=utf-8", "epub": "application/epub+zip",
+                 "pdf": "application/pdf"}[format]
         return Response(body, media_type=media,
                         headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
 
@@ -1724,6 +2320,8 @@ def make_app(client=None, data_dir=None, char_root=None):
                         **_lock_view(throttle.get(u["username"].lower()), now),
                         "token_budgets": {"daily": u.get("token_daily"), "weekly": u.get("token_weekly"),
                                           "monthly": u.get("token_monthly")},
+                        "budget_limits": _budget_limits(st, u),
+                        "tier": _tier_of(u), "tier_monthly_limit": _tier_limit(st, _tier_of(u)),
                         "tokens_week": store.usage_tokens(u["id"], budget_days("weekly")),
                         "tokens_month": store.usage_tokens(u["id"], budget_days("monthly"))})
         # me_id lets the admin page offer two-factor set-up on the signed-in account's own row.
@@ -1743,9 +2341,13 @@ def make_app(client=None, data_dir=None, char_root=None):
         cap = body.get("daily_cap")
         if cap is not None and (not isinstance(cap, int) or cap < 0):
             raise HTTPException(400, "daily_cap must be a whole number or null.")
+        is_admin = bool(body.get("is_admin"))
+        tier = body.get("tier") or (None if is_admin else "lite")
+        if tier is not None and tier not in TIERS:
+            raise HTTPException(400, "tier must be free, lite, standard or pro.")
         try:
-            uid = store.create_user(username, password, is_admin=bool(body.get("is_admin")),
-                                    must_change=True, daily_cap=cap)
+            uid = store.create_user(username, password, is_admin=is_admin,
+                                    must_change=True, daily_cap=cap, tier=tier)
         except ValueError as err:
             raise HTTPException(400, str(err))
         log(f"user {username} created by {me_['username']}")
@@ -1802,6 +2404,10 @@ def make_app(client=None, data_dir=None, char_root=None):
             store.set_totp(uid, None, bool(store.get_user(uid)["totp_required"]), False, -1)
             store.end_all_sessions(uid)
             log(f"two-factor sign-in reset for {target['username']} by {me_['username']}")
+        if "tier" in body:
+            if body["tier"] is not None and body["tier"] not in TIERS:
+                raise HTTPException(400, "tier must be free, lite, standard or pro, or null.")
+            fields["tier"] = body["tier"]
         if fields:
             store.update_user(uid, **fields)
         if body.get("disabled") is True:
@@ -2091,9 +2697,13 @@ def make_app(client=None, data_dir=None, char_root=None):
 
     @app.get("/api/background/{name}")
     def character_background(name: str, request: Request, b: str = ""):
-        require(request)
+        user = require(request)
+        private = private_groups.find_by_key(st.data_dir, user["id"], folder_for(name), folder_for)
         try:
-            path = editor.background_path(st.char_root, name, b or None)
+            if private is not None:
+                path = editor.background_path(_private_group_root(st, user["id"]), private["id"], b or None)
+            else:
+                path = editor.background_path(st.char_root, name, b or None)
         except editor.EditorError:
             raise HTTPException(404, "No such character.")
         if path is None:
@@ -2121,6 +2731,67 @@ def make_app(client=None, data_dir=None, char_root=None):
         require(request, admin=True)
         return store.all_settings()
 
+    @app.post("/api/favourites")
+    async def favourite_set(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name = str(body.get("name", ""))
+        on = body.get("on")
+        if not isinstance(on, bool):
+            raise HTTPException(400, "on must be true or false.")
+        solo, _ = scan_characters(st.char_root)
+        if name not in {display_for(s) for s in solo}:
+            raise HTTPException(404, "No such character.")
+        st.store.set_favourite(user["id"], name, on)
+        return {"name": name, "favourite": on}
+
+    @app.get("/api/admin/tiers")
+    def admin_tiers_get(request: Request):
+        require(request, admin=True)
+        usage = {t: {"users": 0, "tokens_today": 0, "tokens_week": 0, "tokens_month": 0} for t in TIERS}
+        for u in store.list_users():
+            if _tier_of(u) is None:   # admins with no tier have no cap and are not counted
+                continue
+            row = usage[_tier_of(u)]
+            row["users"] += 1
+            row["tokens_today"] += store.usage_tokens(u["id"], budget_days("daily"))
+            row["tokens_week"] += store.usage_tokens(u["id"], budget_days("weekly"))
+            row["tokens_month"] += store.usage_tokens(u["id"], budget_days("monthly"))
+        return {"tiers": _tier_config(st), "providers": PROVIDER_ALL, "models": _extra_models(st), "usage": usage}
+
+    @app.post("/api/admin/tiers")
+    async def admin_tiers_set(request: Request):
+        _csrf(request)
+        require(request, admin=True)
+        body = _read_body(await request.json())
+        new = _tier_config(st)
+        for tier, cfg in (body.get("tiers") or {}).items():
+            if tier not in TIERS or not isinstance(cfg, dict):
+                raise HTTPException(400, f"Unknown tier: {tier}")
+            if "monthly_tokens" in cfg:
+                val = cfg["monthly_tokens"]
+                if not isinstance(val, int) or isinstance(val, bool) or not 1 <= val <= 10**12:
+                    raise HTTPException(400, f"{tier} monthly tokens must be a whole number from 1 to 1,000,000,000,000.")
+                new[tier]["monthly_tokens"] = val
+            for key in ("daily_pct", "weekly_pct"):
+                if key in cfg:
+                    val = cfg[key]
+                    if not isinstance(val, int) or isinstance(val, bool) or not 1 <= val <= 100:
+                        raise HTTPException(400, f"{tier} {key.split('_')[0]} share must be a whole number from 1 to 100.")
+                    new[tier][key] = val
+            if "providers" in cfg:
+                if not isinstance(cfg["providers"], list) or any(p not in PROVIDER_ALL for p in cfg["providers"]):
+                    raise HTTPException(400, f"{tier} providers must come from {', '.join(PROVIDER_ALL)}.")
+                new[tier]["providers"] = list(dict.fromkeys(cfg["providers"]))
+            if "blocked_models" in cfg:
+                if not isinstance(cfg["blocked_models"], list) or any(not isinstance(m, str) for m in cfg["blocked_models"]):
+                    raise HTTPException(400, f"{tier} blocked models must be a list of model names.")
+                new[tier]["blocked_models"] = list(dict.fromkeys(cfg["blocked_models"]))
+        store.set_setting("tier_config", json.dumps(new))
+        log(f"tier settings updated by {require(request, admin=True)['username']}")
+        return {"tiers": new}
+
     @app.post("/api/admin/settings")
     async def admin_settings_set(request: Request):
         _csrf(request)
@@ -2129,6 +2800,11 @@ def make_app(client=None, data_dir=None, char_root=None):
         for key, val in body.items():
             if key not in DEFAULT_SETTINGS:
                 raise HTTPException(400, f"Unknown setting: {key}")
+            if key == "budget_webhook_url":
+                # Empty turns the webhook off; anything else must be a web address.
+                if not isinstance(val, str) or len(val) > 500 or (val and not val.startswith(("http://", "https://"))):
+                    raise HTTPException(400, "The budget webhook must be an http or https address, or empty.")
+                continue
             if key in SWITCHES:
                 if not isinstance(val, bool):
                     raise HTTPException(400, f"{key} must be on or off.")
@@ -2351,4 +3027,66 @@ def make_app(client=None, data_dir=None, char_root=None):
         name, _ = _resolve_profile(st, character, target)
         return {"account": target["username"], **branches.tree(_branch_root(target, name))}
 
+    # Scheduled check-ins. Characters only: a group chat has no single character to send one.
+    def _solo_for_checkin(user, character):
+        name, is_group = _resolve_profile(st, character, user)
+        if is_group:
+            raise HTTPException(400, "Scheduled check-ins are for characters, not group chats.")
+        return name
+
+    @app.get("/api/checkins")
+    def checkin_get(request: Request, character: str):
+        user = require(request)
+        name = _solo_for_checkin(user, character)
+        row = st.store.checkin_get(user["id"], name)
+        return checkins.view(row, unread=(row or {}).get("unread", 0))
+
+    @app.post("/api/checkins")
+    async def checkin_set(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name = _solo_for_checkin(user, str(body.get("character", "")))
+        mode = body.get("mode")
+        if mode not in ("at", "random"):
+            raise HTTPException(400, "Mode must be at or random.")
+        times = {k: checkins.parse_hhmm(body.get(k)) for k in ("at", "start", "end")}
+        tz = str(body.get("tz") or "")
+        if tz and tz not in pytz.all_timezones_set:
+            raise HTTPException(400, "Unknown time zone.")
+        if mode == "at" and times["at"] is None:
+            raise HTTPException(400, "Give the time as HH:MM.")
+        if mode == "random" and (times["start"] is None or times["end"] is None or times["start"] > times["end"]):
+            raise HTTPException(400, "Give a random range as two HH:MM times, the start not after the end.")
+        checkins.save_settings(st.store, user["id"], name, body.get("enabled"), mode,
+                               times["at"] or 0, times["start"] or 0, times["end"] or 0, tz)
+        row = st.store.checkin_get(user["id"], name)
+        return checkins.view(row, unread=row["unread"])
+
+    @app.get("/api/checkins/unread")
+    def checkin_unread(request: Request):
+        # Missed check-ins per character, keyed by the name the sidebar and home cards show.
+        user = require(request)
+        return {"unread": {display_for(c): n for c, n in st.store.checkin_unread_for(user["id"]).items()}}
+
+    @app.post("/api/checkins/read")
+    async def checkin_read(request: Request):
+        # Opening a chat marks its missed check-ins as read.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name = _solo_for_checkin(user, str(body.get("character", "")))
+        st.store.checkin_update(user["id"], name, unread=0)
+        return {"ok": True}
+
+    # The thread that sends check-ins. Started once with the server; a check-in is sent only while it runs.
+    def _checkin_loop():
+        while True:
+            try:
+                checkins.tick(st.store, lambda uid, name: _fire_checkin(st, uid, name), log=log)
+            except Exception as err:
+                log(f"check-in scheduler error: {err}")
+            time.sleep(checkins.TICK_SECONDS)
+
+    threading.Thread(target=_checkin_loop, name="checkins", daemon=True).start()
     return app
