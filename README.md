@@ -24,9 +24,12 @@ The pictures below use six made-up characters, with generated art and made-up ch
 
 ![The character info card](docs/screenshots/08-info-card-desktop.png)
 
-![A chat on a phone](docs/screenshots/06-chat-phone.png)
-
-![Settings grid on a phone](docs/screenshots/07-settings-grid-phone.png)
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/06-chat-phone.png" alt="A chat on a phone" width="300"><br>A chat on a phone</td>
+    <td align="center"><img src="docs/screenshots/07-settings-grid-phone.png" alt="Settings grid on a phone" width="300"><br>Settings grid on a phone</td>
+  </tr>
+</table>
 
 ## Requirements
 
