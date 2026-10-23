@@ -56,6 +56,12 @@ AUTOFILL_SYSTEM = (
     "using the user's persona where one is given. Respond to the latest messages and move the scene forward. "
     "Keep it to one to three sentences. Output only the message text, with no quotes, labels or notes."
 )
+CHECKIN_SYSTEM = (
+    "You write a short check-in message from this character to the user, who has not written for a while. "
+    "Write it in character, in the voice of the character card, as one to three sentences. Ask how the user is, "
+    "or pick up something from the earlier chat. Do not write the user's actions or dialogue. "
+    "Output only the message text, with no quotes, labels or notes."
+)
 ROLL_SYSTEM = (
     "You add one random event to this roleplay scene. Choose something that fits the setting and the recent messages, "
     "and that gives the characters something to react to. Write it as a short narrator note in the third person, "
@@ -90,13 +96,7 @@ PRIORITY_MODELS = ["gemini-3.8-flash", "gemma-4-31b-it"]
 MEMORY_MODELS_HEAD = ["gemini-3.8-flash", "gemma-4-31b-it"]
 MEMORY_MODELS_TAIL = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
 
-DEFAULT_SUBSTITUTIONS = {
-    "lactation": "sweet cream overflow",
-    "milk": "nectar",
-    "milking": "harvesting nectar",
-    "breasts": "chest",
-    "udder": "chest",
-}
+DEFAULT_SUBSTITUTIONS = {}
 
 NARRATIVE_INSTRUCTION = (
     "\n\nCRITICAL NARRATIVE INSTRUCTION: Adopt a high-literary, impressionistic style. "
@@ -390,6 +390,17 @@ class TurnResult:
     memory_due: bool = False
     tokens_state: tuple = None
 
+    def usage_detail(self):
+        # The token split for the daily stats: prompt (input), the cached part of it, output, and the
+        # seconds the turn took. Unknown figures stay 0, so a provider that reports nothing is not guessed.
+        def number(value):
+            return int(value) if isinstance(value, int) else 0
+        prompt = number(self.prompt_tokens)
+        cached = min(number(self.cached_tokens), prompt) if prompt else 0
+        output = number(self.response_tokens)
+        return {"input_tokens": prompt, "cached_tokens": cached, "output_tokens": output,
+                "seconds": float(self.elapsed or 0.0)}
+
 
 # A model that sends nothing for this many seconds is skipped for the next one in the chain. Without it, one
 # stalled provider held a reply for several minutes. Steady streaming never trips it. Raise it for a slow local model.
@@ -457,7 +468,8 @@ class Engine:
                  member_memory=True, persist_config=True):
         # state_dir: where memory.json and memory.md live (default: ai_dir).
         # on_request: called once per Gemini call instead of the global tracker.
-        # on_tokens: called with a turn's token count; returns (used, limit) like the global tracker.
+        # on_tokens: called with a turn's token count, the model, and its input/cached/output/seconds split;
+        # returns (used, limit) like the global tracker.
         # allow_root_user: fall back to ./user.md when no user folder is given.
         # member_memory: let the group director read members' shared memory.md snippets.
         # persist_config: write the last-used model to the shared config.json.
@@ -523,9 +535,9 @@ class Engine:
         else:
             check_and_update_requests()
 
-    def _count_tokens(self, n, model=None):
+    def _count_tokens(self, n, model=None, detail=None):
         if self.on_tokens is not None:
-            return self.on_tokens(n, model or self.model_name)
+            return self.on_tokens(n, model or self.model_name, detail)
         return check_and_update_tokens(n)
 
     # ---- setup
@@ -685,7 +697,7 @@ class Engine:
                 mb_content = _read_text(self.memory_bank_file)
                 if mb_content:
                     prompt += f"\n\n--- Long-Term Memory Bank (memory.md) ---\n{mb_content}"
-                self.log(f"[cyan]Loaded memory bank from {self.memory_bank_file} ✨[/cyan]")
+                self.log(f"[cyan]Loaded memory bank from {self.memory_bank_file}[/cyan]")
             except Exception as e:
                 self.log(f"[yellow]Could not load memory.md: {e}[/yellow]")
         if self.memory_enabled and os.path.exists(self.pinned_file):
@@ -717,7 +729,7 @@ class Engine:
                         elif isinstance(item, str):
                             sanitized.append({"role": "user", "text": item})
                     self.full_history = sanitized
-                self.log(f"[cyan]Loaded full chat history from {self.memory_file} ({len(self.full_history)} total messages recorded) ✨[/cyan]")
+                self.log(f"[cyan]Loaded full chat history from {self.memory_file} ({len(self.full_history)} total messages recorded)[/cyan]")
             except Exception as e:
                 self.log(f"[red]Could not load memory file: {e}. Starting fresh.[/red]")
 
@@ -801,7 +813,7 @@ class Engine:
         result.elapsed = time.time() - start
         if not result.ok:
             return result
-        result.tokens_state = self._count_tokens(result.turn_tokens)
+        result.tokens_state = self._count_tokens(result.turn_tokens, detail=result.usage_detail())
         self.save()
         result.memory_due = self.memory_enabled and len(self.full_history) > 0 and len(self.full_history) % MEMORY_EVERY == 0
         return result
@@ -975,6 +987,7 @@ class Engine:
 
         self.full_history.append({"role": "user", "speaker": "user", "text": processed, "ts": _now_iso()})
         total = 0
+        group_usage = {"prompt": 0, "cached": 0, "output": 0}
         for name in selected:
             label = display_for(name)
             self._count_request()
@@ -1012,6 +1025,11 @@ class Engine:
             result.replies.append(Reply(label, color, raw, self.restore(raw), self.model_name, get_request_bar(), thought))
             self.full_history.append({"role": "model", "speaker": name, "text": raw, "ts": _now_iso(), **({"thinking": thought} if thought else {})})
             usage = getattr(resp, "usage_metadata", None)
+            for field, value in (("prompt", _usage(usage, "prompt_token_count")),
+                                 ("cached", _usage(usage, "cached_content_token_count")),
+                                 ("output", _usage(usage, "candidates_token_count"))):
+                if isinstance(value, int):
+                    group_usage[field] += value
             if usage and hasattr(usage, "total_token_count") and usage.total_token_count:
                 total += usage.total_token_count
 
@@ -1024,8 +1042,9 @@ class Engine:
 
         result.turn_tokens = total
         result.total_tokens = total
-        result.prompt_tokens = "N/A"
-        result.response_tokens = "N/A"
+        result.prompt_tokens = group_usage["prompt"]
+        result.cached_tokens = group_usage["cached"]
+        result.response_tokens = group_usage["output"]
         result.model = self.model_name
         return result
 
@@ -1198,6 +1217,29 @@ class Engine:
         text, _ = self._one_shot(self._scene_system(AUTOFILL_SYSTEM), "Write the user's next message now.")
         return _clean_plain(text)
 
+    def checkin(self):
+        # A scheduled check-in: one message from the character, saved to the chat and marked scheduled, so the
+        # app can show it as missed until the user opens the chat. Written from the time since the user last wrote.
+        last = next((e for e in reversed(self.full_history)
+                     if e.get("role") == "user" and e.get("speaker") != "narrator" and e.get("ts")), None)
+        gap = "a while"
+        if last is not None:
+            try:
+                hours = (datetime.datetime.now(datetime.timezone.utc)
+                         - datetime.datetime.fromisoformat(last["ts"])).total_seconds() / 3600
+                gap = f"about {round(hours)} hours" if hours >= 2 else f"about {max(1, round(hours * 60))} minutes"
+            except (TypeError, ValueError):
+                pass
+        prompt = (f"The user has not written for {gap}. Write the character's check-in message now, "
+                  "as one to three sentences.")
+        text, _ = self._one_shot(self._scene_system(CHECKIN_SYSTEM), prompt)
+        text = _clean_plain(text)
+        if not text:
+            raise RuntimeError("the model sent an empty check-in")
+        self.full_history.append({"role": "model", "text": text, "ts": _now_iso(), "scheduled": True})
+        self.save()
+        return text
+
     def roll_event(self):
         # Add one random event to the chat as a narrator note. It is saved, so the next reply sees it.
         text, _ = self._one_shot(self._scene_system(ROLL_SYSTEM), "Write the random event now.")
@@ -1360,7 +1402,7 @@ class Engine:
             try:
                 self._count_request(m)
                 time.sleep(2)
-                self.log(f"[dim magenta]🧠 Updating memory.md using {m}... (owo)[/dim magenta]")
+                self.log(f"[dim magenta]Updating memory.md using {m}... (owo)[/dim magenta]")
 
                 turns = [f"{e['role']}: {e['text'][:300]}" for e in self.full_history[-MEMORY_SNIPPET:]]
                 snippet = self.safe_text("\n".join(turns))
@@ -1414,7 +1456,7 @@ class Engine:
                 if summary_text:
                     self._save_summary(summary_text, cutoff)
                 self._build_system_prompt()
-                self.log("[dim green]✨ Successfully updated memory.md! ✨[/dim green]")
+                self.log("[dim green]Successfully updated memory.md![/dim green]")
                 return
             except Exception as e:
                 self.log(f"[yellow]Error with model {m}: {e}[/yellow]")
@@ -1423,4 +1465,4 @@ class Engine:
         if not os.path.exists(self.memory_bank_file):
             with open(self.memory_bank_file, "w", encoding="utf-8") as f:
                 f.write("# Memory Bank\n\n## Relationships\nActive roleplay partnership.\n\n## Key Facts\n- Session is active and saved.\n")
-            self.log("[green]✨ Created baseline memory.md successfully! ✨[/green]")
+            self.log("[green]Created baseline memory.md successfully![/green]")
