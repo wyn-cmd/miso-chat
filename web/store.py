@@ -73,6 +73,18 @@ CREATE TABLE IF NOT EXISTS usage_daily (
     messages INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, user_id, provider)
 );
+CREATE TABLE IF NOT EXISTS usage_models (
+    day TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    seconds REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, user_id, model)
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -83,20 +95,53 @@ CREATE TABLE IF NOT EXISTS prefs (
     value TEXT NOT NULL,
     PRIMARY KEY (user_id, key)
 );
+CREATE TABLE IF NOT EXISTS checkins (
+    user_id INTEGER NOT NULL,
+    character TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    mode TEXT NOT NULL DEFAULT 'at',
+    at_min INTEGER NOT NULL DEFAULT 1200,
+    start_min INTEGER NOT NULL DEFAULT 540,
+    end_min INTEGER NOT NULL DEFAULT 1140,
+    tz TEXT NOT NULL DEFAULT '',
+    target_day TEXT NOT NULL DEFAULT '',
+    target_min INTEGER NOT NULL DEFAULT -1,
+    fired_day TEXT NOT NULL DEFAULT '',
+    unread INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, character)
+);
 CREATE TABLE IF NOT EXISTS backup_auth (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     verifier TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS char_messages (
+    name TEXT PRIMARY KEY,
+    total INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS favourites (
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, name)
+);
 """
 
+# Tiers: a monthly token cap per account (Pacific month). Admin accounts have no tier and no cap.
+TIERS = ("free", "lite", "standard", "pro")
+TIER_MONTHLY_TOKENS = {"free": 1_000_000, "lite": 10_000_000, "standard": 20_000_000, "pro": 100_000_000}
+
 DEFAULT_SETTINGS = {
+    "char_messages_backfilled_v2": "0",
     "user_daily_cap": "100",     # Gemini calls per user per Pacific day
     "global_daily_cap": "800",   # all web users together, per Pacific day
     "rpm_limit": "25",           # all web users together, per minute (key is 30 RPM)
     "reply_min_tokens": "50",    # shortest reply length a user can pick, in tokens
     "reply_max_tokens": "1000",  # longest reply length a user can pick, in tokens
     "memory_enabled": "1",       # memory bank (memory.md and pinned facts): 1 on, 0 off
+    "tier_config": "",           # JSON: per tier monthly token cap, allowed providers, blocked models (admin Tiers page)
+    "deepseek_prices": "",       # JSON: overrides the DeepSeek rate table in web/pricing.py (per million tokens)
     "palace_enabled": "1",       # Mind Palace keyword entries: 1 on, 0 off
+    "budget_webhook_url": "",    # where budget alerts (80% and 100% of a window) are posted as JSON; empty = off
 }
 
 
@@ -153,11 +198,22 @@ class Store:
             for col in ("token_daily", "token_weekly", "token_monthly"):   # NULL = no budget
                 if col not in ucols:
                     c.execute(f"ALTER TABLE users ADD COLUMN {col} INTEGER")
+            if "tier" not in ucols:
+                # existing non-admin accounts start on lite, so the lite monthly cap applies to them
+                c.execute("ALTER TABLE users ADD COLUMN tier TEXT")
+                c.execute("UPDATE users SET tier = 'lite' WHERE is_admin = 0")
             if not c.execute("SELECT 1 FROM settings WHERE key = 'usage_daily_migrated'").fetchone():
                 # usage before per-provider stats existed was all Gemini; it has no message counts
                 c.execute("INSERT OR IGNORE INTO usage_daily (day, user_id, provider, requests, tokens, messages) "
                           "SELECT day, user_id, 'gemini', requests, tokens, 0 FROM usage")
                 c.execute("INSERT INTO settings (key, value) VALUES ('usage_daily_migrated', '1')")
+            dcols = {r["name"] for r in c.execute("PRAGMA table_info(usage_daily)")}
+            for col in ("input_tokens", "cached_tokens", "output_tokens"):
+                if col not in dcols:
+                    # older rows keep 0: the split was not recorded then, and is not guessed now
+                    c.execute(f"ALTER TABLE usage_daily ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
+            if "seconds" not in dcols:
+                c.execute("ALTER TABLE usage_daily ADD COLUMN seconds REAL NOT NULL DEFAULT 0")
             cols = {r["name"] for r in c.execute("PRAGMA table_info(sessions)")}
             if "remember" not in cols:
                 c.execute("ALTER TABLE sessions ADD COLUMN remember INTEGER NOT NULL DEFAULT 0")
@@ -200,13 +256,13 @@ class Store:
         if self._run("SELECT COUNT(*) AS n FROM users", fetch="one")["n"] == 0:
             self.create_user(ADMIN_NAME, ADMIN_DEFAULT_PASSWORD, is_admin=True, must_change=True)
 
-    def create_user(self, username, password, is_admin=False, must_change=True, daily_cap=None):
+    def create_user(self, username, password, is_admin=False, must_change=True, daily_cap=None, tier=None):
         try:
             return self._run(
-                "INSERT INTO users (username, pw_hash, is_admin, must_change, daily_cap, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO users (username, pw_hash, is_admin, must_change, daily_cap, created_at, tier) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (username, hash_password(password), int(is_admin), int(must_change), daily_cap,
-                 datetime.datetime.now().isoformat(timespec="seconds")))
+                 datetime.datetime.now().isoformat(timespec="seconds"), tier))
         except sqlite3.IntegrityError:
             raise ValueError("that username is taken")
 
@@ -238,7 +294,7 @@ class Store:
         self._run("UPDATE users SET pw_hash = ? WHERE id = ?", (hash_password(password), user_id))
 
     def update_user(self, user_id, **fields):
-        allowed = {"is_admin", "disabled", "daily_cap", "token_daily", "token_weekly", "token_monthly"}
+        allowed = {"is_admin", "disabled", "daily_cap", "token_daily", "token_weekly", "token_monthly", "tier"}
         bad = set(fields) - allowed
         if bad:
             raise ValueError(f"cannot change {sorted(bad)}")
@@ -428,24 +484,68 @@ class Store:
 
     # ---- usage and settings
 
-    def add_usage(self, user_id, requests=0, tokens=0, provider="gemini", messages=0):
-        # Add to today's totals: the account caps (usage) and the per-provider stats (usage_daily).
+    def add_usage(self, user_id, requests=0, tokens=0, provider="gemini", messages=0,
+                  input_tokens=0, cached_tokens=0, output_tokens=0, seconds=0.0, model=None):
+        # Add to today's totals: the account caps (usage), the per-provider stats (usage_daily), and the
+        # per-model stats (usage_models, when the model is known). Cached tokens are part of the input.
         day = pacific_date()
         self._run("INSERT INTO usage (user_id, day, requests, tokens) VALUES (?, ?, ?, ?) "
                   "ON CONFLICT(user_id, day) DO UPDATE SET "
                   "requests = requests + excluded.requests, tokens = tokens + excluded.tokens",
                   (user_id, day, requests, tokens))
-        self._run("INSERT INTO usage_daily (day, user_id, provider, requests, tokens, messages) "
-                  "VALUES (?, ?, ?, ?, ?, ?) "
+        self._run("INSERT INTO usage_daily (day, user_id, provider, requests, tokens, messages, "
+                  "input_tokens, cached_tokens, output_tokens, seconds) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                   "ON CONFLICT(day, user_id, provider) DO UPDATE SET "
                   "requests = requests + excluded.requests, tokens = tokens + excluded.tokens, "
-                  "messages = messages + excluded.messages",
-                  (day, user_id, provider, requests, tokens, messages))
+                  "messages = messages + excluded.messages, "
+                  "input_tokens = input_tokens + excluded.input_tokens, "
+                  "cached_tokens = cached_tokens + excluded.cached_tokens, "
+                  "output_tokens = output_tokens + excluded.output_tokens, "
+                  "seconds = seconds + excluded.seconds",
+                  (day, user_id, provider, requests, tokens, messages,
+                   input_tokens, cached_tokens, output_tokens, seconds))
+        if model:
+            self._run("INSERT INTO usage_models (day, user_id, model, provider, requests, input_tokens, "
+                      "cached_tokens, output_tokens, seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                      "ON CONFLICT(day, user_id, model) DO UPDATE SET "
+                      "provider = excluded.provider, requests = requests + excluded.requests, "
+                      "input_tokens = input_tokens + excluded.input_tokens, "
+                      "cached_tokens = cached_tokens + excluded.cached_tokens, "
+                      "output_tokens = output_tokens + excluded.output_tokens, "
+                      "seconds = seconds + excluded.seconds",
+                      (day, user_id, model, provider, requests, input_tokens, cached_tokens, output_tokens, seconds))
+
+    def usage_breakdown(self, days, provider="all"):
+        # Input, cached input, output and seconds over the given day strings, per provider.
+        marks = ",".join("?" for _ in days)
+        sql = (f"SELECT provider, SUM(input_tokens) AS input_tokens, SUM(cached_tokens) AS cached_tokens, "
+               f"SUM(output_tokens) AS output_tokens, SUM(seconds) AS seconds "
+               f"FROM usage_daily WHERE day IN ({marks})")
+        args = list(days)
+        if provider != "all":
+            sql += " AND provider = ?"
+            args.append(provider)
+        return self._run(sql + " GROUP BY provider", tuple(args), fetch="all")
+
+    def usage_model_totals(self, days, provider="all"):
+        # Per-model input, cached input, output and seconds over the given day strings.
+        marks = ",".join("?" for _ in days)
+        sql = (f"SELECT model, provider, SUM(requests) AS requests, SUM(input_tokens) AS input_tokens, "
+               f"SUM(cached_tokens) AS cached_tokens, SUM(output_tokens) AS output_tokens, "
+               f"SUM(seconds) AS seconds FROM usage_models WHERE day IN ({marks})")
+        args = list(days)
+        if provider != "all":
+            sql += " AND provider = ?"
+            args.append(provider)
+        return self._run(sql + " GROUP BY model, provider ORDER BY model", tuple(args), fetch="all")
 
     def usage_series(self, days, provider="all"):
         # Per-day totals for the given day strings (see recent_days), optionally for one provider.
         marks = ",".join("?" for _ in days)
-        sql = (f"SELECT day, SUM(requests) AS requests, SUM(tokens) AS tokens, SUM(messages) AS messages "
+        sql = (f"SELECT day, SUM(requests) AS requests, SUM(tokens) AS tokens, SUM(messages) AS messages, "
+               f"SUM(input_tokens) AS input_tokens, SUM(cached_tokens) AS cached_tokens, "
+               f"SUM(output_tokens) AS output_tokens, SUM(seconds) AS seconds "
                f"FROM usage_daily WHERE day IN ({marks})")
         args = list(days)
         if provider != "all":
@@ -480,6 +580,32 @@ class Store:
                         (user_id, pacific_date()), fetch="one")
         return row or {"requests": 0, "tokens": 0}
 
+    def bump_char_message(self, name, n=1):
+        self._run("INSERT INTO char_messages (name, total) VALUES (?, ?) "
+                  "ON CONFLICT(name) DO UPDATE SET total = total + excluded.total", (name, n))
+
+    def clear_char_messages(self):
+        self._run("DELETE FROM char_messages")
+
+    def char_message_totals(self):
+        rows = self._run("SELECT name, total FROM char_messages", fetch="all")
+        return {r["name"]: r["total"] for r in rows}
+
+    def favourite_counts(self):
+        rows = self._run("SELECT name, COUNT(*) AS n FROM favourites GROUP BY name", fetch="all")
+        return {r["name"]: r["n"] for r in rows}
+
+    def favourites_of(self, user_id):
+        rows = self._run("SELECT name FROM favourites WHERE user_id = ?", (user_id,), fetch="all")
+        return {r["name"] for r in rows}
+
+    def set_favourite(self, user_id, name, on):
+        if on:
+            self._run("INSERT OR IGNORE INTO favourites (user_id, name, created_at) VALUES (?, ?, ?)",
+                      (user_id, name, datetime.datetime.now().isoformat(timespec="seconds")))
+        else:
+            self._run("DELETE FROM favourites WHERE user_id = ? AND name = ?", (user_id, name))
+
     def global_requests_today(self):
         return self._run("SELECT COALESCE(SUM(requests), 0) AS n FROM usage WHERE day = ?",
                          (pacific_date(),), fetch="one")["n"]
@@ -496,6 +622,41 @@ class Store:
     def set_setting(self, key, value):
         self._run("INSERT INTO settings (key, value) VALUES (?, ?) "
                   "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, str(value)))
+
+    # Scheduled check-ins: one row per account and character. The columns are set through checkin_update.
+    CHECKIN_FIELDS = ("enabled", "mode", "at_min", "start_min", "end_min", "tz", "target_day", "target_min",
+                      "fired_day", "unread")
+
+    def checkin_get(self, user_id, character):
+        return self._run("SELECT * FROM checkins WHERE user_id = ? AND character = ?",
+                         (user_id, character), fetch="one")
+
+    def checkin_update(self, user_id, character, **fields):
+        bad = set(fields) - set(self.CHECKIN_FIELDS)
+        if bad:
+            raise ValueError(f"unknown check-in fields: {sorted(bad)}")
+        self._run("INSERT OR IGNORE INTO checkins (user_id, character) VALUES (?, ?)", (user_id, character))
+        if fields:
+            cols = ", ".join(f"{k} = ?" for k in fields)
+            self._run(f"UPDATE checkins SET {cols} WHERE user_id = ? AND character = ?",
+                      (*fields.values(), user_id, character))
+
+    def checkin_add_unread(self, user_id, character):
+        self.checkin_update(user_id, character)
+        self._run("UPDATE checkins SET unread = unread + 1 WHERE user_id = ? AND character = ?", (user_id, character))
+
+    def checkin_unread_for(self, user_id):
+        rows = self._run("SELECT character, unread FROM checkins WHERE user_id = ? AND unread > 0",
+                         (user_id,), fetch="all")
+        return {r["character"]: r["unread"] for r in rows}
+
+    def checkin_enabled_rows(self):
+        return self._run("SELECT * FROM checkins WHERE enabled = 1", fetch="all")
+
+    # A stored value for a key that has no default (per-account state, such as the last budget alert sent).
+    def get_state(self, key):
+        row = self._run("SELECT value FROM settings WHERE key = ?", (key,), fetch="one")
+        return row["value"] if row else ""
 
     def all_settings(self):
         return {k: self.get_setting(k) for k in DEFAULT_SETTINGS}
