@@ -31,7 +31,7 @@
       <h2>Users</h2>
       <table>
         <thead>
-          <tr><th>User</th><th>Role</th><th>Status</th><th>Requests today</th><th>Cap</th><th>Tokens today</th><th>Tokens this week</th><th>Tokens this month</th><th>Token budgets (day / week / month)</th><th>Actions</th></tr>
+          <tr><th>User</th><th>Role</th><th>Status</th><th>Requests today</th><th>Cap</th><th>Tokens today (used / limit)</th><th>Tokens this week (used / limit)</th><th>Tokens this month (used / limit)</th><th>Tier</th><th>Token limits (day / week / month)</th><th>Actions</th></tr>
         </thead>
         <tbody id="users"></tbody>
       </table>
@@ -58,10 +58,21 @@
       <label class="inline"><input id="s_memory_enabled" type="checkbox"> Memory bank (memory.md and pinned facts)</label>
       <label class="inline"><input id="s_palace_enabled" type="checkbox"> Mind Palace (database searching: keyword entries)</label>
       <p class="muted">Both are on by default. Turning one off stops it being read, refreshed and shown to users.</p>
+      <label>Budget alert webhook (optional) <input id="s_budget_webhook_url" type="url" maxlength="500" placeholder="https://hooks.example.com/..."></label>
+      <p class="muted">Posted as JSON when a user's daily, weekly or monthly token budget reaches 80% and again at 100%. Leave empty to turn it off.</p>
         <button type="submit">Save limits</button>
         <p id="settingsMsg" class="muted"></p>
       </form>
     </section>
+<section>
+<h2>Tiers</h2>
+<p class="muted">Each tier's monthly token cap, its daily and weekly limits (percent of the monthly cap; defaults 10% and 20%), the providers it may use, and models it may not use. Admins have no tier and no cap. A limit set on a user row overrides the tier's figure.</p>
+<table>
+<thead><tr><th>Tier</th><th>Users</th><th>Tokens today / this week / this month</th><th>Monthly token cap</th><th>Daily limit (% of monthly)</th><th>Weekly limit (% of monthly)</th><th>Providers allowed</th><th>Models blocked</th><th></th></tr></thead>
+<tbody id="tiers"></tbody>
+</table>
+<p id="tiersMsg" class="muted"></p>
+</section>
     <section>
       <h2>Backups</h2>
       <p class="muted">Each backup is encrypted with the backup password. The first admin sets it once, and every backup needs it, along with your two-factor code. Someone who downloads a backup can't open it without that password. A data backup holds the data, characters and settings, including .env. A full backup also holds the server code, so restore_backup.py can rebuild the whole install.</p>
