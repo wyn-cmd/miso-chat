@@ -152,6 +152,10 @@ async function loadSettings() {
   $("s_reply_max_tokens").value = s.reply_max_tokens;
   $("s_memory_enabled").checked = s.memory_enabled === "1";
   $("s_palace_enabled").checked = s.palace_enabled === "1";
+  $("s_episodes_enabled").checked = s.episodes_enabled === "1";
+  $("s_dreams_enabled").checked = s.dreams_enabled === "1";
+  $("s_dream_daily_cap").value = s.dream_daily_cap;
+  $("s_dream_every_days").value = s.dream_every_days;
   $("s_budget_webhook_url").value = s.budget_webhook_url || "";
 }
 
@@ -186,6 +190,10 @@ $("settingsForm").addEventListener("submit", async (ev) => {
       reply_max_tokens: parseInt($("s_reply_max_tokens").value, 10),
       memory_enabled: $("s_memory_enabled").checked,
       palace_enabled: $("s_palace_enabled").checked,
+      episodes_enabled: $("s_episodes_enabled").checked,
+      dreams_enabled: $("s_dreams_enabled").checked,
+      dream_daily_cap: parseInt($("s_dream_daily_cap").value, 10),
+      dream_every_days: parseInt($("s_dream_every_days").value, 10),
       budget_webhook_url: $("s_budget_webhook_url").value.trim(),
     });
     $("settingsMsg").textContent = "Saved.";

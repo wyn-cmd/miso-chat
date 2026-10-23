@@ -3,9 +3,11 @@
 # entries, a scan depth per entry, an insertion order, a size budget that drops the lowest order
 # first, and optional recursion (a matched entry can bring in another). Plain keyword matching, so
 # it costs no model calls and no requests.
+import functools
 import json
 import os
 import re
+import secrets
 import unicodedata
 
 FILE = "palace.json"
@@ -21,6 +23,10 @@ BUDGET_RANGE = (500, 12000)
 MAX_MATCHED = 24
 RECURSION_STEPS = 3
 LOGICS = ("and_any", "and_all", "not_any", "not_all")
+# Automatic entries: the character adds them from the chat (see palace_auto.py). Off unless the user turns it on.
+AUTO_DEFAULT = {"enabled": False, "every": 3, "limit": 20}
+AUTO_EVERY_RANGE = (1, 10)
+AUTO_LIMIT_RANGE = (1, MAX_ENTRIES)
 
 
 class PalaceError(ValueError):
@@ -78,6 +84,10 @@ def _keys(value, what, limit):
     return out
 
 
+def new_id():
+    return secrets.token_hex(4)
+
+
 def validate(raw):
     # Strict: the editor shows these messages. Raises PalaceError for the first problem found.
     if not isinstance(raw, list):
@@ -101,7 +111,10 @@ def validate(raw):
         logic = item.get("logic") or "and_any"
         if logic not in LOGICS:
             raise PalaceError(f"'{label}' logic must be one of: {', '.join(LOGICS)}.")
+        entry_id = item.get("id") if isinstance(item.get("id"), str) and re.fullmatch(r"[0-9a-f]{8}", item.get("id")) else ""
         out.append({
+            "id": entry_id,
+            "auto": _flag(item.get("auto"), False, f"'{label}' automatic"),
             "title": title,
             "keys": keys,
             "secondary": secondary,
@@ -116,13 +129,30 @@ def validate(raw):
     return out
 
 
-def validate_settings(data):
+def _auto_settings(data, base):
+    # Missing values keep what is saved. The automatic-entry switch and its limits are validated like the rest.
     if not isinstance(data, dict):
         data = {}
     return {
-        "recursive": _flag(data.get("recursive"), False, "Recursive scanning"),
-        "budget": _int(data.get("budget"), BUDGET_RANGE[0], BUDGET_RANGE[1], DEFAULT_BUDGET,
+        "enabled": _flag(data.get("enabled"), base["enabled"], "Automatic entries"),
+        "every": _int(data.get("every"), AUTO_EVERY_RANGE[0], AUTO_EVERY_RANGE[1], base["every"],
+                      "The check interval"),
+        "limit": _int(data.get("limit"), AUTO_LIMIT_RANGE[0], AUTO_LIMIT_RANGE[1], base["limit"],
+                      "The automatic entry limit"),
+    }
+
+
+def validate_settings(data, base=None):
+    # base holds the saved settings; a value left out of data keeps its saved value.
+    if not isinstance(data, dict):
+        data = {}
+    base = base or {"recursive": False, "budget": DEFAULT_BUDGET, "auto": dict(AUTO_DEFAULT), "episodes": True}
+    return {
+        "recursive": _flag(data.get("recursive"), base["recursive"], "Recursive scanning"),
+        "budget": _int(data.get("budget"), BUDGET_RANGE[0], BUDGET_RANGE[1], base["budget"],
                        "The character budget"),
+        "auto": _auto_settings(data.get("auto"), base["auto"]),
+        "episodes": _flag(data.get("episodes"), base.get("episodes", True), "Episodic memory"),
     }
 
 
@@ -162,10 +192,11 @@ def copy_starting(src_folder, dst_folder):
 
 def save(folder, raw, settings=None):
     entries = validate(raw)
-    cfg = load_all(folder)[1] if settings is None else validate_settings(settings)
+    cfg = validate_settings(settings, base=load_all(folder)[1])
     path = os.path.join(folder, FILE)
     tmp = path + ".tmp"
-    payload = {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"]}
+    payload = {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"], "auto": cfg["auto"],
+               "episodes": cfg["episodes"]}
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
@@ -182,24 +213,70 @@ def _norm(text):
     return "".join(c for c in text if not unicodedata.combining(c)).casefold()
 
 
+# The forms of an English word that a whole-word key should also match: plurals, past and -ing forms, -er
+# agent nouns, and the spelling changes they need (love/loving, city/cities, stop/stopped). Only these endings
+# are added, so "vesper" does not match "vespertine" and "cat" does not match "category".
+def _inflections(word):
+    forms = {word}
+    # -er only on longer words: "cat" must not reach "cater", "hat" must not reach "hatter".
+    agent = ("er", "ers") if len(word) >= 4 else ()
+    if word.endswith("e") and len(word) > 2:
+        stem = word[:-1]
+        forms |= {stem + x for x in ("ing", "ed", "s") + agent}
+    elif word.endswith("y") and len(word) > 2 and word[-2] not in "aeiou":
+        stem = word[:-1]
+        forms |= {stem + x for x in ("ies", "ied", "ily")}
+    else:
+        forms |= {word + x for x in ("s", "es", "ed", "ing") + agent}
+        # Doubled final consonant after one vowel: stop -> stopped, run -> running.
+        if len(word) >= 3 and re.search(r"[^aeiouwxy][aeiou][^aeiouwxy]$", word):
+            forms |= {word + word[-1] + x for x in ("ed", "ing", "s") + agent}
+    return forms
+
+
+@functools.lru_cache(maxsize=4096)
+def _word_pattern(key):
+    words = key.split()
+    last = words[-1]
+    if re.fullmatch(r"[a-z0-9]+", last):
+        alternatives = sorted(_inflections(last), key=len, reverse=True)
+        tail = "(?:" + "|".join(re.escape(f) for f in alternatives) + ")"
+    else:
+        tail = re.escape(last)
+    head = re.escape(" ".join(words[:-1]) + " ") if len(words) > 1 else ""
+    return re.compile(r"(?<![a-z0-9])" + head + tail + r"(?![a-z0-9])")
+
+
 def _pattern(key, whole):
     k = _norm(key)
     if whole and re.fullmatch(r"[a-z0-9 '\-]+", k):
-        # Plain words match whole words only, so "Vesper" does not hit "Vespers" by accident.
-        return re.compile(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])")
+        # Plain words match whole words, with their common endings, so "Vesper" does not hit "Vespertine".
+        return _word_pattern(k)
     # Other scripts and symbols (Japanese, "mrrp~") match as plain substrings.
     return re.compile(re.escape(k))
+
+
+# A key written as "mouse|mice" matches either form. Use it for irregular words the endings cannot reach.
+def _any_form(keys, text, whole):
+    return any(_pattern(form.strip(), whole).search(text) for key in keys for form in key.split("|") if form.strip())
+
+
+def count_hits(keys, texts, whole=True):
+    # How many of the recent messages contain any of these keys. Used to rank candidate entries by how often
+    # their keys come up in the rolling window.
+    pattern_keys = [k for k in keys if k.strip()]
+    return sum(1 for t in texts if _any_form(pattern_keys, _norm(str(t)), whole))
 
 
 def _fires(entry, text):
     # text is normalised scan text. Always-on entries fire without a key.
     if entry["constant"]:
         return True
-    if not any(_pattern(k, entry["whole"]).search(text) for k in entry["keys"]):
+    if not _any_form(entry["keys"], text, entry["whole"]):
         return False
     if not entry["secondary"]:
         return True
-    found = [bool(_pattern(k, entry["whole"]).search(text)) for k in entry["secondary"]]
+    found = [_any_form([k], text, entry["whole"]) for k in entry["secondary"]]
     logic = entry["logic"]
     if logic == "and_any":
         return any(found)

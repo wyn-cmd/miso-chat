@@ -820,3 +820,6 @@ body.page-art { background: linear-gradient(var(--shade-overlay), var(--shade-ov
   box-shadow: 0 0 0 2px var(--card); pointer-events: none; z-index: 2; }
 .checkin-tag { display: inline-block; margin: 0 0 4px; font-size: 11px; letter-spacing: .02em; color: var(--muted);
   border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+
+/* Mind Palace: the marker on an entry the character added itself */
+.palace-auto { font-size: 12px; margin: 0 0 4px; }

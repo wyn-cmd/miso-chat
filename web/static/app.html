@@ -100,6 +100,11 @@
         <input id="edDraftFile" type="file" accept=".txt,.md,.docx,.pdf,.png,.jpg,.jpeg,.webp">
         <button id="edDraftBtn" class="ghost" type="button">Read and draft</button>
         <p id="edDraftMsg" class="muted" aria-live="polite"></p>
+        <hr>
+        <p class="muted">Import a character card from SillyTavern or a similar editor: a .json file, or a .png with the card inside. The name, card, scenario, summary, tags and lorebook fill the form. A PNG becomes the character's picture, and lorebook entries become Mind Palace entries once the character is created. Nothing is saved until Create.</p>
+        <input id="edImportFile" type="file" accept=".json,.png,application/json,image/png">
+        <button id="edImportBtn" class="ghost" type="button">Import card</button>
+        <p id="edImportMsg" class="muted" aria-live="polite"></p>
       </fieldset>
       <div id="edImportBox" class="import-box">
         <label class="side-label">Import a character from a .zip (new characters only)
@@ -169,7 +174,7 @@
       </div>
       <fieldset id="edPalaceBox" class="icon-box palace-box" hidden>
         <legend>Mind Palace (database searching)</legend>
-        <p class="muted">Each entry joins the prompt when its keys appear in the recent chat. Keys match whole words, ignoring case and accents, so list plurals too. Secondary keys narrow it further (see Logic). Always on entries join every reply.</p>
+        <p class="muted">Each entry joins the prompt when its keys appear in the recent chat. Keys match whole words, ignoring case and accents. Plurals and common endings (cat, cats, loved, stopping, cities) match on their own. For an irregular form, write both in one key, such as mouse|mice. Secondary keys narrow it further (see Logic). Always on entries join every reply.</p>
         <div class="palace-settings">
           <label class="inline"><input id="edPalaceRecursive" type="checkbox"> Recursive: a matched entry can trigger others</label>
           <label class="inline">Character budget <input id="edPalaceBudget" type="number" min="500" max="12000" step="100" value="3000"> characters</label>
@@ -279,6 +284,7 @@
         <button class="set-card" type="button" data-panel="character"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></span><span class="set-name">Character</span><span class="set-note">Memory, model, creativity, characters</span></button>
         <button id="pinCard" class="set-card" type="button" data-panel="pinned"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3H7l3-3-1-6z"/><path d="M12 12v9"/></svg></span><span class="set-name">Pinned facts</span><span class="set-note">Kept in every prompt, never forgotten</span></button>
         <button id="checkinCard" class="set-card" type="button" data-panel="checkin"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M19 4l2 2"/></svg></span><span class="set-name">Check-in</span><span class="set-note">The character messages you once a day</span></button>
+        <button id="dreamCard" class="set-card" type="button" data-panel="dreams"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span><span class="set-name">Dreams</span><span class="set-note">Tidy memory in quiet hours</span></button>
         <button class="set-card" type="button" data-panel="persona"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9.5" cy="11" r="2"/><path d="M6.5 16c.6-1.4 1.7-2 3-2s2.4.6 3 2"/><path d="M15 10h3M15 13h3"/></svg></span><span class="set-name">Persona</span><span class="set-note">Who you are in chats</span></button>
         <button class="set-card" type="button" data-panel="palace"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9 10v8M15 10v8M19 10v8"/><path d="M3 20h18"/></svg></span><span class="set-name">Mind Palace</span><span class="set-note">Your entries for this character</span></button>
         <button class="set-card" type="button" data-panel="history"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="set-name">Chat history</span><span class="set-note">Window, reply length</span></button>
@@ -364,6 +370,16 @@
         <p><button id="ciSave" class="ghost small" type="button">Save check-in</button> <span id="ciMsg" class="muted" role="status"></span></p>
         <p id="ciNote" class="muted"></p>
       </section>
+      <section class="set-panel" data-panel="dreams" hidden>
+        <p class="muted needs-char">Open a character to set its dreams.</p>
+        <p class="muted">In its quiet hours the character reviews its recent memories, links facts that belong together, and drops automatic Mind Palace entries that repeat or contradict others. Pinned facts and your own palace entries are never changed. Dreams do not count toward your token budget.</p>
+        <p id="dreamServerNote" class="muted" hidden>Dreams are switched off on this server, so nothing runs until an admin turns them on.</p>
+        <label class="check-row"><input id="dreamEnabled" type="checkbox"> Dream each night</label>
+        <label class="check-row">Quiet hours from <input id="dreamStart" type="time" aria-label="Quiet hours start"> to <input id="dreamEnd" type="time" aria-label="Quiet hours end"></label>
+        <p><button id="dreamSave" class="ghost small" type="button">Save dreams</button> <span id="dreamMsg" class="muted" role="status"></span></p>
+        <p id="dreamEvery" class="muted"></p>
+        <p id="dreamLast" class="muted"></p>
+      </section>
       <section class="set-panel" data-panel="persona" hidden>
         <div data-slot="persona"></div>
       </section>
@@ -410,6 +426,12 @@
       <p class="muted">Only you see these. The director and the character both read them when the group replies.</p>
       <div id="groupNotes"></div>
     </fieldset>
+    <fieldset id="groupIconBox" class="dlg-field" hidden>
+      <legend>Picture</legend>
+      <p class="muted">The picture shown beside this group in the sidebar. Only you see it. A new picture replaces the old one.</p>
+      <input id="groupIconFile" type="file" accept="image/png,image/jpeg" aria-label="Group picture">
+      <p><button id="groupIconRemove" class="ghost small" type="button" hidden>Remove picture</button> <span id="groupIconMsg" class="muted" role="status"></span></p>
+    </fieldset>
     <fieldset id="groupBgBox" class="dlg-field" hidden>
       <legend>Background</legend>
       <p class="muted">Shown behind this group's chat. Only you see it. A new picture replaces the old one.</p>
@@ -429,6 +451,14 @@
     <p class="muted">Your own entries for this character. The character's starting palace was copied to your account the first time you chatted with it. Changes apply from your next message.</p>
     <label class="inline"><input id="palRecursive" type="checkbox"> Recursive: a matched entry can trigger others</label>
     <label class="inline">Character budget <input id="palBudget" type="number" min="500" max="12000" step="100"> characters</label>
+    <label class="inline"><input id="palEpisodes" type="checkbox"> Episodic memory: bring back earlier moments of this chat when the keywords come up again</label>
+    <fieldset class="dlg-field">
+      <legend>Automatic entries</legend>
+      <label class="inline"><input id="palAutoOn" type="checkbox"> Let the character add and correct entries from the chat</label>
+      <label class="inline">Check every <input id="palAutoEvery" type="number" min="1" max="10" step="1"> turns</label>
+      <label class="inline">Keep up to <input id="palAutoLimit" type="number" min="1" max="60" step="1"> automatic entries</label>
+      <p class="muted">Each check suggests up to three entries and keeps the one whose keys come up most in the last 30 messages. When the limit is reached, the character chooses an automatic entry to replace. It can also correct an automatic entry when the chat changes it. Your own entries are never changed. Automatic entries are marked, and you can edit or remove them like any other.</p>
+    </fieldset>
     <div id="palList" class="palace-list"></div>
     <p id="palMsg" class="muted" aria-live="polite"></p>
     <div class="dlg-actions">

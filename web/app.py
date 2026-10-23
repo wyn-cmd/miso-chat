@@ -8,6 +8,7 @@
 #     MISO_DATA_DIR           app.db and per-user chat state (default ./data)
 #     MISO_COOKIE_SECURE      defaults to 1; set to 0 only for plain-http testing on a private network
 import collections
+import datetime
 import hashlib
 import ipaddress
 import json
@@ -32,7 +33,7 @@ from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_T
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor, profiles, recommend, transfer, ocr, palace, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams
 import pytz
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, TIERS, TIER_MONTHLY_TOKENS, budget_days, recent_days, verify_password, needs_rehash
 
@@ -596,6 +597,64 @@ def _background_ids_for(st, user, solo, groups):
     return out
 
 
+# How often the dream thread looks at the quiet hours, in seconds.
+DREAM_TICK_SECONDS = 300
+
+
+# The dream settings as the page shows them, with the last dream's record when there is one.
+def _dream_view(st, uid, folder, row):
+    state_dir = branches.active_dir(os.path.join(st.data_dir, "users", str(uid), folder))
+    last = _read_json_file(os.path.join(state_dir, "dream.json"))
+    def hhmm(m):
+        return f"{(m or 0) // 60:02d}:{(m or 0) % 60:02d}"
+    return {"enabled": bool(row.get("enabled")), "start": hhmm(row.get("start_min", 120)),
+            "end": hhmm(row.get("end_min", 360)), "tz": row.get("tz") or "",
+            "server_on": st.store.get_setting("dreams_enabled") == "1", "last": last or None,
+            "every_days": int(st.store.get_setting("dream_every_days"))}
+
+
+def _read_json_file(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+# Runs one dream for an account's character. It holds the chat's lock, so it never overlaps a reply, and it is
+# counted against the server's dream cap, not the user's requests or tokens. Returns True when a dream ran.
+def _dream_fire(st, uid, name):
+    if st.store.get_setting("dreams_enabled") != "1":
+        return False
+    today = datetime.datetime.now(pytz.timezone("US/Pacific")).strftime("%Y-%m-%d")
+    key = "dream_calls:" + today
+    used = int(st.store.get_state(key) or 0)
+    if used >= int(st.store.get_setting("dream_daily_cap")):
+        log(f"dream for {name} (user {uid}) skipped: the server's dream cap is used up for today")
+        return False
+    if st.store.global_requests_today() >= int(st.store.get_setting("global_daily_cap")):
+        log(f"dream for {name} (user {uid}) skipped: the server's daily budget is used up")
+        return False
+    user = st.store.get_user(uid)
+    if user is None or user["disabled"] or user["must_change"]:
+        return False
+    slot = _slot(st, user, name, False)
+    if not slot.lock.acquire(timeout=60):
+        return False   # a reply has held the chat for a minute: leave tonight's dream for the next tick
+    try:
+        record = slot.engine.dream()
+        calls = slot.engine.dream_calls
+    finally:
+        slot.lock.release()
+    if calls:
+        st.store.set_setting(key, used + calls)
+    if record is not None:
+        log(f"dream for {name} (user {uid}): {record['added']} added, {record['updated']} updated, "
+            f"{record['removed']} removed, {record['dropped']} palace entries dropped")
+    return record is not None
+
+
 # Makes one scheduled check-in for an account's character, in the same chat its turns use. Skipped when the
 # account is disabled, has no password change yet, or is over its request cap or token budget. Returns True
 # when the message was saved and marked unread.
@@ -795,13 +854,14 @@ def _label(st, user, name):
     return display_for(name)
 
 
-SWITCHES = ("memory_enabled", "palace_enabled")
+SWITCHES = ("memory_enabled", "palace_enabled", "episodes_enabled", "dreams_enabled")
 
 
 def _apply_switches(st, engine):
     # Read per request, so an admin change takes effect on the next message.
     engine.memory_enabled = st.store.get_setting("memory_enabled") == "1"
     engine.palace_enabled = st.store.get_setting("palace_enabled") == "1"
+    engine.episodes_enabled = st.store.get_setting("episodes_enabled") == "1"
 
 
 def _slot(st, user, name, is_group):
@@ -1192,6 +1252,20 @@ def _run_turn(st, user, name, slot, message, regen=False):
                     "selected": result.selected,
                     "selector_note": result.selector_note,
                 }))
+                # Automatic Mind Palace entries: every few turns the character may add or correct one.
+                pdir = slot.engine.palace_dir
+                if (pdir and not slot.engine.is_group and slot.engine.palace_enabled and result.replies and not regen
+                        and st.store.usage_today(user["id"])["requests"] < _effective_cap(st, user)
+                        and not _budget_block(st, user)):
+                    try:
+                        _, auto_cfg = palace.load_all(pdir)
+                        if auto_cfg["auto"]["enabled"] and palace_auto.due(pdir, auto_cfg["auto"]["every"]):
+                            summary = palace_auto.run(slot.engine, pdir)
+                            if summary and (summary["added"] or summary["edited"]):
+                                log(f"palace for {name} (user {user['id']}): added {summary['added']!r}, "
+                                    f"replaced {summary['replaced']!r}, edited {summary['edited']}")
+                    except Exception as err:   # the automatic check is best-effort
+                        log(f"palace check failed for {name}: {err}")
                 if result.memory_due and st.store.usage_today(user["id"])["requests"] < _effective_cap(st, user):
                     try:
                         slot.engine.update_memory_bank()
@@ -1771,6 +1845,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         stars = st.store.favourite_counts()
         pop = _popular_set(totals)
         bg_ids = _background_ids_for(st, user, solo, groups)
+        private_icons = [i["name"] for i in private_groups.list_for(st.data_dir, user["id"])
+                         if editor.icon_path(_private_group_root(st, user["id"]), i["id"]) is not None]
         return {"solo": [display_for(s) for s in solo], "groups": [{"name": display_for(g), "members": [display_for(x) for x in m]} for g, m in groups.items()]
                 + [{"name": i["name"], "members": [display_for(x) for x in i["members"]], "id": i["id"], "private": True}
                    for i in private_groups.list_for(st.data_dir, user["id"])],
@@ -1782,7 +1858,7 @@ def make_app(client=None, data_dir=None, char_root=None):
                 "stars": stars,
                  "sidebar": [display_for(s) for s in ranked if s in chatted or display_for(s) in favs],
                 "personas": _persona_list(st, user), "colors": _colour_map(st.char_root),
-                "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))],
+                "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))] + private_icons,
                 "backgrounds": list(bg_ids), "default_backgrounds": _default_art(), "bg_ids": bg_ids,
                 "editable": [display_for(s) for s in solo if can_edit_card(user, os.path.join(st.char_root, s))],
                 "recommended": [{"name": display_for(r["folder"]), "tags": r["tags"]} for r in
@@ -1812,7 +1888,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         user = require(request)
         out = []
         for i in private_groups.list_for(st.data_dir, user["id"]):
-            out.append({"id": i["id"], "name": i["name"], "has_background": bool(editor.background_ids(_private_group_root(st, user["id"]), i["id"])),
+            out.append({"id": i["id"], "name": i["name"], "has_icon": editor.icon_path(_private_group_root(st, user["id"]), i["id"]) is not None,
+                        "has_background": bool(editor.background_ids(_private_group_root(st, user["id"]), i["id"])),
                         "members": [{"key": m, "name": display_for(m)} for m in i["members"]],
                         "notes": {display_for(k): v for k, v in private_groups.get_notes(st.data_dir, user["id"], i["id"]).items()}})
         return {"groups": out, "max": private_groups.MAX_GROUPS, "min_members": private_groups.MIN_MEMBERS,
@@ -1849,6 +1926,33 @@ def make_app(client=None, data_dir=None, char_root=None):
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         return {"ok": True, "has_background": True}
+
+    # A private group's picture, shown in the sidebar and on the group's dialog. A new one replaces the old.
+    @app.post("/api/groups/{gid}/icon")
+    async def group_icon_save(gid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        if private_groups.get(st.data_dir, user["id"], gid) is None:
+            raise HTTPException(404, "That group no longer exists.")
+        data = await request.body()
+        root = _private_group_root(st, user["id"])
+        os.makedirs(os.path.join(root, gid), exist_ok=True)
+        try:
+            editor.save_icon(root, gid, data)
+        except editor.EditorError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "has_icon": True}
+
+    @app.delete("/api/groups/{gid}/icon")
+    def group_icon_remove(gid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        if private_groups.get(st.data_dir, user["id"], gid) is None:
+            raise HTTPException(404, "That group no longer exists.")
+        path = editor.icon_path(_private_group_root(st, user["id"]), gid)
+        if path is not None:
+            os.remove(path)
+        return {"ok": True, "has_icon": False}
 
     @app.delete("/api/groups/{gid}/background")
     def group_background_remove(gid: str, request: Request):
@@ -2607,15 +2711,22 @@ def make_app(client=None, data_dir=None, char_root=None):
 
     @app.get("/api/icon/{name}")
     def character_icon(name: str, request: Request):
-        require(request)
+        user = require(request)
+        # A private group's picture is kept in its owner's folder. It is not cached, so a new picture shows at once.
+        private = private_groups.find_by_key(st.data_dir, user["id"], folder_for(name), folder_for)
         try:
-            path = editor.icon_path(st.char_root, name)
+            if private is not None:
+                path = editor.icon_path(_private_group_root(st, user["id"]), private["id"])
+                cache = "private, no-cache"
+            else:
+                path = editor.icon_path(st.char_root, name)
+                cache = "private, max-age=300"
         except editor.EditorError:
             raise HTTPException(404, "No such character.")
         if path is None:
             raise HTTPException(404, "No icon.")
         media = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg"}.get(os.path.splitext(path)[1].lower())
-        return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=300"})
+        return FileResponse(path, media_type=media, headers={"Cache-Control": cache})
 
     @app.get("/api/icon/{name}/hash")
     def character_icon_hash(name: str, request: Request):
@@ -2800,6 +2911,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         for key, val in body.items():
             if key not in DEFAULT_SETTINGS:
                 raise HTTPException(400, f"Unknown setting: {key}")
+            if key == "dream_every_days" and not (isinstance(val, int) and 1 <= val <= 30):
+                raise HTTPException(400, "Dreams can run every 1 to 30 days.")
             if key == "budget_webhook_url":
                 # Empty turns the webhook off; anything else must be a web address.
                 if not isinstance(val, str) or len(val) > 500 or (val and not val.startswith(("http://", "https://"))):
@@ -2885,7 +2998,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         pdir = _account_palace_dir(user["id"], folder)
         palace.copy_starting(os.path.join(st.char_root, folder), pdir)
         entries, cfg = palace.load_all(pdir)
-        return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"]}
+        return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"], "auto": cfg["auto"],
+                "episodes": cfg["episodes"]}
 
     @app.post("/api/character-palace")
     async def my_palace_set(request: Request, character: str):
@@ -2895,12 +3009,30 @@ def make_app(client=None, data_dir=None, char_root=None):
         body = _read_body(await request.json())
         pdir = _account_palace_dir(user["id"], folder)
         os.makedirs(pdir, exist_ok=True)
-        settings = {"recursive": body.get("recursive"), "budget": body.get("budget")}
+        settings = {"recursive": body.get("recursive"), "budget": body.get("budget"), "auto": body.get("auto"),
+                    "episodes": body.get("episodes")}
         try:
             entries, cfg = palace.save(pdir, body.get("entries", []), settings)
         except palace.PalaceError as err:
             raise HTTPException(400, str(err))
-        return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"]}
+        return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"], "auto": cfg["auto"],
+                "episodes": cfg["episodes"]}
+
+    # Reads a SillyTavern-style card (JSON, or PNG with the card in a text chunk). Nothing is saved here: the
+    # result fills the new-character form, and the picture and lorebook are kept until Create.
+    @app.post("/api/admin/character-import")
+    async def character_import(request: Request):
+        from urllib.parse import unquote
+        _csrf(request)
+        require(request)
+        if int(request.headers.get("content-length") or 0) > ocr.MAX_BYTES + 4096:
+            raise HTTPException(413, "Files can be up to 10 MB.")
+        data = await request.body()
+        filename = unquote(request.headers.get("x-filename", ""))
+        try:
+            return cardimport.from_file(filename, data)
+        except cardimport.CardError as err:
+            raise HTTPException(400, str(err))
 
     @app.post("/api/admin/character-draft")
     async def character_draft(request: Request):
@@ -3063,6 +3195,31 @@ def make_app(client=None, data_dir=None, char_root=None):
         row = st.store.checkin_get(user["id"], name)
         return checkins.view(row, unread=row["unread"])
 
+    # Autonomous dreaming settings for one character: on or off, the quiet hours, and the time zone they are in.
+    @app.get("/api/dreams")
+    def dream_get(request: Request, character: str):
+        user = require(request)
+        name = _solo_for_checkin(user, character)
+        row = st.store.dream_get(user["id"], name) or {}
+        return _dream_view(st, user["id"], name, row)
+
+    @app.post("/api/dreams")
+    async def dream_set(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name = _solo_for_checkin(user, str(body.get("character", "")))
+        start = checkins.parse_hhmm(body.get("start"))
+        end = checkins.parse_hhmm(body.get("end"))
+        if start is None or end is None or start == end:
+            raise HTTPException(400, "Give the quiet hours as two different HH:MM times.")
+        tz = str(body.get("tz") or "")
+        if tz and tz not in pytz.all_timezones_set:
+            raise HTTPException(400, "Unknown time zone.")
+        st.store.dream_update(user["id"], name, enabled=int(bool(body.get("enabled"))), start_min=start,
+                              end_min=end, tz=tz)
+        return _dream_view(st, user["id"], name, st.store.dream_get(user["id"], name))
+
     @app.get("/api/checkins/unread")
     def checkin_unread(request: Request):
         # Missed check-ins per character, keyed by the name the sidebar and home cards show.
@@ -3089,4 +3246,17 @@ def make_app(client=None, data_dir=None, char_root=None):
             time.sleep(checkins.TICK_SECONDS)
 
     threading.Thread(target=_checkin_loop, name="checkins", daemon=True).start()
+
+    # The thread that runs dreams in quiet hours. It looks every few minutes; each dream runs once a night.
+    def _dream_loop():
+        while True:
+            try:
+                dreams.tick(st.store, lambda uid, name: _dream_fire(st, uid, name), checkins.zone_for,
+                            datetime.datetime.now(datetime.timezone.utc),
+                            every_days=int(st.store.get_setting("dream_every_days")), log=log)
+            except Exception as err:
+                log(f"dream scheduler error: {err}")
+            time.sleep(DREAM_TICK_SECONDS)
+
+    threading.Thread(target=_dream_loop, name="dreams", daemon=True).start()
     return app
