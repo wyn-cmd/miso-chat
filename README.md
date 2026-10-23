@@ -32,6 +32,7 @@ The pictures below use six made-up characters, with generated art and made-up ch
 
 - Python 3.11 or newer. The code was tested with Python 3.11 on Windows.
 - A Gemini API key. Optional: a DeepSeek key, a local server with an OpenAI-style `/v1/chat/completions` endpoint, or the `claude` CLI signed in to an account.
+- chafa, optional. Draws character pictures in the terminal client. See Chafa below.
 - Tesseract OCR 5 or newer, optional. Only needed to draft a character from a screenshot or a scanned page. Text, Markdown, Word and text-layer PDF files work without it. See OCR below.
 
 ## Setup
@@ -148,9 +149,25 @@ The Tree button in a chat opens the branch tree. It shows the main chat and each
 
 Admins set the reply length range on the admin page, from 10 to 4,000 tokens. Each account picks a target inside that range in its Settings. The default range is 50 to 1,000 tokens. Reasoning tokens are not counted. The target is a guide the model is asked to follow, not a hard cap.
 
+## Token limits
+
+Each account has three token limits: daily, weekly and monthly. Tokens used count against all three. The daily window resets at midnight Pacific, the weekly window on Monday at midnight Pacific, and the monthly window on the 1st at midnight Pacific. Admins have no tier and no cap unless one is set.
+
+The monthly limit is the account's tier cap. By default that is 1M tokens for free, 10M for lite, 20M for standard and 100M for pro. The daily limit defaults to 10% of the monthly limit and the weekly limit to 20%. On the admin Tiers page, each tier's monthly cap and its daily and weekly percentages can be set, and the page shows the token amount each percentage gives.
+
+On the admin Users page, each account shows the tokens used against each limit for today, this week and this month. The three boxes beside an account set its own daily, weekly and monthly limits. A blank box uses the tier figure, and the grey placeholder shows that figure. A number set on a user row applies to that account only.
+
+Every limit is checked before each turn. A turn is blocked when any window is already at or over its limit, and the message names that window and when it resets. As before, a turn that starts under a limit can finish over it.
+
+Each account can see its usage under Settings, Account, Token usage (View usage). The pop-up shows a progress bar and percentage for each window. The bar in the chat top bar shows whichever window is closest to its limit.
+
+The admin stats page also splits the tokens the way providers bill them: cached input (a prompt-cache hit), uncached input and output, with the model time spent on each turn. That split starts with this version, so earlier days show 0 there. For tokens that went to the DeepSeek key it adds a cost estimate per model, in USD or CNY, from published DeepSeek rates per million tokens. The rates are mapped onto this server's DeepSeek model ids and leave out off-peak discounts, so read the figure as an estimate. To use your own rates, set the `deepseek_prices` setting to JSON in the same shape as the table in `web/pricing.py`.
+
 ## Import and export
 
 Admins can export a character as a zip file. The zip holds the card, icon, background, profile, creator and Mind Palace files. Tick the history option to include this account's chat history and memory too.
+
+A chat can be exported from Settings, Export, as Markdown, plain text or JSON. The JSON file holds the character name, the export time and every message with its speaker, role, time, thinking text where it was kept, and the swipe position.
 
 Admins can import a zip made by this app (format `miso-character`, version 1). An import never overwrites a character with the same name. Chat history from the zip is restored only into an account that has no history for that character yet. Zips are limited to 60 MB, and to 120 MB when unpacked.
 
@@ -206,6 +223,24 @@ Options: `--username`, `--character` (open a character or group straight away) a
 It checks the server's version before it asks for a password. It works only with a server that has the same major and minor version: 1.3.0 and 1.3.4 work together, but 1.2.1 and 1.3.0 do not. Download the client from the server's web app, which always matches that server.
 
 Replies show quoted speech in green, `*italic*` and `**bold**`, and each character's reply sits in a box in that character's colour. Colours and italics need a terminal with 24-bit colour and italic support, such as Windows Terminal; other terminals show plain text.
+
+A chat opens with the character's picture, then the last two messages, and keeps its prompt at the bottom of the window while the chat scrolls above it. Under the prompt is one line: the model that answered, the clock, a bar for whichever token budget is closest to its limit, and an estimate of the next prompt's size that updates as you type. The estimate is about four characters per token, so treat it as a rough figure. On a narrow window the parts drop out from the left, the clock first.
+
+The prompt is edited in place: the arrow keys, Home and End, Backspace, Delete, and Ctrl+A, E, U, K, W and L. Up and Down recall earlier lines. Ctrl+C clears the line, and on an empty line it closes the client, as Ctrl+D does. A pasted paragraph keeps its line breaks; the message is sent only when you press Enter.
+
+When the client is not running in a terminal, as when its output is piped to a file, it falls back to a plain prompt and prints the status line before each message instead of redrawing it.
+
+### Chafa for character pictures
+
+The terminal client draws character pictures with `chafa`, an optional program. Install it, then check with `chafa --version`:
+
+- Windows: `winget install --id hpjansson.Chafa -e`. If `chafa --version` still fails afterwards, add the folder that holds `chafa.exe` to PATH.
+- Debian and Ubuntu: `sudo apt-get install -y chafa`
+- Fedora: `sudo dnf install chafa`
+- Arch: `sudo pacman -S chafa`
+- macOS: `brew install chafa`
+
+Without chafa the client still runs. Pictures are skipped, and `/portrait` says what is missing. Use `--no-image` to skip the picture when a chat opens.
 
 The client refuses any redirect to a non-https address, so a password is never sent over plain http. To check the download, compare its SHA-256 with the value on the release page: `certutil -hashfile miso_remote.py SHA256` on Windows, or `sha256sum miso_remote.py` on Linux.
 

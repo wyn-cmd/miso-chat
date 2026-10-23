@@ -3,6 +3,8 @@
 const $ = (id) => document.getElementById(id);
 let me = null;
 let current = null;   // character or group chat currently open
+let favSet = new Set();            // characters this account has starred
+let popularSet = new Set();        // top 10% of characters by user-sent messages
 let editableSet = new Set();   // characters this account may change (shows the sidebar pencil)
 let busy = false;     // a turn is streaming: keep the character list and buttons locked
 
@@ -119,9 +121,16 @@ function showChat() {
   $("chatSection").hidden = false;
 }
 
+const TOKEN_WINDOWS = [["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"]];
+
+function windowShare(w) {
+  return w.limit > 0 ? w.used / w.limit : 1;
+}
+
 function renderUsage() {
   // Memory is an admin switch; hide its button when it is off.
   $("memBtn").hidden = !!(me && me.features && me.features.memory === false);
+  $("pinCard").hidden = $("memBtn").hidden;   // pinned facts are part of the memory bank
   if (!me || !me.usage) return;
   const u = me.usage;
   // two forms of the same line: the long one on desktop, a compact one for phones (CSS picks which shows)
@@ -135,7 +144,106 @@ function renderUsage() {
   short.className = "u-short";
   short.textContent = `${u.requests_today}/${u.request_cap} req · ${fmt.format(u.tokens_today)} tok`;
   usage.append(long, short);
+  // token bar shows the window closest to its limit, the one that will block first; hidden for admins with no limits
+  const meter = $("tokenBar");
+  const tv = u.token_budgets;
+  let tight = null;
+  for (const [kind, title] of TOKEN_WINDOWS) {
+    const w = tv && tv[kind];
+    if (w && (!tight || windowShare(w) > windowShare(tight.w))) tight = { kind, title, w };
+  }
+  meter.hidden = !tight;
+  meter.classList.toggle("warn", !!tight && windowShare(tight.w) >= BUDGET_WARN_SHARE);
+  if (tight) {
+    // the bar shows what is left: it shrinks as tokens are used
+    const { title, w } = tight;
+    const left = Math.max(0, w.limit - w.used);
+    const pct = Math.max(0, Math.min(100, 100 - windowShare(w) * 100));
+    $("tokenFill").style.width = pct.toFixed(1) + "%";
+    $("tokenText").textContent = `${fmt.format(left)} left`;
+    meter.title = `${title} token budget: ${left.toLocaleString()} of ${w.limit.toLocaleString()} tokens left, ${w.reset}`;
+  }
+  renderBudgetAlert(tight);
 }
+
+// A window at this share of its budget raises the warning; the page keeps the warning closed until the window drops back under it.
+const BUDGET_WARN_SHARE = 0.8;
+let budgetAlertClosed = null;   // the window kind the viewer closed the warning for
+
+function renderBudgetAlert(tight) {
+  const box = $("budgetAlert");
+  if (!tight || windowShare(tight.w) < BUDGET_WARN_SHARE) budgetAlertClosed = null;
+  if (!tight || windowShare(tight.w) < BUDGET_WARN_SHARE || budgetAlertClosed === tight.kind) {
+    box.hidden = true;
+    return;
+  }
+  const { kind, title, w } = tight;
+  const used = windowShare(w) >= 1;
+  const left = Math.max(0, w.limit - w.used);
+  $("budgetAlertText").textContent = used
+    ? `The ${title.toLowerCase()} token budget is used up. New messages are blocked until it resets: ${w.reset}.`
+    : `You have ${Math.round(100 - windowShare(w) * 100)}% of your ${title.toLowerCase()} token budget left (${left.toLocaleString("en")} tokens), ${w.reset}.`;
+  box.classList.toggle("over", used);
+  box.dataset.kind = kind;
+  box.hidden = false;
+}
+
+$("budgetAlertClose").addEventListener("click", () => {
+  budgetAlertClosed = $("budgetAlert").dataset.kind || null;
+  $("budgetAlert").hidden = true;
+});
+
+function usageWindow(title, w) {
+  const fmtN = (n) => n.toLocaleString("en");
+  const shown = Math.min(windowShare(w) * 100, 100);
+  const left = Math.max(0, w.limit - w.used);
+  const box = el("div", null, "usage-window");
+  const head = el("div", null, "usage-window-head");
+  head.append(el("span", title, "muted"), el("span", `${shown.toFixed(1)}% used`, "usage-window-pct"));
+  const track = el("div", null, "bar-track");
+  track.setAttribute("role", "progressbar");
+  track.setAttribute("aria-label", `${title} token usage`);
+  track.setAttribute("aria-valuemin", "0");
+  track.setAttribute("aria-valuemax", "100");
+  track.setAttribute("aria-valuenow", String(Math.round(shown)));
+  const fill = el("div", null, "bar-fill");
+  fill.style.width = shown.toFixed(1) + "%";
+  track.append(fill);
+  box.append(head, track,
+    el("p", `${fmtN(w.used)} of ${fmtN(w.limit)} tokens used`),
+    el("p", `${fmtN(left)} tokens left · ${w.reset}.`, "muted"));
+  if (w.used >= w.limit) box.append(el("p", `The ${title.toLowerCase()} budget is used up. New messages are blocked until it resets.`, "error-msg"));
+  return box;
+}
+
+function renderTokenUsage(usage) {
+  const body = $("tokenUsageBody");
+  body.textContent = "";
+  if (!usage) {
+    body.append(el("p", "Usage is not available right now.", "muted"));
+    return;
+  }
+  const tv = usage.token_budgets || {};
+  const windows = TOKEN_WINDOWS.filter(([kind]) => tv[kind]);
+  if (!windows.length) {
+    body.append(el("p", "This account has no token limits.", "muted"));
+    return;
+  }
+  body.append(el("p", tv.tier ? tv.tier[0].toUpperCase() + tv.tier.slice(1) + " tier" : "Custom limits", "muted"));
+  for (const [kind, title] of windows) body.append(usageWindow(title, tv[kind]));
+}
+
+async function openTokenUsage() {
+  renderTokenUsage(me && me.usage);
+  $("tokenUsageDlg").showModal();
+  try {
+    me = await api("GET", "/api/me");
+    renderUsage();
+    renderTokenUsage(me.usage);
+  } catch (err) { /* keep the figures already shown */ }
+}
+$("tokenUsageBtn").addEventListener("click", openTokenUsage);
+$("tokenUsageClose").addEventListener("click", () => $("tokenUsageDlg").close());
 
 function addLine(speaker, text, cls, time) {
   const box = el("div", null, "line " + (cls || ""));
@@ -222,6 +330,7 @@ function renderHistory(messages) {
     messages.forEach((m, i) => {
       const isEvent = m.speaker === "Narrator";   // random events are saved as user-side entries, shown as notes
       const box = addLine(m.speaker, m.text, isEvent ? "note event" : (m.role === "user" ? "mine" : "theirs"), m.time);
+      if (m.scheduled) box.prepend(el("div", "Check-in", "checkin-tag"));   // sent on the character's schedule
       box.dataset.idx = String(i);   // position in the saved chat, used to place the context marker
       addEditButton(box, i, m);
       addBranchButton(box, i);
@@ -319,7 +428,7 @@ function loadCharSettings() {
   for (const n of document.querySelectorAll(".char-only")) n.hidden = !current;
   for (const n of document.querySelectorAll(".needs-char")) n.hidden = !!current;
   $("palaceRow").hidden = !(current && soloNames.includes(current));
-  for (const id of ["tempSlider", "tempReset", "winSlider", "winReset", "exportMd", "exportTxt"]) $(id).disabled = !current;
+  for (const id of ["tempSlider", "tempReset", "winSlider", "winReset", "exportMd", "exportTxt", "exportJson", "exportEpub", "exportPdf", "pinSave", "pinSettingText", "ciEnabled", "ciSave", "ciAt", "ciStart", "ciEnd"]) $(id).disabled = !current;
   $("charMsg").textContent = "";
   if (!current) return;
   api("GET", "/api/character-settings?character=" + encodeURIComponent(current))
@@ -391,6 +500,9 @@ $("replySlider").addEventListener("change", () => saveReplyLength(Number($("repl
 $("replyReset").addEventListener("click", () => saveReplyLength(null));
 $("exportMd").addEventListener("click", () => exportChat("md"));
 $("exportTxt").addEventListener("click", () => exportChat("txt"));
+$("exportJson").addEventListener("click", () => exportChat("json"));
+$("exportEpub").addEventListener("click", () => exportChat("epub"));
+$("exportPdf").addEventListener("click", () => exportChat("pdf"));
 
 // Regenerate and swipe. The last exchange's reply can be written again; saved alternatives are shown with ◀ ▶.
 function removeTurnTools() {
@@ -498,28 +610,65 @@ function charButton(name) {
   const b = el("button", "", "char-item");
   b.type = "button";
   b.dataset.name = name;
+  b.dataset.chatName = name;   // where the missed check-in dot goes
   b.disabled = busy;
   if (colorMap[name]) b.style.setProperty("--dot", colorMap[name]);
   b.appendChild(iconFor(name));
   b.appendChild(el("span", name, "char-name"));
   if (editableSet.has(name)) b.appendChild(editPencil(name));
+  if (soloNames.includes(name)) {
+    b.appendChild(favStar(name, favSet.has(name), async (on) => {
+      try {
+        await setFavourite(name, on);
+        await loadCharacters(false);
+      } catch (err) {
+        $("chatErr").textContent = err.message;
+      }
+    }));
+  }
+  if (popularSet.has(name)) b.appendChild(el("span", "popular", "char-badge"));
   b.addEventListener("click", () => pickCharacter(name));
   return b;
 }
 
 
 
+// Picture for an account's own persona: its uploaded picture, or the colour face placeholder.
+const personaIconVersion = {};   // persona id -> time of its last upload, so a new picture shows at once
+function ownPersonaIcon(p) {
+  const icon = el("span", "", "char-icon" + (p.icon ? "" : " placeholder"));
+  if (p.icon) {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.src = "/api/persona-icon/" + encodeURIComponent(p.id) + "?v=" + (personaIconVersion[p.id] || 0);
+    img.loading = "lazy";
+    icon.appendChild(img);
+  } else {
+    icon.appendChild(faceIcon(p.color));
+  }
+  return icon;
+}
+
+function ownPersonaEdit(p) {
+  const edit = el("span", "✎", "char-edit");
+  edit.title = "Edit " + p.name;
+  edit.setAttribute("role", "button");
+  edit.addEventListener("click", (e) => { e.stopPropagation(); openPersonaForm(p); });
+  return edit;
+}
+
 function personaButton(p) {
   const b = el("button", "", "char-item persona-item");
   b.type = "button";
-  b.dataset.persona = p.name;
+  b.dataset.persona = p.id;
   b.disabled = busy;
   if (p.color) b.style.setProperty("--dot", p.color);
-  if (me && me.persona && me.persona.name === p.name) b.classList.add("active");
-  b.appendChild(iconFor(p.name));
+  if (me && me.persona && me.persona.id === p.id) b.classList.add("active");
+  b.appendChild(p.own ? ownPersonaIcon(p) : iconFor(p.name));
   b.appendChild(el("span", p.name, "char-name"));
-  if (me && me.is_admin) b.appendChild(editPencil(p.name));
-  b.addEventListener("click", () => choosePersona(p.name));
+  if (p.own) b.appendChild(ownPersonaEdit(p));
+  else if (me && me.is_admin) b.appendChild(editPencil(p.name));
+  b.addEventListener("click", () => choosePersona(p.own ? p.id : p.name));
   return b;
 }
 
@@ -533,8 +682,87 @@ function renderPersonas(personas) {
   none.addEventListener("click", () => choosePersona(""));
   list.appendChild(none);
   for (const p of personas) list.appendChild(personaButton(p));
-  $("personaBox").hidden = personas.length === 0;
+  $("personaBox").hidden = false;   // every account can make its own persona, so the box always shows
 }
+
+let personaEditing = null;   // the account's own persona being edited; null when making a new one
+
+function openPersonaForm(p) {
+  personaEditing = p || null;
+  $("personaFormTitle").textContent = p ? "Edit persona" : "New persona";
+  $("pfName").value = p ? p.name : "";
+  $("pfColour").value = p && p.color ? p.color : "#8b9bb4";
+  $("pfDesc").value = p ? (p.description || "") : "";
+  $("pfPic").value = "";
+  $("pfDelete").hidden = !p;
+  $("pfMsg").textContent = "";
+  $("personaForm").hidden = false;
+  $("pfName").focus();
+}
+
+function closePersonaForm() {
+  personaEditing = null;
+  $("personaForm").hidden = true;
+}
+
+// The picture is sent as the raw file, like the character icon upload.
+async function uploadPersonaPicture(pid, file) {
+  const r = await fetch("/api/personas/" + encodeURIComponent(pid) + "/icon", {
+    method: "POST",
+    headers: { "X-Requested-With": "roleplay", "Content-Type": "application/octet-stream" },
+    credentials: "same-origin",
+    body: await file.arrayBuffer(),
+  });
+  if (!r.ok) {
+    let data = {};
+    try { data = await r.json(); } catch (e) { /* no body */ }
+    throw apiError(r.status, data);
+  }
+  personaIconVersion[pid] = Date.now();
+}
+
+$("newPersonaBtn").addEventListener("click", () => openPersonaForm(null));
+$("pfCancel").addEventListener("click", closePersonaForm);
+
+$("personaForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("pfMsg").textContent = "";
+  const body = { name: $("pfName").value, colour: $("pfColour").value, description: $("pfDesc").value };
+  const file = $("pfPic").files[0];
+  try {
+    let data;
+    let pid = personaEditing ? personaEditing.id : null;
+    if (pid) data = await api("POST", "/api/personas/" + encodeURIComponent(pid), body);
+    else { data = await api("POST", "/api/personas", body); pid = data.id; }
+    if (file) {
+      await uploadPersonaPicture(pid, file);
+      for (const p of data.personas) if (p.id === pid) p.icon = true;
+    }
+    const activeChanged = me.persona && me.persona.id === pid;
+    me.persona = data.persona;
+    renderPersonas(data.personas);
+    closePersonaForm();
+    if (current && activeChanged) await loadHistory();
+  } catch (err) {
+    $("pfMsg").textContent = err.message;
+  }
+});
+
+$("pfDelete").addEventListener("click", async () => {
+  if (!personaEditing) return;
+  if (!confirm("Delete this persona? Your chats stay, but it is no longer used.")) return;
+  const pid = personaEditing.id;
+  const wasActive = me.persona && me.persona.id === pid;
+  try {
+    const data = await api("POST", "/api/personas/" + encodeURIComponent(pid) + "/delete", {});
+    me.persona = data.persona;
+    renderPersonas(data.personas);
+    closePersonaForm();
+    if (current && wasActive) await loadHistory();
+  } catch (err) {
+    $("pfMsg").textContent = err.message;
+  }
+});
 
 // Settings: thinking on or off, and which model answers. Both apply from the next turn.
 function renderModels() {
@@ -554,6 +782,100 @@ function renderModels() {
   if (me) setLook(me.bg_shade || 0, me.bubble_opacity || 72);
   renderReplyLength();
 }
+
+// ---- Account profile settings. Admin accounts have no profile, so the block stays hidden.
+function renderProfileSettings(resetBio = true) {
+  const box = $("profileSettings");
+  if (!box) return;
+  const p = me && me.profile;
+  box.hidden = !p;
+  if (!p) return;
+  $("profileLink").href = "/u/" + encodeURIComponent(me.username);
+  if (resetBio && document.activeElement !== $("profileBio")) $("profileBio").value = p.description || "";
+  updateProfileBioCount();
+  const avatar = $("profileAvatarPreview");
+  avatar.hidden = !p.has_avatar;
+  if (p.has_avatar) avatar.src = "/api/account-avatar/" + encodeURIComponent(me.username) + "?v=" + (p.avatar_version || 0);
+  $("profilePicRemove").hidden = !p.has_avatar;
+  const background = $("profileBgPreview");
+  background.hidden = !p.has_background;
+  if (p.has_background) background.src = "/api/account-background/" + encodeURIComponent(me.username) + "?v=" + (p.background_version || 0);
+  $("profileBgRemove").hidden = !p.has_background;
+  $("profileLikes").checked = !!p.likes_visible;
+}
+
+function updateProfileBioCount() {
+  $("profileBioCount").textContent = $("profileBio").value.length + " / 1000";
+}
+
+async function saveProfileDescription() {
+  $("profileMsg").textContent = "";
+  try {
+    me.profile = await api("POST", "/api/account/profile", { description: $("profileBio").value });
+    renderProfileSettings();
+    $("profileMsg").textContent = "Description saved.";
+  } catch (err) {
+    $("profileMsg").textContent = err.message;
+  }
+}
+
+async function saveLikesVisibility() {
+  $("profileMsg").textContent = "";
+  try {
+    me.profile = await api("POST", "/api/account/profile", { likes_visible: $("profileLikes").checked });
+    renderProfileSettings(false);
+    $("profileMsg").textContent = me.profile.likes_visible
+      ? "Liked characters are visible on your profile."
+      : "Liked characters are private.";
+  } catch (err) {
+    $("profileMsg").textContent = err.message;
+    renderProfileSettings(false);
+  }
+}
+
+async function uploadProfileImage(kind, file) {
+  if (!file) return;
+  $("profileMsg").textContent = "Uploading…";
+  try {
+    const r = await fetch("/api/account/" + kind, {
+      method: "POST",
+      headers: { "X-Requested-With": "roleplay", "Content-Type": "application/octet-stream" },
+      credentials: "same-origin",
+      body: await file.arrayBuffer(),
+    });
+    if (!r.ok) {
+      let data = {};
+      try { data = await r.json(); } catch (e) { /* no body */ }
+      throw apiError(r.status, data);
+    }
+    me.profile = await r.json();
+    renderProfileSettings(false);
+    $("profileMsg").textContent = kind === "avatar" ? "Profile picture saved." : "Profile background saved.";
+  } catch (err) {
+    $("profileMsg").textContent = err.message;
+  }
+}
+
+async function removeProfileImage(kind) {
+  const label = kind === "avatar" ? "profile picture" : "profile background";
+  if (!confirm("Remove your " + label + "?")) return;
+  $("profileMsg").textContent = "";
+  try {
+    me.profile = await api("DELETE", "/api/account/" + kind);
+    renderProfileSettings(false);
+    $("profileMsg").textContent = "Removed.";
+  } catch (err) {
+    $("profileMsg").textContent = err.message;
+  }
+}
+
+$("profileBio").addEventListener("input", updateProfileBioCount);
+$("profileBioSave").addEventListener("click", saveProfileDescription);
+$("profileLikes").addEventListener("change", saveLikesVisibility);
+$("profilePic").addEventListener("change", (e) => { const file = e.target.files[0]; e.target.value = ""; uploadProfileImage("avatar", file); });
+$("profileBg").addEventListener("change", (e) => { const file = e.target.files[0]; e.target.value = ""; uploadProfileImage("background", file); });
+$("profilePicRemove").addEventListener("click", () => removeProfileImage("avatar"));
+$("profileBgRemove").addEventListener("click", () => removeProfileImage("background"));
 
 // The reply length target. The server keeps it inside the admin range; null means no target.
 function renderReplyLength() {
@@ -658,6 +980,9 @@ async function loadCharacters(choose = true) {
   bgIds = data.bg_ids || {};
   defaultArt = data.default_backgrounds || [];
   editableSet = new Set(data.editable || []);
+  favSet = new Set(data.favourites || []);
+  popularSet = new Set(data.popular || []);
+  soloNames = data.solo || [];   // set before the lists are drawn: the star check reads it
   renderPersonas(data.personas || []);
   const solo = $("charList");
   const groups = $("groupList");
@@ -670,6 +995,7 @@ async function loadCharacters(choose = true) {
   }
   for (const g of data.groups) groups.appendChild(g.private ? privateGroupRow(g) : charButton(g.name));
   $("groupBox").hidden = false;   // always shown, so any account can start its own group
+  paintUnread();
   soloNames = data.solo || [];
   const all = [...data.solo, ...data.groups.map((g) => g.name)];
   // A card on the home page sends the name as ?c=; that wins over the last character used.
@@ -710,6 +1036,7 @@ function applyChatArt(name) {
 async function pickCharacter(name) {
   if (busy) return;
   current = name;
+  markRead(name);   // opening the chat marks its missed check-ins as read
   localStorage.setItem("rp_character", name);
   markActive();
   applyChatArt(name);
@@ -942,6 +1269,8 @@ async function changePassword(ev) {
     me = await api("GET", "/api/me");
     showChat();
     renderUsage();
+    renderModels();
+    renderProfileSettings();
     await loadCharacters();
   } catch (err) {
     $("pwErr").textContent = err.message;
@@ -964,6 +1293,7 @@ async function init() {
     $("setAdminCard").hidden = false;
   }
   renderModels();
+  renderProfileSettings();
   if (me.must_change) {
     showPassword("Your account was made with a starting password. Set your own to continue.");
     return;
@@ -1090,6 +1420,12 @@ fitToVisibleArea();
 $("msg").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("chatForm").requestSubmit(); }
 });
+$("sideBack").addEventListener("click", () => {
+  if (mobileNav()) { closeSidebar(); return; }
+  const collapsed = document.querySelector(".shell").classList.toggle("collapsed");
+  $("menuBtn").setAttribute("aria-expanded", String(!collapsed));
+});
+
 $("menuBtn").addEventListener("click", () => {
   if (mobileNav()) {
     setSidebar(!$("sidebar").classList.contains("open"));
@@ -1155,6 +1491,38 @@ function showMemory(on) {
   $("chatSection").hidden = on;
 }
 
+// Pinned facts from the settings sheet: the pinned box of the Memory panel, saved on its own.
+let pinFor = null;
+let pinLoaded = { memory: "" };
+
+async function openPinned() {
+  if (busy || !current) return;
+  const who = current;
+  $("pinMsg").textContent = "";
+  try {
+    const data = await api("GET", "/api/memory?character=" + encodeURIComponent(who));
+    pinFor = who;
+    pinLoaded = data;
+    $("pinSettingText").value = data.pinned;
+  } catch (err) {
+    $("pinMsg").textContent = err.message;
+  }
+}
+
+$("pinCard").addEventListener("click", openPinned);
+$("pinSave").addEventListener("click", async () => {
+  if (!pinFor || busy) return;
+  $("pinMsg").textContent = "";
+  try {
+    // Only the pinned part changes; the memory bank and summary are sent back as they were read.
+    const data = await api("POST", "/api/memory", { character: pinFor, memory: pinLoaded.memory, pinned: $("pinSettingText").value });
+    pinLoaded = data;
+    $("pinMsg").textContent = "Saved. The next reply includes these facts.";
+  } catch (err) {
+    $("pinMsg").textContent = err.message;
+  }
+});
+
 async function openMemory() {
   if (busy || !current) return;
   const who = current;
@@ -1216,7 +1584,64 @@ $("memBack").addEventListener("click", () => showMemory(false));
 $("memSave").addEventListener("click", saveMemory);
 $("memRefresh").addEventListener("click", refreshMemory);
 
+// Scheduled check-ins: a character's own schedule, set in Settings, Check-in. Off by default.
+// The page shows the time in the reader's own time zone, which is the one saved with the schedule.
+let ciFor = null;   // the character whose check-in settings are open
+
+async function openCheckin() {
+  if (busy || !current) return;
+  const who = current;
+  $("ciMsg").textContent = "";
+  try {
+    const data = await api("GET", "/api/checkins?character=" + encodeURIComponent(who));
+    ciFor = who;
+    $("ciEnabled").checked = data.enabled;
+    document.querySelector('input[name="ciMode"][value="' + data.mode + '"]').checked = true;
+    $("ciAt").value = data.at;
+    $("ciStart").value = data.start;
+    $("ciEnd").value = data.end;
+    showCheckinNote(data);
+  } catch (err) {
+    $("ciMsg").textContent = err.message;
+  }
+}
+
+function showCheckinNote(data) {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!data.enabled) {
+    $("ciNote").textContent = `Off. ${ciFor || "This character"} will not message you on its own.`;
+  } else if (data.next) {
+    $("ciNote").textContent = `Today's check-in is set for ${data.next} (${zone}). It is skipped if the server is not running then.`;
+  } else {
+    $("ciNote").textContent = `On. Once a day, in ${zone}. It is skipped if the server is not running at the chosen time.`;
+  }
+}
+
+$("checkinCard").addEventListener("click", openCheckin);
+$("ciSave").addEventListener("click", async () => {
+  if (!ciFor || busy) return;
+  $("ciMsg").textContent = "";
+  const mode = document.querySelector('input[name="ciMode"]:checked').value;
+  try {
+    const data = await api("POST", "/api/checkins", {
+      character: ciFor,
+      enabled: $("ciEnabled").checked,
+      mode,
+      at: $("ciAt").value,
+      start: $("ciStart").value,
+      end: $("ciEnd").value,
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
+    showCheckinNote(data);
+    $("ciMsg").textContent = "Saved.";
+  } catch (err) {
+    $("ciMsg").textContent = err.message;
+  }
+});
+
 init();
+refreshUnread();
+setInterval(refreshUnread, 60000);
 
 // Highlight colour picker in the Settings sheet. Saved in this browser only.
 (function accentPicker() {
@@ -1244,8 +1669,12 @@ init();
   const title = document.getElementById("sheetTitle");
   const grid = document.getElementById("setGrid");
   const panels = [...sheet.querySelectorAll(".set-panel")];
-  const parts = [["fontSelect", "font"], ["bubbleSelect", "badge"], ["sizeCtl", "size"],
-                 ["modelSection", "model"], ["editBox", "characters"], ["personaBox", "persona"], ["memBtn", "memory"]].map(([id, slot]) => {
+  // Font, text size and Memory live only in the settings sheet, so they leave the chat bar on every layout.
+  for (const [id, slot] of [["fontSelect", "font"], ["sizeCtl", "size"], ["memBtn", "memory"]]) {
+    sheet.querySelector('[data-slot="' + slot + '"]').appendChild(document.getElementById(id));
+  }
+  const parts = [["bubbleSelect", "badge"],
+                 ["modelSection", "model"], ["editBox", "characters"], ["personaBox", "persona"]].map(([id, slot]) => {
     const node = document.getElementById(id);
     const home = document.createComment("home:" + id);   // stays where the control belongs on desktop
     node.parentNode.insertBefore(home, node);
@@ -1277,6 +1706,7 @@ init();
     show(null);
     place();
     loadCharSettings();
+    renderProfileSettings();
     closeBtn.focus();
   }
   function close(refocus) {
@@ -1302,6 +1732,12 @@ init();
   document.getElementById("editNewBtn").addEventListener("click", () => close(false));
   if (phone.addEventListener) phone.addEventListener("change", place); else phone.addListener(place);
   place();
+  // /chat?settings=account opens the Account panel directly (used by the profile page's Edit link).
+  const wanted = new URLSearchParams(location.search).get("settings");
+  if (wanted && /^[a-z]+$/.test(wanted) && sheet.querySelector('.set-card[data-panel="' + wanted + '"]')) {
+    open();
+    show(wanted);
+  }
 })();
 
 // Phone composer: one line high by default, growing to about two and a half lines as the text wraps, then scrolling.
@@ -1354,6 +1790,25 @@ init();
   const undoHome = document.createComment("home:undoBtn");
   undo.parentNode.insertBefore(undoHome, undo);
   const branchTree = document.getElementById("branchTree");
+  // The Tree button stays in the top chat bar on both layouts. The token bar moves: on phones it sits in the bar
+  // (after the usage counter), on desktop it sits right under the prompt box.
+  const treeHome = document.createComment("home:branchTree");
+  branchTree.parentNode.insertBefore(treeHome, branchTree);
+  const tokenBar = document.getElementById("tokenBar");
+  // The requests counter and the token bar share a row under the prompt on desktop; on phones they sit in the top bar.
+  const usage = document.getElementById("usage");
+  const usageHome = document.createComment("home:usage");
+  usage.parentNode.insertBefore(usageHome, usage);
+  const deskMeters = document.getElementById("deskMeters");
+  function placeTree() {
+    if (branchTree.previousSibling !== treeHome) treeHome.parentNode.insertBefore(branchTree, treeHome.nextSibling);
+    if (phone.matches) {
+      if (usage.previousSibling !== usageHome) usageHome.parentNode.insertBefore(usage, usageHome.nextSibling);
+      if (tokenBar.previousElementSibling !== usage) usage.insertAdjacentElement("afterend", tokenBar);
+    } else if (usage.parentNode !== deskMeters || tokenBar.parentNode !== deskMeters) {
+      deskMeters.append(usage, tokenBar);
+    }
+  }
   function placeUndo() {
     if (phone.matches) {
       if (undo.previousElementSibling !== branchTree) branchTree.parentNode.insertBefore(undo, branchTree.nextSibling);
@@ -1362,6 +1817,7 @@ init();
     }
   }
   function place() {
+    placeTree();
     placeUndo();
     const locked = document.body.classList.contains("locked");
     for (const p of parts) {
@@ -1445,9 +1901,46 @@ async function openGroupDialog(gid) {
     pick.appendChild(label);
   }
   renderGroupNotes(known);
+  // A group's background can be set once the group exists; a new group gets one after it is saved.
+  $("groupBgBox").hidden = !item;
+  $("groupBgMsg").textContent = "";
+  $("groupBgFile").value = "";
+  $("groupBgRemove").hidden = !(item && item.has_background);
   $("groupDlg").showModal();
   $("groupName").focus();
 }
+
+// Sends a private group's background picture, or removes it, then reloads the lists so the chat picks it up.
+async function changeGroupBackground(method, file) {
+  if (!groupEditing) return;
+  $("groupBgMsg").textContent = method === "DELETE" ? "Removing…" : "Uploading…";
+  try {
+    const r = await fetch("/api/groups/" + encodeURIComponent(groupEditing) + "/background", {
+      method,
+      headers: { "X-Requested-With": "roleplay", "Content-Type": "application/octet-stream" },
+      credentials: "same-origin",
+      body: method === "POST" ? await file.arrayBuffer() : undefined,
+    });
+    if (!r.ok) {
+      let data = {};
+      try { data = await r.json(); } catch (e) { /* no body */ }
+      throw apiError(r.status, data);
+    }
+    const data = await r.json();
+    $("groupBgRemove").hidden = !data.has_background;
+    $("groupBgMsg").textContent = data.has_background ? "Background saved." : "Background removed.";
+    $("groupBgFile").value = "";
+    await loadCharacters(false);
+    applyChatArt(current);
+  } catch (err) {
+    $("groupBgMsg").textContent = err.message;
+  }
+}
+$("groupBgFile").addEventListener("change", () => {
+  const file = $("groupBgFile").files[0];
+  if (file) changeGroupBackground("POST", file);
+});
+$("groupBgRemove").addEventListener("click", () => changeGroupBackground("DELETE"));
 
 // Rebuilds one note box per ticked character. Text already typed is kept when a tick changes.
 function renderGroupNotes(known) {

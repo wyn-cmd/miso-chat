@@ -187,6 +187,11 @@ def _encode_background(data):
     return buf.getvalue()
 
 
+def background_bytes(data):
+    # Checked upload, downsized as JPEG. Also used for account profile backgrounds.
+    return _encode_background(data)
+
+
 def background_ids(root, name):
     # The legacy single file first, then the rest in name order. Empty when there are none.
     try:
@@ -282,6 +287,12 @@ def _shrink_icon(data):
             if len(buf.getvalue()) < ICON_OUT_MAX:
                 return buf.getvalue(), "webp"
     raise EditorError("That picture is too detailed to fit under 512 KB. Try a simpler image.")
+
+
+def portrait_bytes(data):
+    # Checked upload, cropped to a centred square and stored as WebP. Returns (bytes, extension).
+    # Account profile pictures use this too.
+    return _shrink_icon(data)
 
 
 def save_icon(root, name, data):
