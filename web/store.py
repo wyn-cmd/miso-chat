@@ -120,6 +120,29 @@ CREATE TABLE IF NOT EXISTS dreams (
     last_day TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, character)
 );
+CREATE TABLE IF NOT EXISTS moods (
+    user_id INTEGER NOT NULL,
+    character TEXT NOT NULL,
+    energy REAL NOT NULL DEFAULT 80,
+    affinity REAL NOT NULL DEFAULT 30,
+    emotion TEXT NOT NULL DEFAULT 'calm',
+    streak INTEGER NOT NULL DEFAULT 0,
+    last_update REAL NOT NULL DEFAULT 0,
+    last_user REAL NOT NULL DEFAULT 0,
+    reached REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, character)
+);
+CREATE TABLE IF NOT EXISTS attitudes (
+    user_id INTEGER NOT NULL,
+    character TEXT NOT NULL,
+    affection REAL NOT NULL DEFAULT 5,
+    trust REAL NOT NULL DEFAULT 5,
+    level TEXT NOT NULL DEFAULT 'stranger',
+    exchanges INTEGER NOT NULL DEFAULT 0,
+    since_bond INTEGER NOT NULL DEFAULT 0,
+    last_fired TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (user_id, character)
+);
 CREATE TABLE IF NOT EXISTS backup_auth (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     verifier TEXT NOT NULL
@@ -155,6 +178,10 @@ DEFAULT_SETTINGS = {
     "dreams_enabled": "0",       # autonomous dreaming in quiet hours: 1 on, 0 off (off until an admin turns it on)
     "dream_every_days": "1",     # dreams run once every this many days at the least, 1 to 30
     "dream_daily_cap": "40",     # most model calls the dreams may make across the server each Pacific day
+    "mood_enabled": "0",         # character mood (energy, affinity, emotion) and lonely check-ins: 1 on, 0 off
+    "attitude_enabled": "0",     # relationship with the user (affection, trust, five levels): 1 on, 0 off
+    "event_memory_enabled": "0", # event memory graph, written by dreams and recalled into prompts: 1 on, 0 off
+    "memory_policy_enabled": "0", # learned memory retention: score self-written memories by outcome, 1 on, 0 off
     "budget_webhook_url": "",    # where budget alerts (80% and 100% of a window) are posted as JSON; empty = off
 }
 
@@ -685,6 +712,33 @@ class Store:
 
     def dream_enabled_rows(self):
         return self._run("SELECT * FROM dreams WHERE enabled = 1", fetch="all")
+
+    # Character mood: one row per account and character. The fields are set as a whole through mood_save.
+    MOOD_FIELDS = ("energy", "affinity", "emotion", "streak", "last_update", "last_user", "reached")
+
+    def mood_get(self, user_id, character):
+        return self._run("SELECT * FROM moods WHERE user_id = ? AND character = ?", (user_id, character), fetch="one")
+
+    def mood_save(self, user_id, character, state):
+        cols = ", ".join(self.MOOD_FIELDS)
+        marks = ", ".join("?" for _ in self.MOOD_FIELDS)
+        self._run(f"INSERT OR REPLACE INTO moods (user_id, character, {cols}) VALUES (?, ?, {marks})",
+                  (user_id, character, *(state[k] for k in self.MOOD_FIELDS)))
+
+    def mood_rows(self):
+        return self._run("SELECT * FROM moods", fetch="all")
+
+    # Attitude: one row per account and character. The row is written whole through attitude_save.
+    ATTITUDE_FIELDS = ("affection", "trust", "level", "exchanges", "since_bond", "last_fired")
+
+    def attitude_get(self, user_id, character):
+        return self._run("SELECT * FROM attitudes WHERE user_id = ? AND character = ?", (user_id, character), fetch="one")
+
+    def attitude_save(self, user_id, character, row):
+        cols = ", ".join(self.ATTITUDE_FIELDS)
+        marks = ", ".join("?" for _ in self.ATTITUDE_FIELDS)
+        self._run(f"INSERT OR REPLACE INTO attitudes (user_id, character, {cols}) VALUES (?, ?, {marks})",
+                  (user_id, character, *(row[k] for k in self.ATTITUDE_FIELDS)))
 
     # A stored value for a key that has no default (per-account state, such as the last budget alert sent).
     def get_state(self, key):

@@ -8,15 +8,15 @@ import re
 import shutil
 import zipfile
 
-from web import editor
+from web import editor, examples
 from web.editor import EditorError
 
 FORMAT = "miso-character"
 VERSION = 1
 MAX_ZIP = 60 * 1024 * 1024         # the uploaded archive
 MAX_UNPACKED = 120 * 1024 * 1024   # the files inside it, summed before anything is extracted
-CARD_FILES = ("character.md", "context.md", "profile.json", "creator.json", "palace.json", "sandbox.json",
-              "icon.png", "icon.jpg", "icon.webp")
+CARD_FILES = ("character.md", "context.md", "examples.json", "profile.json", "creator.json", "palace.json",
+              "sandbox.json", "icon.png", "icon.jpg", "icon.webp")
 BG_MEMBER = re.compile(r"^backgrounds/[0-9a-f]{12}\.jpg$")   # one file per background in the archive
 HISTORY_FILES = ("memory.json", "memory.md", "pinned.md", "summary.json", "episodes.json")
 HISTORY_DIR = "history/"
@@ -133,6 +133,15 @@ def import_zip(root, data_dir, uid, username, data, admin=True):
         if admin and "sandbox.json" in members:
             flag = _json_member(zf, members["sandbox.json"], "sandbox.json")
             sandbox_on = bool(flag.get("enabled")) if isinstance(flag, dict) else None
+        # Example messages travel with the card. A damaged list is refused rather than silently dropped.
+        example_messages = None
+        if "examples.json" in members:
+            raw = _json_member(zf, members["examples.json"], "examples.json")
+            raw = raw.get("examples") if isinstance(raw, dict) else raw
+            try:
+                example_messages = examples.validate(raw)
+            except examples.ExamplesError as err:
+                raise EditorError(f"examples.json is not usable: {err}") from None
         creator = username
         if admin and "creator.json" in members:
             c = _json_member(zf, members["creator.json"], "creator.json")
@@ -155,7 +164,8 @@ def import_zip(root, data_dir, uid, username, data, admin=True):
 
     created = False
     try:
-        editor.write_card(root, name, card, context, colour, creating=True, sandbox_on=sandbox_on, profile=profile)
+        editor.write_card(root, name, card, context, colour, creating=True, sandbox_on=sandbox_on, profile=profile,
+                          example_messages=example_messages)
         created = True
         editor.record_creator(path, creator)
         if icon is not None:

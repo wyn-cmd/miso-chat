@@ -33,7 +33,7 @@ from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_T
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude
 import pytz
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, TIERS, TIER_MONTHLY_TOKENS, budget_days, recent_days, verify_password, needs_rehash
 
@@ -61,6 +61,7 @@ DATA_DIR = os.environ.get("MISO_DATA_DIR") or os.environ.get("ROLEPLAY_DATA_DIR"
 COOKIE = "rp_session"
 COOKIE_SECURE = (os.environ.get("MISO_COOKIE_SECURE") or os.environ.get("ROLEPLAY_COOKIE_SECURE") or "1") != "0"   # on unless turned off for plain-http testing
 MAX_MESSAGE = 4000
+MAX_DELETE = 500         # most messages one delete call may remove
 MIN_PASSWORD = 10
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{2,32}$")
 TOKEN_DISPLAY_LIMIT = 1_000_000
@@ -599,6 +600,8 @@ def _background_ids_for(st, user, solo, groups):
 
 # How often the dream thread looks at the quiet hours, in seconds.
 DREAM_TICK_SECONDS = 300
+# How often the mood thread checks for lonely characters, in seconds.
+MOOD_TICK_SECONDS = 600
 
 
 # The dream settings as the page shows them, with the last dream's record when there is one.
@@ -622,6 +625,11 @@ def _read_json_file(path):
         return None
 
 
+# Whether a stored name is a group: a private group's grp- ID, or a shared group folder.
+def _is_group_name(st, name):
+    return name.startswith(private_groups.PREFIX) or name in scan_characters(st.char_root)[1]
+
+
 # Runs one dream for an account's character. It holds the chat's lock, so it never overlaps a reply, and it is
 # counted against the server's dream cap, not the user's requests or tokens. Returns True when a dream ran.
 def _dream_fire(st, uid, name):
@@ -639,7 +647,7 @@ def _dream_fire(st, uid, name):
     user = st.store.get_user(uid)
     if user is None or user["disabled"] or user["must_change"]:
         return False
-    slot = _slot(st, user, name, False)
+    slot = _slot(st, user, name, _is_group_name(st, name))
     if not slot.lock.acquire(timeout=60):
         return False   # a reply has held the chat for a minute: leave tonight's dream for the next tick
     try:
@@ -653,6 +661,82 @@ def _dream_fire(st, uid, name):
         log(f"dream for {name} (user {uid}): {record['added']} added, {record['updated']} updated, "
             f"{record['removed']} removed, {record['dropped']} palace entries dropped")
     return record is not None
+
+
+# Moves a character's state to now and puts it in the prompt for the next reply. Not saved here: the exchange is
+# counted after the reply, by _mood_settle.
+def _mood_start(st, uid, name, slot):
+    now = time.time()
+    state = mood.advance(mood.load(st.store.mood_get(uid, name), now), now)
+    slot.engine.mood_text = "\n\n" + mood.describe(state)
+
+
+# Messages a lite account can send in a day, from the lite tier's daily token share and the daily request cap. A
+# stretch of talk within this allowance never wears a character out, so free and lite users are not exhausted.
+def _lite_allowance(st):
+    lite = _tier_config(st)["lite"]
+    daily_tokens = lite["monthly_tokens"] * lite["daily_pct"] // 100
+    return mood.lite_allowance(daily_tokens, st.store.get_setting("user_daily_cap"))
+
+
+# Counts one exchange after a reply. It loads the stored state again rather than using the one from the start of the
+# turn, so a lonely check-in or another write made meanwhile is kept.
+def _mood_settle(st, uid, name):
+    now = time.time()
+    state = mood.on_exchange(mood.load(st.store.mood_get(uid, name), now), now, _lite_allowance(st))
+    st.store.mood_save(uid, name, state)
+
+
+# Reads the user's message for attitude events and puts the relationship block in the prompt for the reply. The
+# scores are saved only once the reply is in, by _att_settle.
+def _att_start(st, uid, name, slot, text):
+    state, result = attitude.apply(attitude.load(st.store.attitude_get(uid, name)), text)
+    slot.engine.attitude_text = "\n\n" + attitude.describe(state, result)
+
+
+# Applies the same message to the stored scores after a reply. It loads the row again, as _mood_settle does.
+def _att_settle(st, uid, name, text):
+    state, _result = attitude.apply(attitude.load(st.store.attitude_get(uid, name)), text)
+    st.store.attitude_save(uid, name, attitude.to_row(state))
+
+
+# What the settings page gets for a character's relationship. Shared by the read and the admin edit.
+def _attitude_view(enabled, state):
+    return {"enabled": bool(enabled), "level": state["level"], "affection": round(state["affection"]),
+            "trust": round(state["trust"]), "tone": attitude.TONE[state["level"]]}
+
+
+# What the settings page gets for a character's mood. Shared by the read and the admin edit.
+def _mood_view(enabled, state):
+    energy, affinity = round(state["energy"]), round(state["affinity"])
+    return {"enabled": bool(enabled), "emotion": state["emotion"], "energy": energy,
+            "energy_band": mood.energy_band(energy), "affinity": affinity,
+            "affinity_band": mood.affinity_band(affinity), "tone": mood.TONE[state["emotion"]]}
+
+
+# Every stored character moves to now. A lonely one that has not reached out since its last message sends a check-in,
+# through the same path as a scheduled one, and that silence is then marked as reached.
+def _mood_tick(st):
+    if st.store.get_setting("mood_enabled") != "1":
+        return
+    for row in st.store.mood_rows():
+        uid, name = row["user_id"], row["character"]
+        now = time.time()
+        state = mood.advance(mood.load(row, now), now)
+        if not mood.outreach_due(state, now):
+            st.store.mood_save(uid, name, state)
+            continue
+        try:
+            sent = _fire_checkin(st, uid, name)
+        except Exception as err:   # one character's check-in must not stop the others
+            sent = False
+            log(f"lonely check-in for {name} (user {uid}) failed: {err}")
+        if sent:
+            log(f"lonely check-in sent: {name} for user {uid}")
+            # Read the row again: the chat may have moved on while the check-in was written.
+            now = time.time()
+            fresh = mood.advance(mood.load(st.store.mood_get(uid, name), now), now)
+            st.store.mood_save(uid, name, mood.on_outreach(fresh, now))
 
 
 # Makes one scheduled check-in for an account's character, in the same chat its turns use. Skipped when the
@@ -854,7 +938,8 @@ def _label(st, user, name):
     return display_for(name)
 
 
-SWITCHES = ("memory_enabled", "palace_enabled", "episodes_enabled", "dreams_enabled")
+SWITCHES = ("memory_enabled", "palace_enabled", "episodes_enabled", "dreams_enabled", "mood_enabled", "attitude_enabled",
+            "event_memory_enabled", "memory_policy_enabled")
 
 
 def _apply_switches(st, engine):
@@ -862,6 +947,8 @@ def _apply_switches(st, engine):
     engine.memory_enabled = st.store.get_setting("memory_enabled") == "1"
     engine.palace_enabled = st.store.get_setting("palace_enabled") == "1"
     engine.episodes_enabled = st.store.get_setting("episodes_enabled") == "1"
+    engine.event_memory_enabled = st.store.get_setting("event_memory_enabled") == "1"
+    engine.policy_enabled = st.store.get_setting("memory_policy_enabled") == "1"
 
 
 def _slot(st, user, name, is_group):
@@ -893,15 +980,15 @@ def _slot(st, user, name, is_group):
                     on_request=on_request, on_tokens=on_tokens, allow_root_user=False,
                     member_memory=False, persist_config=False)
     _apply_switches(st, engine)
-    if not is_group:
-        # Each account has its own palace per character; the first chat copies the starting one.
-        engine.palace_dir = os.path.join(st.data_dir, "users", str(uid), name)
-        palace.copy_starting(os.path.join(st.char_root, name), engine.palace_dir)
+    # Each account has its own palace per character or group; the first chat copies the starting one, if there is one.
+    engine.palace_dir = os.path.join(st.data_dir, "users", str(uid), name)
+    palace.copy_starting(os.path.join(st.char_root, name), engine.palace_dir)
     engine.extra_models = _extra_models(st)
     engine.discover_models()
     engine.extra_models = [m for m in engine.extra_models if _model_allowed(st, user, m)]
     engine.thinking = thinking
     engine.window_override = _pref_int(st.store.get_pref(uid, "window"))
+    engine.quench_enabled = st.store.get_pref(uid, "quench") == "1"
     engine.temperature_override = _pref_float(st.store.get_pref(uid, "temp:" + name))
     engine.reply_length_override = _reply_target(st, uid)
     chosen = st.store.get_pref(user["id"], "model") or ""
@@ -1223,6 +1310,16 @@ def _run_turn(st, user, name, slot, message, regen=False):
                 try:
                     started = time.time()
                     processed = text if regen else slot.engine.prepare_input(message)
+                    mood_on = st.store.get_setting("mood_enabled") == "1" and not slot.engine.is_group
+                    if not mood_on:
+                        slot.engine.mood_text = ""   # an admin switch off clears the state from the prompt at once
+                    elif not regen:
+                        _mood_start(st, user["id"], name, slot)
+                    att_on = st.store.get_setting("attitude_enabled") == "1" and not slot.engine.is_group
+                    if not att_on:
+                        slot.engine.attitude_text = ""
+                    elif not regen:
+                        _att_start(st, user["id"], name, slot, processed)
                     result = slot.engine.send(processed, on_delta=on_delta, on_think=on_think)
                     if regen and result.ok:
                         slot.engine.finish_regenerate()
@@ -1239,6 +1336,10 @@ def _run_turn(st, user, name, slot, message, regen=False):
                     detail = (result.error or "no answer")[:200]
                     events.put(("error", {"code": "model_failed", "message": f"No model answered: {detail}"}))
                     return
+                if mood_on and result.replies and not regen:
+                    _mood_settle(st, user["id"], name)
+                if att_on and result.replies and not regen:
+                    _att_settle(st, user["id"], name, processed)
                 if result.replies and not regen:   # a new user message was accepted: count it for the character
                     _count_character_message(st, user, name)
                 if result.replies:   # the user's message and each reply, for the stats page
@@ -1254,7 +1355,7 @@ def _run_turn(st, user, name, slot, message, regen=False):
                 }))
                 # Automatic Mind Palace entries: every few turns the character may add or correct one.
                 pdir = slot.engine.palace_dir
-                if (pdir and not slot.engine.is_group and slot.engine.palace_enabled and result.replies and not regen
+                if (pdir and slot.engine.palace_enabled and result.replies and not regen
                         and st.store.usage_today(user["id"])["requests"] < _effective_cap(st, user)
                         and not _budget_block(st, user)):
                     try:
@@ -1709,6 +1810,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             info["avatar_shape"] = _avatar_shape(store, user["id"])
             info["bg_shade"] = _shade_pref(store, user["id"])
             info["bubble_opacity"] = _bubble_pref(store, user["id"])
+            info["quench"] = store.get_pref(user["id"], "quench") == "1"
             info["models"] = {"gemini": "auto", "extra": [m for m in _extra_models(st) if _model_allowed(st, user, m)]}
             info["model"] = store.get_pref(user["id"], "model") or ""   # the saved choice, so the picker reloads it
             info["personas"] = _persona_list(st, user)
@@ -2304,6 +2406,8 @@ def make_app(client=None, data_dir=None, char_root=None):
             if not 30 <= opacity <= 100:
                 raise HTTPException(400, "The bubble opacity must be between 30 and 100.")
             store.set_pref(user["id"], "bubble_opacity", str(opacity))
+        if "quench" in body:
+            store.set_pref(user["id"], "quench", "1" if body["quench"] else "0")
         # cached engines hold the old settings; drop them so the next turn picks up the new ones
         with st.slots_lock:
             for k in [k for k in st.slots if k[0] == user["id"]]:
@@ -2312,7 +2416,8 @@ def make_app(client=None, data_dir=None, char_root=None):
                 "window": _pref_int(store.get_pref(user["id"], "window")),
                 "reply_length": _reply_target(st, user["id"]),
                 "avatar_shape": _avatar_shape(store, user["id"]),
-                "bg_shade": _shade_pref(store, user["id"]), "bubble_opacity": _bubble_pref(store, user["id"])}
+                "bg_shade": _shade_pref(store, user["id"]), "bubble_opacity": _bubble_pref(store, user["id"]),
+                "quench": store.get_pref(user["id"], "quench") == "1"}
 
     @app.get("/api/character-settings")
     async def character_settings_get(request: Request, character: str):
@@ -2402,6 +2507,40 @@ def make_app(client=None, data_dir=None, char_root=None):
         body = _read_body(await request.json())
         name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
         return await run_in_threadpool(_undo_now, st, user, name, is_group)
+
+    @app.post("/api/delete")
+    async def delete_messages(request: Request):
+        # Remove chosen messages from this account's saved chat: one position, or a selection. No model call, so no
+        # request is counted. The chat belongs to this account alone, so no other account is affected.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
+        raw = body.get("indexes")
+        if raw is None and body.get("index") is not None:
+            raw = [body["index"]]
+        if not isinstance(raw, list) or not raw:
+            raise HTTPException(400, "Pick at least one message to delete.")
+        try:
+            indexes = sorted({int(i) for i in raw})
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Message positions must be whole numbers.")
+        if len(indexes) > MAX_DELETE:
+            raise HTTPException(400, f"Delete at most {MAX_DELETE} messages at a time.")
+        slot = await run_in_threadpool(_slot, st, user, name, is_group)
+
+        def apply():
+            if not slot.lock.acquire(blocking=False):
+                raise HTTPException(409, "Wait for the current reply to finish before deleting messages.")
+            try:
+                removed = slot.engine.delete_messages(indexes)
+                if not removed:
+                    raise HTTPException(400, "Those messages are no longer in this chat.")
+                return {"messages": _history(slot.engine), "removed": removed}
+            finally:
+                slot.lock.release()
+
+        return await run_in_threadpool(apply)
 
     # ---- admin
 
@@ -2632,7 +2771,7 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.get("/api/admin/characters/example")
     def editor_example(request: Request):
         require(request)
-        return {"card": editor.example_card()}
+        return {"card": editor.example_card(), "examples": editor.example_messages()}
 
     @app.post("/api/admin/characters/draft")
     async def editor_draft(request: Request):
@@ -2674,7 +2813,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             out = editor.write_card(st.char_root, str(body.get("name", "")), body.get("card", ""),
                                     body.get("context", ""), body.get("colour", ""), creating=True,
                                     sandbox_on=(bool(body["sandbox"]) if ("sandbox" in body and user["is_admin"]) else None),
-                                    profile=body.get("profile"))
+                                    profile=body.get("profile"), example_messages=body.get("examples"))
             editor.record_creator(editor.folder_of(st.char_root, str(body.get("name", ""))), user["username"])
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
@@ -2690,7 +2829,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             out = editor.write_card(st.char_root, name, body.get("card", ""),
                                     body.get("context", ""), body.get("colour", ""), creating=False,
                                     sandbox_on=(bool(body["sandbox"]) if ("sandbox" in body and user["is_admin"]) else None),
-                                    profile=body.get("profile"))
+                                    profile=body.get("profile"), example_messages=body.get("examples"))
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         with st.slots_lock:
@@ -2983,18 +3122,16 @@ def make_app(client=None, data_dir=None, char_root=None):
     def _account_palace_dir(uid, folder):
         return os.path.join(st.data_dir, "users", str(uid), folder)
 
-    def _solo_folder(user, character):
-        # Groups have no Mind Palace of their own.
-        name, is_group = _resolve_profile(st, character, user)
-        if is_group:
-            raise HTTPException(400, "Groups do not have a Mind Palace.")
+    def _palace_folder(user, character):
+        # The folder a character or group keeps its palace in. A private group resolves to its grp- ID.
+        name, _is_group = _resolve_profile(st, character, user)
         return name
 
     @app.get("/api/character-palace")
     def my_palace_get(request: Request, character: str):
-        # This account's own palace for one character. The first read copies the character's starting palace.
+        # This account's own palace for one character or group. The first read copies the starting palace, if any.
         user = require(request)
-        folder = _solo_folder(user, character)
+        folder = _palace_folder(user, character)
         pdir = _account_palace_dir(user["id"], folder)
         palace.copy_starting(os.path.join(st.char_root, folder), pdir)
         entries, cfg = palace.load_all(pdir)
@@ -3005,7 +3142,7 @@ def make_app(client=None, data_dir=None, char_root=None):
     async def my_palace_set(request: Request, character: str):
         _csrf(request)
         user = require(request)
-        folder = _solo_folder(user, character)
+        folder = _palace_folder(user, character)
         body = _read_body(await request.json())
         pdir = _account_palace_dir(user["id"], folder)
         os.makedirs(pdir, exist_ok=True)
@@ -3199,7 +3336,7 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.get("/api/dreams")
     def dream_get(request: Request, character: str):
         user = require(request)
-        name = _solo_for_checkin(user, character)
+        name, _is_group = _resolve_profile(st, character, user)
         row = st.store.dream_get(user["id"], name) or {}
         return _dream_view(st, user["id"], name, row)
 
@@ -3208,7 +3345,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         user = require(request)
         body = _read_body(await request.json())
-        name = _solo_for_checkin(user, str(body.get("character", "")))
+        name, _is_group = _resolve_profile(st, str(body.get("character", "")), user)
         start = checkins.parse_hhmm(body.get("start"))
         end = checkins.parse_hhmm(body.get("end"))
         if start is None or end is None or start == end:
@@ -3219,6 +3356,96 @@ def make_app(client=None, data_dir=None, char_root=None):
         st.store.dream_update(user["id"], name, enabled=int(bool(body.get("enabled"))), start_min=start,
                               end_min=end, tz=tz)
         return _dream_view(st, user["id"], name, st.store.dream_get(user["id"], name))
+
+    # A character's relationship with the user as the settings page shows it. Read only.
+    @app.get("/api/character-attitude")
+    def attitude_view(request: Request, character: str):
+        user = require(request)
+        name, is_group = _resolve_profile(st, character, user)
+        if is_group:
+            raise HTTPException(400, "Only characters have a relationship.")
+        state = attitude.load(st.store.attitude_get(user["id"], name))
+        return _attitude_view(st.store.get_setting("attitude_enabled") == "1", state)
+
+    # An admin setting affection or trust by hand. The level is read from the new scores, and the simulation carries
+    # on from there, so the next exchange moves them as usual. Every other account gets 403.
+    @app.post("/api/character-attitude")
+    async def attitude_edit(request: Request):
+        _csrf(request)
+        user = require(request, admin=True)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
+        if is_group:
+            raise HTTPException(400, "Only characters have a relationship.")
+        state = attitude.load(st.store.attitude_get(user["id"], name))
+        for key in ("affection", "trust"):
+            if body.get(key) is None:
+                continue
+            try:
+                value = float(body[key])
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{key.capitalize()} must be a number.")
+            if not 0.0 <= value <= 100.0:
+                raise HTTPException(400, f"{key.capitalize()} must be between 0 and 100.")
+            state[key] = value
+        state["level"] = attitude.level_for(state["level"], state["affection"], state["trust"])
+        st.store.attitude_save(user["id"], name, attitude.to_row(state))
+        return _attitude_view(st.store.get_setting("attitude_enabled") == "1", state)
+
+    # A character's mood as the settings page shows it. Read only: the state is moved to now, but not saved.
+    @app.get("/api/character-state")
+    def mood_view(request: Request, character: str):
+        user = require(request)
+        name, is_group = _resolve_profile(st, character, user)
+        if is_group:
+            raise HTTPException(400, "Only characters have a mood.")
+        now = time.time()
+        state = mood.advance(mood.load(st.store.mood_get(user["id"], name), now), now)
+        return _mood_view(st.store.get_setting("mood_enabled") == "1", state)
+
+    # An admin setting energy, affinity or the emotion by hand. Saved at once, so the next reply reads the new
+    # values. The emotion is re-read from the numbers unless the admin names one. Every other account gets 403.
+    @app.post("/api/character-state")
+    async def mood_edit(request: Request):
+        _csrf(request)
+        user = require(request, admin=True)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
+        if is_group:
+            raise HTTPException(400, "Only characters have a mood.")
+        now = time.time()
+        state = mood.advance(mood.load(st.store.mood_get(user["id"], name), now), now)
+        for key in ("energy", "affinity"):
+            if body.get(key) is None:
+                continue
+            try:
+                value = float(body[key])
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{key.capitalize()} must be a number.")
+            if not 0.0 <= value <= 100.0:
+                raise HTTPException(400, f"{key.capitalize()} must be between 0 and 100.")
+            state[key] = value
+        state = mood.advance(state, now)   # moves the emotion onto the new numbers, adding no energy
+        emotion = body.get("emotion")
+        if emotion not in (None, ""):
+            if emotion not in mood.EMOTIONS:
+                raise HTTPException(400, "Unknown emotion.")
+            state["emotion"] = emotion
+        st.store.mood_save(user["id"], name, state)
+        return _mood_view(st.store.get_setting("mood_enabled") == "1", state)
+
+    # A character's remembered items and the standing the retention policy gives each one. Read only: the scores
+    # move only when a turn is scored.
+    @app.get("/api/memory-policy")
+    def memory_policy_view(request: Request, character: str):
+        user = require(request)
+        name, is_group = _resolve_profile(st, character, user)
+        slot = _slot(st, user, name, is_group)
+        with slot.lock:
+            report = slot.engine.memory_policy_report()
+        report["character"] = _label(st, user, name)
+        report["limit"] = 40   # the page shows the strongest this many; the rest are counted only
+        return report
 
     @app.get("/api/checkins/unread")
     def checkin_unread(request: Request):
@@ -3259,4 +3486,15 @@ def make_app(client=None, data_dir=None, char_root=None):
             time.sleep(DREAM_TICK_SECONDS)
 
     threading.Thread(target=_dream_loop, name="dreams", daemon=True).start()
+
+    # The thread that moves character moods along and sends lonely check-ins. It looks every few minutes.
+    def _mood_loop():
+        while True:
+            try:
+                _mood_tick(st)
+            except Exception as err:
+                log(f"mood scheduler error: {err}")
+            time.sleep(MOOD_TICK_SECONDS)
+
+    threading.Thread(target=_mood_loop, name="mood", daemon=True).start()
     return app

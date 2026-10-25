@@ -56,6 +56,7 @@ async function openEditor(name) {
     $("edColour").value = /^#[0-9a-fA-F]{6}$/.test(data.colour || "") ? data.colour.toLowerCase() : "#808080";
     $("edSandbox").checked = !!data.sandbox;
     setProfileFields(data.profile);
+    renderExamples(data.examples);
     setIconPreview(name, data.has_icon);
     setBgPreview(name, data.backgrounds || []);
   } else {
@@ -68,6 +69,7 @@ async function openEditor(name) {
     $("edColourText").value = "#808080";
     $("edSandbox").checked = false;
     setProfileFields(null);
+    renderExamples([]);
     setIconPreview(null, false);
     resetBgPreview();
   }
@@ -75,6 +77,89 @@ async function openEditor(name) {
   $("edSandbox").closest("label").hidden = !(me && me.is_admin);   // sandboxes are an admin feature
   showEditor(true);
 }
+
+// Example messages: one row per exchange, a user message and the character's reply. They live in examples.json
+// beside the card and go into the system prompt as a voice reference. Blank rows are ignored on save.
+const EXAMPLE_LIMIT = 12;
+
+function addExampleRow(pair) {
+  const list = $("edExamplesList");
+  if (list.children.length >= EXAMPLE_LIMIT) {
+    $("edExamplesErr").textContent = `Up to ${EXAMPLE_LIMIT} exchanges. Remove one to add another.`;
+    return null;
+  }
+  const row = el("div", null, "example-row");
+  const head = el("div", null, "example-row-head");
+  const label = el("span", "Exchange " + (list.children.length + 1), "example-row-title");
+  const remove = el("button", "Remove", "ghost small");
+  remove.type = "button";
+  remove.addEventListener("click", () => {
+    row.remove();
+    renumberExamples();
+  });
+  head.append(label, remove);
+  const you = el("textarea", null, "example-user");
+  you.rows = 2;
+  you.maxLength = 1000;
+  you.placeholder = "What you say to the character";
+  you.setAttribute("aria-label", "Your message in this example");
+  const them = el("textarea", null, "example-reply");
+  them.rows = 3;
+  them.maxLength = 2000;
+  them.placeholder = "How the character answers";
+  them.setAttribute("aria-label", "The character's reply in this example");
+  if (pair) {
+    you.value = pair.user || "";
+    them.value = pair.character || "";
+  }
+  row.append(head, el("span", "You", "example-label"), you, el("span", "Character", "example-label"), them);
+  list.appendChild(row);
+  return row;
+}
+
+function renumberExamples() {
+  const rows = $("edExamplesList").children;
+  [...rows].forEach((row, i) => {
+    const title = row.querySelector(".example-row-title");
+    if (title) title.textContent = "Exchange " + (i + 1);
+  });
+  updateExampleCount();
+}
+
+function updateExampleCount() {
+  const rows = $("edExamplesList").children.length;
+  $("edExamplesCount").textContent = rows ? `${rows} of ${EXAMPLE_LIMIT}` : "None yet";
+  $("edExamplesAdd").disabled = rows >= EXAMPLE_LIMIT;
+}
+
+// The rows as the server expects them. A row with only one half filled in is kept, so the save reports it rather
+// than silently dropping what was typed; a row left entirely blank is dropped.
+function readExamples() {
+  const out = [];
+  for (const row of $("edExamplesList").children) {
+    const user = row.querySelector(".example-user").value.trim();
+    const reply = row.querySelector(".example-reply").value.trim();
+    if (user || reply) out.push({ user, character: reply });
+  }
+  return out;
+}
+
+function renderExamples(pairs) {
+  $("edExamplesList").textContent = "";
+  $("edExamplesErr").textContent = "";
+  const list = pairs || [];
+  for (const pair of list) addExampleRow(pair);
+  if (!list.length) addExampleRow(null);   // one empty row, so the section reads as something to fill in
+  updateExampleCount();
+}
+
+$("edExamplesAdd").addEventListener("click", () => {
+  const row = addExampleRow(null);
+  if (row) {
+    updateExampleCount();
+    row.querySelector(".example-user").focus();
+  }
+});
 
 function setIconPreview(name, hasIcon) {
   const box = $("edIconPreview");
@@ -107,6 +192,7 @@ $("edColourText").addEventListener("input", () => {
 async function loadExample() {
   const data = await api("GET", "/api/admin/characters/example");
   $("edCard").value = data.card;
+  if (data.examples) renderExamples(data.examples);
   const m = /^Colour:\s*(#[0-9a-fA-F]{6})/m.exec(data.card);
   if (m) {
     $("edColourText").value = m[1];
@@ -130,6 +216,7 @@ async function saveCharacter(ev) {
     colour: typed || $("edColour").value,
     sandbox: $("edSandbox").checked,
     profile: profileFromForm(),
+    examples: readExamples(),
   };
   try {
     let saved;
@@ -189,6 +276,7 @@ async function saveCharacter(ev) {
     }
     $("edName").readOnly = true;
     setProfileFields(saved.profile);
+    renderExamples(saved.examples);   // the saved list, so half-typed rows do not linger
     $("edOk").textContent = "Saved " + saved.name + ". Chats pick up the change on their next message.";
     $("edColourText").value = saved.colour || $("edColourText").value;
     await loadCharacters();
@@ -447,6 +535,7 @@ async function importCard() {
     if (data.name && !$("edName").value.trim()) $("edName").value = data.name;
     $("edCard").value = data.character;
     $("edContext").value = data.context;
+    if (data.examples) renderExamples(data.examples);
     $("edHeadline").value = data.headline;
     $("edInfo").value = data.info;
     setTags(data.tags);
@@ -494,6 +583,7 @@ async function draftFromFile() {
     }
     if (data.name && !$("edName").value.trim()) $("edName").value = data.name;
     $("edCard").value = data.character;
+    if (data.examples) renderExamples(data.examples);
     $("edHeadline").value = data.headline;
     $("edInfo").value = data.info;
     setTags(data.tags);
@@ -816,7 +906,7 @@ $("edPalaceWho").addEventListener("change", () => { if (editing) loadPalace(edit
 
 // ---- Settings: the account's own Mind Palace for the open character. Each account has its own copy.
 async function openMyPalace() {
-  if (!current || !soloNames.includes(current)) return;
+  if (!current) return;
   $("palMsg").textContent = "";
   try {
     const data = await api("GET", "/api/character-palace?character=" + encodeURIComponent(current));

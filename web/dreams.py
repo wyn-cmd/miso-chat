@@ -12,7 +12,7 @@ DEFAULT_START = 120      # 02:00, in minutes after midnight
 DEFAULT_END = 360        # 06:00
 
 SYSTEM = (
-    "You are this character reflecting in a quiet hour, away from the user. You are given the memory bank, the "
+    "You are reflecting in a quiet hour, away from the user, as this character or group chat. You are given the memory bank, the "
     "automatic Mind Palace entries (with ids) and some recent moments from the chat. Tidy the memory without losing "
     "anything the chat still supports. Reply with lines in these forms only:\n"
     "ADD: [Section] one new fact, one line\n"
@@ -20,6 +20,11 @@ SYSTEM = (
     "REMOVE: the exact existing line, only when it is a duplicate or no longer true\n"
     "CONNECT: a link between two facts already in the bank, written as one line; use this for new connections\n"
     "DROP: the id of an automatic palace entry that duplicates another or is wrong\n"
+    "EVENT: actor | what happened | what the character came to believe | what it led to | after: an earlier event id\n"
+    "EVOLVE: one short line on how the character has changed because of what happened, only when the chat shows it\n"
+    "Write an EVENT only for something that changed the situation or the character, never for small talk, and at most "
+    "five. Use no | inside the fields. The after: part is optional. Write EVOLVE lines only for a real change in the "
+    "character's outlook or behaviour.\n"
     "NOTE: one sentence on what you tidied or noticed\n"
     "Never touch the user's own palace entries or pinned facts, because they are not shown to you. "
     "Write nothing else. If nothing needs doing, reply with only NOTE: nothing to change."
@@ -35,8 +40,9 @@ def in_window(start, end, minute):
     return minute >= start or minute < end
 
 
-# The prompt for one dream: the memory bank, the automatic palace entries and the recent episodes.
-def build_prompt(memory, auto_entries, recent):
+# The prompt for one dream: the memory bank, the automatic palace entries and the recent episodes. With event memory
+# on, also the messages since the last event pass (new_lines) and the latest events, for the dream to link against.
+def build_prompt(memory, auto_entries, recent, new_lines=None, recent_events=None):
     lines = ["Memory bank (memory.md):", memory.strip() or "(empty)", "", "Automatic palace entries:"]
     if not auto_entries:
         lines.append("- none")
@@ -44,6 +50,11 @@ def build_prompt(memory, auto_entries, recent):
         lines.append(f"- id {e['id']}: {e['title'] or 'Untitled'}; keys {', '.join(e['keys'])}; content: {e['content']}")
     lines += ["", "Recent moments from the chat:"]
     lines += [f"- {text}" for text in recent] or ["- none"]
+    if new_lines is not None:
+        lines += ["", "Recent events the character has recorded (for the after: field):"]
+        lines += [f"- {text}" for text in recent_events or []] or ["- none"]
+        lines += ["", "Messages since the last reflection on events:"]
+        lines += new_lines or ["- none"]
     lines += ["", "Reflect now. Reply with the lines only."]
     return "\n".join(lines)
 
