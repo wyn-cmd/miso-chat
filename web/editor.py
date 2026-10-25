@@ -13,7 +13,7 @@ from PIL import Image, ImageOps
 
 import sandbox
 from charname import check_display, folder_for
-from web import profiles
+from web import profiles, examples
 
 COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 UPLOAD_MAX = 10 * 1024 * 1024         # largest file an admin may upload
@@ -29,6 +29,13 @@ Colour: #e8a33d
 - Setting: A rainy harbour town; the lighthouse keeper is an old friend.
 - Speech: Short sentences, fond nicknames, the occasional *tail flick*.
 """
+# The example messages that go with the sample card, so the editor's example section shows what it is for.
+EXAMPLE_MESSAGES = [
+    {"user": "You're late again, fox.",
+     "character": "*one ear tips toward you, unbothered* The tide was late first. I only followed it."},
+    {"user": "What did you find down at the harbour?",
+     "character": "A brass cog with no machine left to want it. *turns it over in her palm* Yours, if you like."},
+]
 
 
 class EditorError(ValueError):
@@ -65,12 +72,13 @@ def read_card(root, name):
     colour = m.group(1).split("/")[0].strip() if m else ""
     return {"name": name, "card": card, "context": context, "colour": colour,
             "has_icon": icon_path(root, name) is not None, "backgrounds": background_ids(root, name), "sandbox": sandbox.is_enabled(path),
-            "profile": profiles.read_profile(path)}
+            "profile": profiles.read_profile(path), "examples": examples.load(path)}
 
 
-def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None, profile=None):
+def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None, profile=None, example_messages=None):
     # profile is the card's headline, info and tags. Blank headline and info leave the saved profile
-    # alone, so the background writer can still fill it in later.
+    # alone, so the background writer can still fill it in later. example_messages is None when the caller does not
+    # manage them, which leaves the saved list as it is; a list replaces it (an empty list removes the file).
     path = folder_of(root, name)
     if creating and os.path.exists(path):
         raise EditorError("A character with that name already exists.")
@@ -81,6 +89,11 @@ def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None,
     if len(card) > 20000 or len(context or "") > 20000:
         raise EditorError("Keep the card and context under 20,000 characters each.")
     new_profile = _checked_profile(profile)   # checked before anything is written
+    # Checked before anything is written as well, so a bad example never leaves a half-saved card.
+    try:
+        new_examples = None if example_messages is None else examples.validate(example_messages)
+    except examples.ExamplesError as err:
+        raise EditorError(str(err)) from None
     colour_hex = (colour_hex or "").strip()
     if COLOUR_RE.match(colour_hex):
         card = _set_colour_line(card, colour_hex.lower())
@@ -98,6 +111,8 @@ def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None,
         os.remove(context_path)
     if new_profile is not None:
         profiles.save_profile(path, new_profile, auto=False)
+    if new_examples is not None:
+        examples.save(path, new_examples)
     return read_card(root, name)
 
 
@@ -326,3 +341,7 @@ def icon_path(root, name):
 
 def example_card():
     return EXAMPLE_CARD
+
+
+def example_messages():
+    return [dict(pair) for pair in EXAMPLE_MESSAGES]

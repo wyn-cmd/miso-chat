@@ -2,6 +2,32 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.4.1 - 2026-10-25
+
+A feature release on the 1.4 line. It adds mood and relationship state, a memory graph written by dreams, group Mind Palace entries and group auto-reply, example messages on the character card, deleting messages from a chat, and two opt-in ways to spend fewer tokens. Every new switch starts off. Back up before updating, and take the 1.4.1 terminal client. See UPDATE.txt.
+
+### Added
+- Mood. A solo chat can now carry energy, affinity and an emotion that moves between calm, warm, tired and lonely, with margins on the way back so it does not flicker. Energy only falls once one unbroken stretch of talk passes the lite allowance, and it returns only in silence, so free and lite accounts are never left exhausted. Off by default (admin switch), and off means the block is not drawn and no model call is made.
+- Relationship. Affection and trust run from 0 to 100 across five levels, from stranger to married. They move on bonding events with a three-exchange cooldown and a cap of six a turn, and ease back after a long stretch without one, counted in exchanges rather than in time. Married comes only from a proposal at partner level. Off by default (admin switch).
+- Bars instead of bare numbers. Mood and relationship are drawn as progress bars with the value beside them, and the same bars carry the Memory retention report.
+- Admin editing of those values. An admin can set energy, affinity and the emotion, and affection and trust, by hand from the chat's settings, for their own account's row. Any other account gets 403 from the server, not just a hidden control.
+- Event memory graph. The nightly dream now also writes dated events, each with an actor, what happened, the belief it left and its consequence, plus a small set of evolving lines that change as the chat does. Later turns recall the events whose words overlap the newest messages. Capped at 200 events and 12 evolving lines. Off by default (admin switch).
+- Group Mind Palace. A group chat now has its own palace per account, and matched entries reach every member's reply and the director.
+- Group auto-reply. After the director picks the first speakers, each reply may draw one more speaker, up to four extra replies a turn, and no member gives more than two in a row. Always on for group chats; there is no per-group switch.
+- Example messages. The character editor has a section for up to 12 exchanges showing how the character speaks, each with a sample user line and the character's reply. The block sits directly after the card in the system prompt, is never sent as chat history, and is capped at 6000 characters so it cannot crowd the card. It is carried in character export and import, and a SillyTavern card's example dialogue is read into the section instead of staying in the card text.
+- Deleting messages. A trash button beside Regenerate removes the last message, and Select turns on pick mode, which puts a checkbox on every message and a bar with All, None, Delete N and Cancel. Deleting shifts the running summary and the episodes back to the first removed message, so later messages are reread under the right position. Up to 500 messages at a time. Undo still removes a whole turn.
+- Near-lossless token quenching, a per-account preference in Settings, Account, off by default. Two stages: the existing safe-word and whitespace stripping runs first, then an entropy pass removes the least informative sentences from the older part of the history only. The newest four messages, every message the account wrote, and every sentence carrying a figure, a proper noun or a quotation are left whole. A removal is accepted only while at least 92 percent of the window's distinct content words survive and no more than 35 percent of its characters are gone, so the pass stops before the text degrades. The context marker reports how much it saved. Near-lossless, not lossless: wording is bounded, meaning is not proven.
+- Learned memory retention, an admin switch, off by default. Memories the character wrote for itself, meaning automatic Mind Palace entries and episodes, are scored by what happened afterwards: a correction counts against them, appreciation and continued conversation count for them. A memory that keeps failing to help decays faster than one that keeps helping. Rows drop after two retrievals below the floor, or when never retrieved within 24 turns. Entries the user wrote are never scored, weighted or dropped, and a learned score can only demote a memory, never outrank something the user wrote. The settings page shows the top items as bars.
+
+### Changed
+- The history window now starts on multiples of eight messages instead of sliding one message at a time, so the prefix repeats for several turns and the provider's prompt cache can reuse it. The window is therefore 25 to 32 messages, not exactly 25.
+- The prompt is ordered from least to most often changed: character card, example messages, instructions, reply length, persona, context, pinned facts, memory bank, summary. Mood, relationship, palace, episode and event notes are sent with the newest user message and are never saved to the chat.
+- Group chats can carry their own Mind Palace entries, and the terminal client's /memory-palace help now says so.
+- The terminal client is 1.4.1. The server still accepts clients with the same major and minor version, so a 1.4.0 client keeps working.
+
+### Fixed
+- Deleting a reply now drops that exchange's saved alternatives, which would otherwise describe a chat that no longer exists, and a chat that begins on a reply is sent as a window that starts with the user's turn.
+
 ## 1.4.0 - 2026-10-24
 
 The first release of 1.4. It brings together the three betas and the features added since. Upgrading from 1.3.1 needs a backup first, and the terminal client must be the 1.4.0 file. See UPDATE.txt.

@@ -140,19 +140,36 @@ On the admin page, under Settings, these switches apply to the whole app:
 - Mind Palace. Turning it off stops the palace being read or shown to anyone.
 - Episodic memory. Turning it off stops recall and episode embedding for everyone.
 - Autonomous dreaming. Off by default. See Dreams below.
+- Mood. Off by default. Turning it on gives solo chats energy, affinity and an emotion, shown as bars in Settings. See Mood and relationship below.
+- Relationship. Off by default. Turning it on gives solo chats affection and trust. See Mood and relationship below.
+- Event memory. Off by default. The nightly dream writes the event graph, so leave this off unless dreaming is on too. See Memory below.
+- Learned memory retention. Off by default. Scores automatic palace entries and episodes by whether they helped, and drops the ones that keep failing. Your own entries are never scored or dropped. See Saving tokens below.
 
 The admin page also sets the dream frequency and the server's daily cap on dream model calls.
 
 ## Memory
 
-A character has four kinds of memory, and each one has a different job.
+A character has five kinds of memory, and each one has a different job.
 
-- **Recent window.** The last 25 messages (40 in group chats) go to the model word for word.
+- **Recent window.** The last 25 to 32 messages (40 in group chats) go to the model word for word. The window starts on a multiple of eight messages, so its first message stays put for several turns and the provider's prompt cache can reuse the part that has not changed.
 - **Memory bank (`memory.md`).** Long-term facts about the people, places and history of the chat. It is refreshed every 18 messages from the last 30 messages. The refresh does not rewrite the file: the model replies with changes only (added facts, corrected lines and removed lines), and the app applies them. A fact the model does not mention is kept. The memory bank is limited to 20,000 characters.
 - **Pinned facts.** Facts you pin in Settings, Pinned facts. They are sent with every reply, so the character never forgets them, and the refresh never changes them.
 - **Running summary and episodes.** Messages that leave the window are folded into a running summary, and cut into episodes that can be recalled (see Episodic memory under Mind Palace).
+- **Event memory (`events.json`).** The nightly dream also writes dated events: who did what, the belief it left and what followed, plus a few evolving lines that change as the chat does. A later message brings back the events whose words overlap it. Capped at 200 events and 12 evolving lines, so it cannot grow without end. Off by default.
 
 Automatic palace entries and dreams add to the memory over time. See Mind Palace and Dreams.
+
+## Mood and relationship
+
+Two optional layers give a solo chat a continuous sense of how it is going. Both are admin switches, both are off by default, and both are shown as progress bars in the chat's Settings, with the value beside the bar.
+
+Mood holds energy, affinity and an emotion that moves between calm, warm, tired and lonely. It has margins on the way back, so it does not flicker between two states. Energy only starts to fall once one unbroken stretch of talk passes the lite allowance, and it comes back only in silence, so free and lite accounts are never left exhausted. A character whose mood has gone quiet can send one check-in after a long silence.
+
+Relationship holds affection and trust, each from 0 to 100, across five levels: stranger, acquaintance, friend, partner and married. Bonding events move them, with a three-exchange cooldown and a cap of six points a turn. A long stretch with no bonding event eases trust back, counted in exchanges rather than in time. Married comes only from a proposal at partner level with affection at 85 and trust at 75.
+
+An admin can also set any of those five values by hand from the chat's Settings. The server checks for the admin flag on the request, so any other account is refused even if it calls the endpoint directly. This edits the admin's own row for that character.
+
+Attitudes and moods are kept per character and account in the database. They are never sent as chat history; they join the newest user message as a short note for that turn.
 
 ## Home page
 
@@ -168,11 +185,23 @@ Each saved message has a Branch button. It copies the chat up to and including t
 
 A branch is a full copy of this account's memory, pinned facts, rolling summary and chat history. After the copy, the two chats change independently. A chat can have up to 12 branches. Branches work the same way for groups.
 
+## Editing and deleting messages
+
+Edit changes one message's wording, and Undo removes the last turn: your line and every reply after it. A trash button beside Regenerate removes the last message only.
+
+Select, next to Undo, turns on pick mode. Every message gets a checkbox, and a bar offers All, None, Delete N and Cancel. Pick the messages you want gone and press Delete. Up to 500 go in one go. Deleting shifts everything after the removal, so the running summary and the episodes are cut back to the first deleted message and the later messages are read again under the right position. Deleting a reply also drops that exchange's saved swipe alternatives, which would otherwise describe a chat that no longer exists.
+
+Neither edit, undo nor delete makes a model call, and none of them counts against your requests. They change only your own copy of the chat.
+
 ## Group chats
 
 Any account can make a group chat from the sidebar. A group takes two to eight characters and is private to the account that made it. Other accounts cannot see, open or change it. An account can have up to 20 groups.
 
 Each group turn starts with a director. The director reads the new message, the chat history, the summary, the memory and the member notes, then returns the speakers in the order they should answer. Each chosen member replies in that order, so a group can have one reply or several. The director uses the same model as the group members: whichever model the account has picked, or the first model in the chain if none is picked. If the director fails, one random member replies and the note in the chat says why. The director is used in the web app only.
+
+After the director's picks, each reply may bring in one more speaker, up to four extra replies a turn, and no member gives more than two replies in a row. This keeps a group from answering with a single voice without letting one member take the turn over.
+
+A group also has its own Mind Palace, one per account, kept in the same place as a solo chat's. Matched entries reach every member's reply and the director, so shared history lives in one place instead of in each member's card.
 
 Per-member notes are set in the group dialog. Each note is private to the account and up to 500 characters. The director and the noted member both read it.
 
@@ -200,6 +229,26 @@ Each account can see its usage under Settings, Account, Token usage (View usage)
 
 The admin stats page also splits the tokens the way providers bill them: cached input (a prompt-cache hit), uncached input and output, with the model time spent on each turn. That split starts with this version, so earlier days show 0 there. For tokens that went to the DeepSeek key it adds a cost estimate per model, in USD or CNY, from published DeepSeek rates per million tokens. The rates are mapped onto this server's DeepSeek model ids and leave out off-peak discounts, so read the figure as an estimate. To use your own rates, set the `deepseek_prices` setting to JSON in the same shape as the table in `web/pricing.py`.
 
+## Saving tokens
+
+Two optional features cut the prompt without changing what the chat is. Both are off by default and neither is needed to use the app.
+
+### Near-lossless quenching
+
+Quenching is a per-account preference in Settings, Account. It runs in two stages. The first is the same safe-word and whitespace cleaning the app already does: zero-width characters, runs of spaces, extra blank lines, HTML comments and decoration-only lines are removed, and no word is lost. The second reads only the older part of the history and removes the least informative sentences, the ones whose words are already common in that window.
+
+The newest four messages, every message you wrote, and every sentence shorter than six content words are left whole. So is any sentence with a figure, a quantity, a proper noun, a shouted word or a quotation. A removal is accepted only while at least 92 percent of the window's distinct content words survive and no more than 35 percent of its characters are gone, so the pass stops well before the text thins out. The context marker in Settings shows how much it saved.
+
+This is near-lossless, not lossless. Wording is bounded, meaning is not proven. It also shifts the older text slightly from turn to turn, which can lower the cached share on the stats page for a quenched account. The saved tokens are still the larger number.
+
+### Memory retention
+
+When the admin switch is on, memories the character wrote for itself are scored by what happened next. If your next message corrects the reply, the memories that were in the prompt lose credit; if you appreciate it or carry on with it, they gain credit. A memory that keeps failing to help decays faster than one that keeps helping, and it is dropped after two retrievals below the floor, or if it is never retrieved within 24 turns.
+
+Only automatic Mind Palace entries and episodes are scored. Entries you wrote are never scored, never weighted and never dropped, and a learned score can only demote a memory, never lift it above something you wrote. The settings page lists the strongest items as bars under Memory retention.
+
+Nothing here is trained. The score is a closed-form count of outcomes, computed on your own machine, with no model call.
+
 ## Scheduled check-ins
 
 A character can message you once a day on its own. Check-ins are off by default. Open Settings, Check-in, choose a character's check-in and turn it on. You can have it at a set time, or at a random time within a range, in the time zone saved from your browser.
@@ -218,11 +267,13 @@ Dreams are offline reflection. In a character's quiet hours the model reviews th
 
 Dreams are off by default. An admin turns them on, and sets how many days apart they run (1 to 30) and how many dream model calls the whole server may make each Pacific day (40 by default). An account turns them on for each character in Settings, Dreams, and sets the quiet hours, 02:00 to 06:00 by default, in the time zone saved from the browser.
 
+When event memory is switched on, the same dream call also writes the event graph described under Memory. It costs no extra request.
+
 A dream runs once in each window, and only after at least six new messages. When several characters are due, those that have never dreamed go first, and the rest run in random order. Dream calls are not counted against any user's requests or tokens. The server cap is the only limit on them, so set it to what you are willing to spend. Dreams run only while the server is running.
 
 ## Import and export
 
-Admins can export a character as a zip file. The zip holds the card, icon, background, profile, creator and Mind Palace files. Tick the history option to include this account's chat history and memory too.
+Admins can export a character as a zip file. The zip holds the card, icon, background, profile, creator, Mind Palace and example message files. Tick the history option to include this account's chat history and memory too.
 
 A chat can be exported from Settings, Export, as Markdown, plain text, JSON, EPUB or PDF. The JSON file holds the character name, the export time and every message with its speaker, role, time, thinking text where it was kept, and the swipe position. The EPUB and PDF files hold the same chat, laid out for reading.
 
@@ -230,7 +281,7 @@ Admins can import a zip made by this app (format `miso-character`, version 1). A
 
 ## Importing a character card
 
-In the new-character form, the Import card section reads a SillyTavern-style card: a `.json` file, or a `.png` with the card in its text, in the v1, v2 and v3 layouts. The name, card, scenario, summary, tags and lorebook fill the form for you to check. A PNG becomes the character's picture, and lorebook entries become Mind Palace entries once the character is created. Nothing is saved until you press Create. Opening messages are not imported, because Miso has no greeting message, and the import report says so.
+In the new-character form, the Import card section reads a SillyTavern-style card: a `.json` file, or a `.png` with the card in its text, in the v1, v2 and v3 layouts. The name, card, scenario, summary, tags and lorebook fill the form for you to check. A PNG becomes the character's picture, and lorebook entries become Mind Palace entries once the character is created. Nothing is saved until you press Create. Example dialogue from the card is read into the character's Example messages section when it can be split into exchanges, and is left in the card text when it cannot. Opening messages are not imported, because Miso has no greeting message, and the import report says so.
 
 ## Chat backgrounds
 
@@ -256,6 +307,7 @@ Each character is a folder in the project root.
 - `profile.json` holds the public headline, summary and tags shown on the home page. It is written from the card when you use Auto-fill, and is never sent into the roleplay prompt.
 - `backgrounds/` (optional) holds up to 10 pictures, one JPEG file each, added and removed in the editor. A chat, a home card and the info card use them. An older `background.jpg` still works.
 - `palace.json` holds the Mind Palace entries.
+- `examples.json` holds the example messages: up to 12 exchanges of a sample user line and the character's reply, written to show how the character speaks. They sit after the card in the system prompt and are never sent as chat history, so they do not appear in exports of the conversation. Edit them in the character editor under Example messages. A SillyTavern card's example dialogue is read into this section on import.
 
 A group chat is a folder with a `group_config.json` that lists its members.
 
