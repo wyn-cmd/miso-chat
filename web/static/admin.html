@@ -59,6 +59,10 @@
       <label class="inline"><input id="s_palace_enabled" type="checkbox"> Mind Palace (database searching: keyword entries)</label>
       <label class="inline"><input id="s_episodes_enabled" type="checkbox"> Episodic memory (earlier moments recalled by keyword)</label>
       <label class="inline"><input id="s_dreams_enabled" type="checkbox"> Autonomous dreaming in quiet hours (off by default)</label>
+      <label class="inline"><input id="s_mood_enabled" type="checkbox"> Character mood (energy, affinity, emotion) and lonely check-ins (off by default)</label>
+      <label class="inline"><input id="s_attitude_enabled" type="checkbox"> Relationship with the user (affection, trust, five levels) (off by default)</label>
+      <label class="inline"><input id="s_event_memory_enabled" type="checkbox"> Event memory graph, written in quiet hours by dreams (off by default)</label>
+      <label class="inline"><input id="s_memory_policy_enabled" type="checkbox"> Learned memory retention: score self-written memories by how useful they proved (off by default)</label>
       <label>Dream every how many days <input id="s_dream_every_days" type="number" min="1" max="30" required></label>
       <label>Dream model calls across the server per day <input id="s_dream_daily_cap" type="number" min="1" required></label>
       <p class="muted">Dreams tidy each character's memory during its quiet hours. Their model calls are not counted against any user's requests or tokens, so this cap is the only limit on them. Set it to what you are willing to spend per day.</p>

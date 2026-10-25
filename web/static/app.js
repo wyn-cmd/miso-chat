@@ -7,6 +7,8 @@ let favSet = new Set();            // characters this account has starred
 let popularSet = new Set();        // top 10% of characters by user-sent messages
 let editableSet = new Set();   // characters this account may change (shows the sidebar pencil)
 let busy = false;     // a turn is streaming: keep the character list and buttons locked
+let picking = false;   // Select mode is on: every line shows a pick box
+const picked = new Set();   // saved-chat positions picked for deletion
 
 function setSidebar(open) {
   $("sidebar").classList.toggle("open", open);
@@ -100,6 +102,8 @@ function setBusy(on) {
   $("autoBtn").disabled = on;
   $("rollBtn").disabled = on;
   $("undoBtn").disabled = on;
+  $("selectBtn").disabled = on;
+  $("pickDelete").disabled = on || picked.size === 0;
   for (const b of document.querySelectorAll(".char-item")) b.disabled = on;
   for (const b of document.querySelectorAll(".turn-tools button")) b.disabled = on;
   $("memBtn").disabled = on;
@@ -324,6 +328,7 @@ function setChatHeader(name) {
 
 function renderHistory(messages) {
   $("log").textContent = "";
+  picked.clear();   // positions change with every render, so a pick list never carries over
   if (!messages.length) {
     addLine("", "No messages yet. Say hello!", "note");
   } else {
@@ -339,6 +344,8 @@ function renderHistory(messages) {
     });
   }
   placeTurnTools(messages);
+  applyPickBoxes();
+  updatePickBar();
   refreshContext();
 }
 
@@ -427,9 +434,10 @@ function startEdit(box, i, m) {
 function loadCharSettings() {
   for (const n of document.querySelectorAll(".char-only")) n.hidden = !current;
   for (const n of document.querySelectorAll(".needs-char")) n.hidden = !!current;
-  $("palaceRow").hidden = !(current && soloNames.includes(current));
+  $("palaceRow").hidden = !current;
   for (const id of ["tempSlider", "tempReset", "winSlider", "winReset", "exportMd", "exportTxt", "exportJson", "exportEpub", "exportPdf", "pinSave", "pinSettingText", "ciEnabled", "ciSave", "ciAt", "ciStart", "ciEnd", "dreamEnabled", "dreamSave", "dreamStart", "dreamEnd"]) $(id).disabled = !current;
   $("charMsg").textContent = "";
+  refreshStateCards();
   if (!current) return;
   api("GET", "/api/character-settings?character=" + encodeURIComponent(current))
     .then((d) => applyCharSettings(d))
@@ -534,7 +542,17 @@ function placeTurnTools(messages) {
     : "Write a new reply to your last message. The current reply is kept; swipe back to it any time.";
   regen.disabled = busy || atLimit;
   regen.addEventListener("click", regenerate);
-  bar.append(prev, count, next, regen);
+  // Delete the last message, drawn as a trash can. Undo is the button that takes the whole turn away.
+  const del = el("button", null, "ghost small del-btn");
+  del.type = "button";
+  del.title = "Delete the last message. Undo removes the whole last turn instead.";
+  del.setAttribute("aria-label", "Delete the last message");
+  del.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" '
+    + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
+  del.disabled = busy;
+  del.addEventListener("click", () => deleteLastMessage(messages.length - 1));
+  bar.append(prev, count, next, regen, del);
   $("log").appendChild(bar);
 }
 
@@ -565,7 +583,14 @@ function updateEstimate() {
   const label = document.querySelector("#log .ctx-est");
   if (!label) return;
   const n = nextPromptTokens();
-  label.textContent = n === null ? "" : "next prompt \u2248 " + n.toLocaleString() + " tokens";
+  if (n === null) {
+    label.textContent = "";
+    return;
+  }
+  // When this account has quenching on, the marker says how much the window was trimmed for this reply.
+  const saved = ctxInfo.quench ? (ctxInfo.quench_saved || 0) : 0;
+  label.textContent = "next prompt \u2248 " + n.toLocaleString() + " tokens"
+    + (saved ? " (quenched, " + saved.toLocaleString() + " saved)" : "");
 }
 
 function placeMarker() {
@@ -781,6 +806,7 @@ function renderModels() {
   $("avatarShape").value = (me && me.avatar_shape) || "squircle";
   if (me) setLook(me.bg_shade || 0, me.bubble_opacity || 72);
   renderReplyLength();
+  renderAccountPrefs();
 }
 
 // ---- Account profile settings. Admin accounts have no profile, so the block stays hidden.
@@ -923,6 +949,30 @@ async function saveAvatarShape(shape) {
   }
 }
 
+// Near-lossless token quenching: this account's own switch, under Account. It applies from the next reply, and the
+// chat's context marker then reports how much of that reply's window was trimmed.
+function renderAccountPrefs() {
+  const on = !!(me && me.quench);
+  $("quenchToggle").checked = on;
+  $("quenchNote").textContent = on
+    ? "On. Older messages are trimmed for each reply, within the fidelity floor."
+    : "Off. Nothing is trimmed from the messages the model gets.";
+}
+
+async function saveQuench(on) {
+  try {
+    const data = await api("POST", "/api/settings", { quench: on });
+    if (me) me.quench = !!data.quench;
+    renderAccountPrefs();
+    if (on) $("quenchNote").textContent = "On. Applies from your next reply.";
+    refreshContext();
+  } catch (err) {
+    $("quenchNote").textContent = err.message;
+    renderAccountPrefs();
+  }
+}
+$("quenchToggle").addEventListener("change", (e) => saveQuench(e.target.checked));
+
 async function saveReplyLength(value) {
   try {
     const data = await api("POST", "/api/settings", { reply_length: value });
@@ -1036,6 +1086,7 @@ function applyChatArt(name) {
 async function pickCharacter(name) {
   if (busy) return;
   current = name;
+  if (picking) setPicking(false);   // a pick list belongs to the chat it was made in
   markRead(name);   // opening the chat marks its missed check-ins as read
   localStorage.setItem("rp_character", name);
   markActive();
@@ -1195,6 +1246,7 @@ async function streamTurn(path, body, who) {
             if (r.thinking) setThinking(box, r.thinking);
           }
           if (data.selector_note) addLine("", data.selector_note, "note");
+          refreshStateCards();   // energy and the relationship change with each reply
         });
       },
       command(c) {
@@ -1258,6 +1310,110 @@ async function undo() {
     $("chatErr").textContent = err.message;
   }
 }
+
+// Deleting saved messages. Undo takes the last turn away; these take any messages the user names. The chat is this
+// account's own copy, and the server makes no model call, so nothing is spent.
+async function deleteMessages(indexes) {
+  if (busy || !current || !indexes.length) return;
+  const who = current;
+  setBusy(true);
+  $("chatErr").textContent = "";
+  try {
+    const data = await api("POST", "/api/delete", { character: who, indexes });
+    if (who !== current) return;
+    renderHistory(data.messages);
+    $("chatErr").textContent = data.removed === 1 ? "Message deleted." : `${data.removed} messages deleted.`;
+  } catch (err) {
+    if (who === current) $("chatErr").textContent = err.message;
+  } finally {
+    setBusy(false);
+  }
+}
+
+// The trash beside Regenerate takes the last message only, which is the reply those tools act on. Undo still takes
+// the whole last turn.
+async function deleteLastMessage(index) {
+  if (busy || !current || index < 0) return;
+  if (!confirm("Delete the last message? This cannot be undone.")) return;
+  await deleteMessages([index]);
+}
+
+// Select mode: a pick box on every saved message, and a bar with the count and the delete button.
+function setPicking(on) {
+  picking = on;
+  picked.clear();
+  $("selectBtn").setAttribute("aria-pressed", String(on));
+  $("selectBtn").classList.toggle("active", on);
+  $("pickBar").hidden = !on;
+  $("log").classList.toggle("picking", on);
+  applyPickBoxes();
+  updatePickBar();
+}
+
+function applyPickBoxes() {
+  for (const line of document.querySelectorAll("#log .line")) {
+    if (line.dataset.idx === undefined) continue;   // the "no messages yet" note is not a saved message
+    let box = line.querySelector(".pick-box");
+    if (!picking) {
+      if (box) box.remove();
+      line.classList.remove("picked");
+      continue;
+    }
+    if (!box) {
+      box = el("input", null, "pick-box");
+      box.type = "checkbox";
+      box.setAttribute("aria-label", "Pick this message");
+      box.addEventListener("change", () => setPicked(line.dataset.idx, box.checked));
+      line.prepend(box);
+    }
+    box.checked = picked.has(line.dataset.idx);
+    line.classList.toggle("picked", box.checked);
+  }
+}
+
+function setPicked(idx, on) {
+  if (idx === undefined) return;
+  if (on) picked.add(String(idx)); else picked.delete(String(idx));
+  const line = document.querySelector('#log .line[data-idx="' + idx + '"]');
+  if (line) line.classList.toggle("picked", !!on);
+  updatePickBar();
+}
+
+function updatePickBar() {
+  const n = picked.size;
+  $("pickCount").textContent = n ? `${n} picked` : "Pick messages to delete";
+  $("pickDelete").disabled = busy || n === 0;
+  $("pickDelete").textContent = n ? `Delete ${n}` : "Delete picked";
+}
+
+// Clicking anywhere on a line picks it, except on a button, a link or the box itself (which fires change).
+$("log").addEventListener("click", (e) => {
+  if (!picking) return;
+  const line = e.target.closest(".line");
+  if (!line) return;
+  if (e.target.closest("button, a, textarea, input")) return;
+  const box = line.querySelector(".pick-box");
+  if (!box) return;
+  box.checked = !box.checked;
+  setPicked(line.dataset.idx, box.checked);
+});
+
+$("selectBtn").addEventListener("click", () => setPicking(!picking));
+$("pickCancel").addEventListener("click", () => setPicking(false));
+$("pickNone").addEventListener("click", () => { picked.clear(); applyPickBoxes(); updatePickBar(); });
+$("pickAll").addEventListener("click", () => {
+  for (const line of document.querySelectorAll("#log .line")) if (line.dataset.idx !== undefined) picked.add(line.dataset.idx);
+  applyPickBoxes();
+  updatePickBar();
+});
+$("pickDelete").addEventListener("click", () => {
+  const indexes = [...picked].map(Number).filter(Number.isInteger);
+  if (!indexes.length) return;
+  const what = indexes.length === 1 ? "this message" : `these ${indexes.length} messages`;
+  if (!confirm(`Delete ${what} from this chat? This cannot be undone.`)) return;
+  setPicking(false);
+  deleteMessages(indexes);
+});
 
 async function changePassword(ev) {
   ev.preventDefault();
@@ -1631,7 +1787,8 @@ function showDreamLast(data) {
     return;
   }
   const when = last.when ? new Date(last.when).toLocaleDateString() : "";
-  $("dreamLast").textContent = `Last dream ${when}: ${last.note || "nothing needed tidying"} (${last.added} added, ${last.updated} updated, ${last.removed} removed, ${last.dropped} palace entries dropped).`;
+  const events = last.events ? `, ${last.events} events recorded, ${last.evolved || 0} changes noted` : "";
+  $("dreamLast").textContent = `Last dream ${when}: ${last.note || "nothing needed tidying"} (${last.added} added, ${last.updated} updated, ${last.removed} removed, ${last.dropped} palace entries dropped${events}).`;
 }
 
 async function openDreams() {
@@ -1651,6 +1808,181 @@ async function openDreams() {
 }
 
 $("dreamCard").addEventListener("click", openDreams);
+
+// One bar built on the fly, for the lists that have no fixed ids: a label, a note, and a fill from 0 to 1.
+function metricRow(label, share, note) {
+  const box = el("div", null, "metric");
+  const head = el("div", null, "metric-head");
+  head.append(el("span", label, null), el("span", note || "", "muted"));
+  const track = el("div", null, "bar-track");
+  const fill = el("div", null, "bar-fill");
+  fill.style.width = Math.max(0, Math.min(100, (Number(share) || 0) * 100)) + "%";
+  track.appendChild(fill);
+  box.append(head, track);
+  return box;
+}
+
+// Learned memory retention: the memories the character wrote for itself, strongest first, with the score that keeps
+// them. Read only; the admin switch decides whether the scores are kept at all.
+async function refreshRetention() {
+  const box = $("retentionBox");
+  if (!current) {
+    box.hidden = true;
+    return;
+  }
+  const who = current;
+  try {
+    const data = await api("GET", "/api/memory-policy?character=" + encodeURIComponent(who));
+    if (current !== who) return;
+    box.hidden = !data.enabled;
+    if (!data.enabled) return;
+    $("retentionNote").textContent = data.items.length
+      ? `${data.kept} held, ${data.at_risk} fading, turn ${data.turn}`
+      : `Nothing scored yet (turn ${data.turn})`;
+    const list = $("retentionList");
+    list.textContent = "";
+    for (const item of data.items.slice(0, 10)) {
+      const note = item.uses
+        ? `used ${item.uses}x, +${item.wins} / \u2212${item.losses}`
+        : "never recalled";
+      list.appendChild(metricRow(item.title, item.effectiveness, note));
+    }
+  } catch (err) {
+    box.hidden = true;
+  }
+}
+
+// One state bar: the fill width, the value beside the name, and an amber warning when the figure is low.
+function setMetric(name, value, band, warn) {
+  const pct = Math.max(0, Math.min(100, Number(value) || 0));
+  const fill = $(name + "Fill");
+  fill.style.width = pct + "%";
+  $(name + "Val").textContent = `${value} of 100` + (band ? ` (${band})` : "");
+  const box = fill.closest(".metric");
+  if (box) box.classList.toggle("low", !!warn);
+}
+
+// An admin's number field for a state value. A field the admin is dragging is left alone, so a refresh does not
+// pull the slider back mid-drag.
+function setAdminField(id, value) {
+  const input = $(id);
+  if (document.activeElement !== input) input.value = value;
+  $(id + "Val").textContent = input.value;
+}
+
+function showMood(m) {
+  $("moodNote").textContent = m.emotion.charAt(0).toUpperCase() + m.emotion.slice(1);
+  setMetric("moodEnergy", m.energy, m.energy_band, m.energy_band === "low");
+  setMetric("moodAffinity", m.affinity, m.affinity_band, false);
+  $("moodTone").textContent = m.tone;
+  // Only an admin gets the editors, and the server refuses the save for everyone else as well.
+  $("moodAdmin").hidden = !(me && me.is_admin);
+  if (me && me.is_admin) {
+    setAdminField("moodEnergyInput", m.energy);
+    setAdminField("moodAffinityInput", m.affinity);
+  }
+}
+
+function showAttitude(a) {
+  $("attitudeServerNote").hidden = a.enabled;
+  $("attitudeLine").textContent = `Level: ${a.level}.`;
+  $("attitudeNote").textContent = `${a.level}, affection ${a.affection}, trust ${a.trust}`;
+  setMetric("attAffection", a.affection, null, false);
+  setMetric("attTrust", a.trust, null, a.trust < 25);
+  $("attitudeTone").textContent = a.tone;
+  $("attAdmin").hidden = !(me && me.is_admin);
+  if (me && me.is_admin) {
+    setAdminField("attAffectionInput", a.affection);
+    setAdminField("attTrustInput", a.trust);
+  }
+}
+
+// The mood values sit in the Character panel, and the relationship keeps its own card. Both are for characters
+// only; a group has neither.
+async function refreshStateCards() {
+  // The mood block and the relationship card start hidden in the page and show only when the server says the
+  // feature is on, so a switched-off feature shows nothing. A group, or no open character, hides both.
+  refreshRetention();
+  const solo = !!current && soloNames.includes(current);
+  if (!solo) {
+    $("moodBox").hidden = true;
+    $("attitudeCard").hidden = true;
+    return;
+  }
+  const who = current;
+  try {
+    const m = await api("GET", "/api/character-state?character=" + encodeURIComponent(who));
+    if (current !== who) return;
+    showMood(m);
+    $("moodBox").hidden = !m.enabled;
+  } catch (err) {
+    // On a failed load the block stays hidden.
+    $("moodBox").hidden = true;
+  }
+  try {
+    const a = await api("GET", "/api/character-attitude?character=" + encodeURIComponent(who));
+    if (current !== who) return;
+    $("attitudeNote").textContent = `${a.level}, affection ${a.affection}, trust ${a.trust}`;
+    $("attitudeCard").hidden = !a.enabled;
+  } catch (err) {
+    // On a failed load the card stays hidden.
+  }
+}
+
+// The relationship with the user: affection, trust and the level. Read only, except for admins.
+async function openAttitude() {
+  if (busy || !current) return;
+  $("attitudeMsg").textContent = "";
+  try {
+    const a = await api("GET", "/api/character-attitude?character=" + encodeURIComponent(current));
+    showAttitude(a);
+  } catch (err) {
+    $("attitudeMsg").textContent = err.message;
+  }
+}
+
+// An admin setting the scores by hand. The server checks the admin flag again, so a non-admin call is refused.
+async function saveAttitudeAdmin() {
+  if (!current || !(me && me.is_admin)) return;
+  $("attMsg").textContent = "";
+  try {
+    const a = await api("POST", "/api/character-attitude", {
+      character: current,
+      affection: Number($("attAffectionInput").value),
+      trust: Number($("attTrustInput").value),
+    });
+    showAttitude(a);
+    $("attMsg").textContent = "Saved.";
+  } catch (err) {
+    $("attMsg").textContent = err.message;
+  }
+}
+
+// An admin setting the mood by hand. An empty emotion lets the numbers decide it.
+async function saveMoodAdmin() {
+  if (!current || !(me && me.is_admin)) return;
+  $("moodMsg").textContent = "";
+  try {
+    const m = await api("POST", "/api/character-state", {
+      character: current,
+      energy: Number($("moodEnergyInput").value),
+      affinity: Number($("moodAffinityInput").value),
+      emotion: $("moodEmotion").value || null,
+    });
+    showMood(m);
+    $("moodEmotion").value = "";
+    $("moodMsg").textContent = "Saved.";
+  } catch (err) {
+    $("moodMsg").textContent = err.message;
+  }
+}
+
+$("attitudeCard").addEventListener("click", openAttitude);
+$("moodAdminSave").addEventListener("click", saveMoodAdmin);
+$("attAdminSave").addEventListener("click", saveAttitudeAdmin);
+for (const id of ["moodEnergyInput", "moodAffinityInput", "attAffectionInput", "attTrustInput"]) {
+  $(id).addEventListener("input", () => { $(id + "Val").textContent = $(id).value; });
+}
 $("dreamSave").addEventListener("click", async () => {
   if (!dreamFor || busy) return;
   $("dreamMsg").textContent = "";
@@ -1757,6 +2089,7 @@ setInterval(refreshUnread, 60000);
     place();
     loadCharSettings();
     renderProfileSettings();
+    renderAccountPrefs();
     closeBtn.focus();
   }
   function close(refocus) {
