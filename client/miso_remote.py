@@ -40,7 +40,7 @@ SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".miso_remote", "settings.
 USAGE_BAR_KINDS = ("daily", "weekly", "monthly")
 DEFAULT_USAGE_BAR = "daily"
 # Keep in step with VERSION at the project root. A server must share this major.minor.
-CLIENT_VERSION = "1.4.0"
+CLIENT_VERSION = "1.4.1"
 
 
 class ApiError(Exception):
@@ -1534,7 +1534,7 @@ class Session:
                 ("/characters", "pick another character or group to chat with"),
                 ("/autofill", "draft your next message and put it in the prompt"),
                 ("/save", "refresh the memory bank now (server)"),
-                ("/memory-palace", "add an entry to this character's Mind Palace"),
+                ("/memory-palace", "add an entry to this character's or group's Mind Palace"),
                 ("/usage", "requests and token budgets"),
                 ("/settings-usage-bar [w]", "which window the prompt bar shows"),
                 ("/message-length [n]", "show or set the reply length in tokens"),

@@ -88,9 +88,16 @@ def make(messages, base, speakers=()):
     return out
 
 
+# A stable key for an episode, for the retention policy to score it by: a hash of its text, because the start and
+# end positions shift when messages are deleted.
+def key_for(episode):
+    return "e:" + hashlib.sha1(str(episode.get("text") or "").encode("utf-8")).hexdigest()[:10]
+
+
 # Episodes whose keys come up in the newest messages, as text in the order they happened. Only episodes that
 # have already left the window (end <= visible_from) are eligible, because the rest are already in the prompt.
-def recall_keywords(episodes, texts, visible_from, budget=BUDGET, limit=MATCH_LIMIT):
+# weights scales each episode's score by its retention; with_items returns the episodes instead of their text.
+def recall_keywords(episodes, texts, visible_from, budget=BUDGET, limit=MATCH_LIMIT, weights=None, with_items=False):
     scan = "\n".join(palace._norm(str(t)) for t in texts[-SCAN_MESSAGES:] if t)
     if not scan.strip():
         return []
@@ -100,26 +107,28 @@ def recall_keywords(episodes, texts, visible_from, budget=BUDGET, limit=MATCH_LI
             continue
         hits = [k for k in ep["keys"] if palace._any_form([k], scan, True)]
         if hits:
-            scored.append((len(hits), ep["end"], ep))
+            weight = float(weights.get(key_for(ep), 1.0) or 1.0) if weights else 1.0
+            scored.append((len(hits) * weight, ep["end"], ep))
     scored.sort(key=lambda s: (-s[0], -s[1]))
-    return _take(scored, budget, limit)
+    return _take(scored, budget, limit, with_items)
 
 
 # The same eligibility, by similarity: the episodes whose vector is closest to the query and at least SIM_MIN.
-def recall_vectors(episodes, query, visible_from, budget=BUDGET, limit=MATCH_LIMIT):
+def recall_vectors(episodes, query, visible_from, budget=BUDGET, limit=MATCH_LIMIT, weights=None, with_items=False):
     scored = []
     for ep in episodes:
         if ep["end"] > visible_from or not ep.get("vec"):
             continue
         sim = cosine(query, ep["vec"])
         if sim >= SIM_MIN:
-            scored.append((sim, ep["end"], ep))
+            weight = float(weights.get(key_for(ep), 1.0) or 1.0) if weights else 1.0
+            scored.append((sim * weight, ep["end"], ep))
     scored.sort(key=lambda s: (-s[0], -s[1]))
-    return _take(scored, budget, limit)
+    return _take(scored, budget, limit, with_items)
 
 
 # The top episodes within the limit and the budget, as text in chronological order.
-def _take(scored, budget, limit):
+def _take(scored, budget, limit, with_items=False):
     chosen, used = [], 0
     for _, _, ep in scored[:limit]:
         if used + len(ep["text"]) > budget:
@@ -127,7 +136,7 @@ def _take(scored, budget, limit):
         chosen.append(ep)
         used += len(ep["text"])
     chosen.sort(key=lambda e: e["start"])
-    return [e["text"] for e in chosen]
+    return chosen if with_items else [e["text"] for e in chosen]
 
 
 # Cosine similarity of two vectors; 0 when either is empty or they differ in size.

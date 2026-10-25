@@ -10,7 +10,7 @@ import re
 import struct
 import zlib
 
-from web import palace, profiles
+from web import palace, profiles, examples
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_TEXT = 2_000_000        # largest card text accepted, after any decompression
@@ -107,6 +107,41 @@ def _macros(text, name):
     return re.sub(r"\{\{\s*user\s*\}\}", "the user", text, flags=re.I)
 
 
+# A line that names the speaker in example dialogue, as SillyTavern cards write it.
+SPEAKER = re.compile(r"^\s*\{\{\s*(char|user)\s*\}\}\s*:\s*", re.I)
+
+
+# The card's example dialogue as pairs of a user message and the character's reply. <START> separates exchanges, and
+# a line beginning with {{char}}: or {{user}}: names the speaker; its following lines belong to it. A second line from
+# the character with no user line between them continues the same reply rather than being dropped.
+def _example_pairs(text, name):
+    pairs = []
+    for block in re.split(r"<START>", text or "", flags=re.I):
+        turns = []   # [role, said] in the order they appear in the block
+        for line in block.splitlines():
+            m = SPEAKER.match(line)
+            if m:
+                turns.append([m.group(1).lower(), line[m.end():].strip()])
+            elif turns and line.strip():
+                turns[-1][1] = (turns[-1][1] + " " + line.strip()).strip()
+        user = ""
+        for role, said in turns:
+            if role == "user":
+                user = (user + " " + said).strip() if user else said
+            elif not said:
+                continue
+            elif user:
+                pairs.append({"user": user, "character": said})
+                user = ""
+            elif pairs:
+                pairs[-1]["character"] = (pairs[-1]["character"] + " " + said).strip()
+        if len(pairs) >= examples.MAX_EXAMPLES:
+            break
+    return [{"user": _macros(pair["user"], name)[:examples.USER_MAX],
+             "character": _macros(pair["character"], name)[:examples.REPLY_MAX]}
+            for pair in pairs[:examples.MAX_EXAMPLES]]
+
+
 # The first sentence of the description, for the public headline.
 def _headline(description):
     first = re.split(r"(?<=[.!?])\s", description, maxsplit=1)[0]
@@ -158,7 +193,8 @@ def to_draft(card, filename=""):
     description = _macros(_text(f.get("description")), name)
     personality = _macros(_text(f.get("personality")), name)
     scenario = _macros(_text(f.get("scenario")), name)
-    examples = _macros(_text(f.get("mes_example")), name).replace("<START>", "").strip()
+    examples_raw = _text(f.get("mes_example"))
+    example_pairs = _example_pairs(examples_raw, name)
     instructions = _macros(_text(f.get("system_prompt")), name)
 
     parts = [f"Character Persona: {name}"]
@@ -166,8 +202,10 @@ def to_draft(card, filename=""):
         parts.append(description)
     if personality:
         parts.append("Personality: " + personality)
-    if examples:
-        parts.append("Example dialogue:\n" + examples)
+    # Example dialogue goes to the editor's own example section when it can be read as exchanges. When it cannot,
+    # it stays in the card, so nothing the card carried is lost.
+    if examples_raw and not example_pairs:
+        parts.append("Example dialogue:\n" + _macros(examples_raw, name).replace("<START>", "").strip())
     if instructions:
         parts.append("Instructions:\n" + instructions)
         notes.append("The card's system prompt is in the card text under Instructions. Check it before you create.")
@@ -185,6 +223,8 @@ def to_draft(card, filename=""):
     if creator_notes:
         notes.append("The creator's notes became the public summary. Check it does not reveal anything hidden.")
 
+    if example_pairs:
+        notes.append(f"{len(example_pairs)} example messages were read into the example section. Check them.")
     if _text(f.get("first_mes")) or any(_text(g) for g in (f.get("alternate_greetings") or []) if isinstance(g, str)):
         notes.append("Opening messages were not imported: Miso has no greeting message.")
 
@@ -215,6 +255,7 @@ def to_draft(card, filename=""):
         "name": name,
         "character": card_text,
         "context": context,
+        "examples": example_pairs,
         "headline": _headline(description),
         "info": info,
         "tags": _tags(f.get("tags")),

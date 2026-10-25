@@ -154,6 +154,10 @@ async function loadSettings() {
   $("s_palace_enabled").checked = s.palace_enabled === "1";
   $("s_episodes_enabled").checked = s.episodes_enabled === "1";
   $("s_dreams_enabled").checked = s.dreams_enabled === "1";
+  $("s_mood_enabled").checked = s.mood_enabled === "1";
+  $("s_attitude_enabled").checked = s.attitude_enabled === "1";
+  $("s_event_memory_enabled").checked = s.event_memory_enabled === "1";
+  $("s_memory_policy_enabled").checked = s.memory_policy_enabled === "1";
   $("s_dream_daily_cap").value = s.dream_daily_cap;
   $("s_dream_every_days").value = s.dream_every_days;
   $("s_budget_webhook_url").value = s.budget_webhook_url || "";
@@ -192,6 +196,10 @@ $("settingsForm").addEventListener("submit", async (ev) => {
       palace_enabled: $("s_palace_enabled").checked,
       episodes_enabled: $("s_episodes_enabled").checked,
       dreams_enabled: $("s_dreams_enabled").checked,
+      mood_enabled: $("s_mood_enabled").checked,
+      attitude_enabled: $("s_attitude_enabled").checked,
+      event_memory_enabled: $("s_event_memory_enabled").checked,
+      memory_policy_enabled: $("s_memory_policy_enabled").checked,
       dream_daily_cap: parseInt($("s_dream_daily_cap").value, 10),
       dream_every_days: parseInt($("s_dream_every_days").value, 10),
       budget_webhook_url: $("s_budget_webhook_url").value.trim(),

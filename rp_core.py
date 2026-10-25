@@ -23,7 +23,7 @@ import pytz
 from google.genai import types
 from charname import display_for
 import sandbox
-from web import palace, episodes, memory_bank, dreams
+from web import palace, episodes, memory_bank, dreams, eventgraph, quench, memory_policy, examples as examples_mod
 
 
 def _mk(text):
@@ -40,6 +40,8 @@ TMP_SUFFIX = ".tmp"
 REQUEST_LIMIT = 14400
 TOKEN_LIMIT = 1000000
 SOLO_WINDOW = 25        # messages sent to the model in 1:1 chats
+WINDOW_STEP = 8         # the window starts on multiples of this, so its first message stays put for several turns and the
+                        # provider's prompt cache can reuse the history; the window is up to this many messages longer
 GROUP_WINDOW = 40       # messages sent to each group member
 SELECTOR_WINDOW = 60    # messages the group director reads
 MAX_TOOL_ROUNDS = 8     # file-tool round trips allowed in one solo reply
@@ -80,6 +82,9 @@ MEMORY_EVERY = 18       # refresh memory.md every N messages
 MEMORY_SNIPPET = 30     # messages fed into a memory.md refresh
 SOLO_TEMPERATURE = 0.85     # creativity for 1:1 chats unless the user sets their own
 GROUP_TEMPERATURE = 0.7     # group members and the group director
+GROUP_CONSECUTIVE = 2       # most replies one member may give in a row within one turn
+AUTO_REPLY_LIMIT = 4        # most replies members give to each other after the director's picks, per turn; 0 turns this off
+AUTO_REQUEST = "Continue the conversation: answer what the group has just said, in character."
 SUMMARY_MAX_MESSAGES = 60   # most messages folded into the running summary in one refresh
 MAX_REGENERATIONS = 30  # regenerations allowed per message; the original reply is kept too, so 31 replies at most
 
@@ -496,6 +501,8 @@ class Engine:
         self.palace_enabled = True
         self.palace_dir = None   # an account's own palace folder; None means ai_dir
         self.palace_text = ""
+        self.mood_text = ""      # the character's simulated state for this turn, set by the server; empty when off
+        self.attitude_text = ""  # the relationship block for this turn, set by the server; empty when off
         self.persist_config = persist_config
         self.allow_root_user = allow_root_user
         self.character_file = os.path.join(ai_dir, "character.md")
@@ -503,6 +510,8 @@ class Engine:
         self.memory_bank_file = os.path.join(self.state_dir, "memory.md")
         self.pinned_file = os.path.join(self.state_dir, "pinned.md")   # facts the memory refresh never touches
         self.window_override = None        # the user's rolling window size; None = the defaults
+        self.quench_enabled = False        # this account's near-lossless token quenching; set by the server
+        self.last_quench = None            # the last quenching report, for the context marker
         self.temperature_override = None   # the character's creativity; None = the defaults
         self.reply_length_override = None  # the reply length target in tokens, not counting reasoning; None = no target
         self.summary_file = os.path.join(self.state_dir, "summary.json")
@@ -520,7 +529,17 @@ class Engine:
         self.dream_calls = 0               # model calls the last dream made, for the server's dream cap
         last = _read_json(self.dream_file, {})
         self.dream_len = int(last.get("len", 0)) if isinstance(last, dict) else 0   # history length at the last dream
+        self.event_memory_enabled = False  # the admin switch in effect this turn; set by the server
+        self.event_text = ""               # the event block for this turn; empty when off or nothing matches
+        self.graph_file = os.path.join(self.state_dir, eventgraph.FILE)
+        self.graph = eventgraph.load(self.graph_file)   # the event memory graph, written by the nightly dream
         self._load_episodes()
+        # Learned memory retention: outcome-weighted scores for the memories the character extracted for itself.
+        self.policy_enabled = False                  # the admin switch; set by the server before each turn
+        self.policy_file = os.path.join(self.state_dir, memory_policy.FILE)
+        self.policy = memory_policy.load(self.policy_file)
+        self.policy_retrieved = []                   # (key, kind, title) that went into the prompt this turn
+        self.policy_forgotten = []                   # titles the last forgetting pass removed
         self.group_config_file = os.path.join(ai_dir, "group_config.json")
         # per account and character, next to memory.json; only when the character's flag is on
         self.sandbox_root = sandbox.root_for(self.state_dir) if sandbox.is_enabled(ai_dir) else None
@@ -540,6 +559,7 @@ class Engine:
         self.character_name = display_for(ai_dir)
         self.character_color = "cyan"
         self.character_prompt = ""
+        self.example_text = ""        # the character's own example messages, as a prompt block; empty when it has none
         self.is_group = False
         self.group_members = []
         self.member_notes = {}         # per-member notes for an account's own group, keyed by folder name
@@ -627,6 +647,7 @@ class Engine:
         self.character_name = display_for(self.ai_dir)
         self.character_color = "cyan"
         self.character_prompt = ""
+        self.example_text = ""
         self.is_group = False
         self.group_members = []
 
@@ -664,6 +685,9 @@ class Engine:
             self.log(f"[bold green]Loaded AI persona from {self.character_file} ({_mk(self.character_name)}) (^V^)[/bold green]")
         else:
             self.character_prompt = "You are a helpful, immersive roleplay partner."
+        # Example messages live beside the card. They show the voice, so they sit right after it in the prompt.
+        if not self.is_group:
+            self.example_text = examples_mod.prompt_block(examples_mod.load(self.ai_dir), self.character_name)
 
     def _load_user(self):
         self.user_prompt = ""
@@ -697,11 +721,18 @@ class Engine:
                 self.user_display_name = self.user_dir or "You"
                 self.log(f"[bold blue]Loaded root user.md ({self.user_display_name})[/bold blue]")
 
+    # The system prompt, ordered from the least to the most often changed part, so that the provider's prompt cache
+    # reuses the longest possible prefix. Nothing that changes every turn is here: that goes in the newest user message
+    # (see _turn_notes). Changes are: context.md and pinned facts when the user edits them, the memory bank when a
+    # refresh or a dream runs, and the summary when the window moves.
     def _build_system_prompt(self):
         prompt = self.character_prompt
+        if self.example_text:
+            prompt += "\n\n" + self.example_text
         prompt += NARRATIVE_INSTRUCTION
         prompt += DIALOGUE_INSTRUCTION
         prompt += FORMAT_INSTRUCTION
+        prompt += self.reply_length_clause()
         if self.user_prompt:
             prompt += f"\n\n--- User Persona ---\nThe user interacting with you is playing as the following character:\n{self.user_prompt}"
 
@@ -714,6 +745,13 @@ class Engine:
             except Exception as e:
                 self.log(f"[yellow]Could not load context.md: {e}[/yellow]")
 
+        if self.memory_enabled and os.path.exists(self.pinned_file):
+            try:
+                pinned = _read_text(self.pinned_file).strip()
+                if pinned:
+                    prompt += ("\n\n--- Pinned facts (kept as written; the memory refresh never changes them) ---\n" + pinned)
+            except Exception as e:
+                self.log(f"[yellow]Could not load pinned.md: {e}[/yellow]")
         if self.memory_enabled and os.path.exists(self.memory_bank_file):
             try:
                 mb_content = _read_text(self.memory_bank_file)
@@ -722,23 +760,23 @@ class Engine:
                 self.log(f"[cyan]Loaded memory bank from {self.memory_bank_file}[/cyan]")
             except Exception as e:
                 self.log(f"[yellow]Could not load memory.md: {e}[/yellow]")
-        if self.memory_enabled and os.path.exists(self.pinned_file):
-            try:
-                pinned = _read_text(self.pinned_file).strip()
-                if pinned:
-                    prompt += ("\n\n--- Pinned facts (kept as written; the memory refresh never changes them) ---\n" + pinned)
-            except Exception as e:
-                self.log(f"[yellow]Could not load pinned.md: {e}[/yellow]")
         if self.summary_text:
             prompt += "\n\n--- Earlier in this chat (running summary) ---\n" + self.summary_text
-        # Mind Palace changes most turns, so it sits after the stable parts. Providers cache the
-        # unchanged prefix; putting this first would break the cache on every message.
-        if self.palace_text:
-            prompt += "\n\n--- Mind Palace (matched entries) ---\n" + self.palace_text
-        if self.episode_text:
-            prompt += "\n\n--- Earlier moments that match this conversation (episodic memory) ---\n" + self.episode_text
-        prompt += self.reply_length_clause()
         self.system_prompt = prompt
+
+    # The notes for one turn: the relationship, the mood, and the palace, episode and event matches. They are sent with
+    # the newest user message, not in the system prompt, so the system prompt and the history before that message stay
+    # the same from one turn to the next. The text is kept out of the saved chat.
+    def _turn_notes(self):
+        body = (self.attitude_text + self.mood_text + self._recall_text()).strip()
+        if not body:
+            return ""
+        return ("[Notes for this reply, from the simulation and memory. The user did not write these.]\n"
+                + body + "\n\n[The user says:]\n")
+
+    # What the model is sent for the user's message: the turn's notes, then the message itself.
+    def _turn_message(self, processed):
+        return self._turn_notes() + processed
 
     def _load_history(self):
         self.full_history = []
@@ -771,6 +809,17 @@ class Engine:
         for spicy, safe in sorted(self.spicy_to_safe.items(), key=lambda kv: len(kv[0]), reverse=True):
             text = _whole_word(spicy).sub(lambda m, s=safe: s, text)
         return text
+
+    def _recall_text(self):
+        # Mind Palace matches and episodic memory for this turn, as one prompt block. Solo and group prompts share it.
+        out = ""
+        if self.palace_text:
+            out += "\n\n--- Mind Palace (matched entries) ---\n" + self.palace_text
+        if self.episode_text:
+            out += "\n\n--- Earlier moments that match this conversation (episodic memory) ---\n" + self.episode_text
+        if self.event_text:
+            out += "\n\n" + self.event_text
+        return out
 
     def prepare_input(self, user_input):
         return self.safe_text(user_input)
@@ -816,14 +865,51 @@ class Engine:
     def _refresh_palace(self, processed):
         # Matched entries depend on the newest messages.
         blocks = []
+        self.policy_retrieved = []
         if self.palace_enabled:
             recent = [str(m.get("text") or "") for m in self.full_history[-palace.DEPTH_MAX:]]
             entries, cfg = palace.load_all(self.palace_dir or self.ai_dir)
-            blocks = palace.match(entries, recent + [str(processed or "")], cfg["budget"], cfg["recursive"])
+            # Only the entries the character wrote for itself are scored and weighted. The user's entries are
+            # matched exactly as before, and are never ranked by a score or dropped.
+            weights = None
+            auto = [e for e in entries if e.get("auto")]
+            if self.policy_enabled:
+                weights = {palace.palace_key(e): memory_policy.rank_multiplier(self.policy, palace.palace_key(e))
+                           for e in auto}
+            kept = palace.match_entries(entries, recent + [str(processed or "")], cfg["budget"], cfg["recursive"],
+                                        weights)
+            blocks = [palace.block_for(e) for e in kept]
+            if self.policy_enabled:
+                # An entry that did not match this turn is still on the books, so one that never matches can be
+                # forgotten for being no use rather than for being old.
+                matched = {palace.palace_key(e) for e in kept}
+                for e in auto:
+                    key = palace.palace_key(e)
+                    title = e["title"] or e["content"][:60]
+                    memory_policy.seen(self.policy, key, "palace", title)
+                    if key in matched:
+                        self.policy_retrieved.append((key, "palace", title))
         # Rebuilt every turn, so an admin switch to memory or the palace takes effect at once.
         self.palace_text = "\n\n".join(blocks)
         self._refresh_episodes(processed)
+        self._refresh_events(processed)
         self._build_system_prompt()
+
+    def _refresh_events(self, processed):
+        # Event memory for this turn: the events that bear on the latest messages, and how the character has changed.
+        # The evolving lines show every turn, because they are the character's current outlook, not a match.
+        self.event_text = ""
+        if not self.event_memory_enabled or not (self.graph["nodes"] or self.graph["evolving"]):
+            return
+        texts = [str(m.get("text") or "") for m in self.full_history[-6:]] + [str(processed or "")]
+        lines, evolving = eventgraph.recall(self.graph, texts)
+        parts = []
+        if lines:
+            parts.append("--- Events that bear on this moment (memory graph) ---\n" + "\n".join(lines))
+        if evolving:
+            parts.append("--- How you have changed, from what has happened to you ---\n"
+                         + "\n".join(f"- {t}" for t in evolving))
+        self.event_text = "\n\n".join(parts)
 
     def _refresh_episodes(self, processed):
         # Episodic memory for this turn. Keywords first, which costs nothing. Only when they find nothing, and some
@@ -833,14 +919,21 @@ class Engine:
         self.episode_text = ""
         if not (self.episodes_on and self.episodes):
             return
-        visible_from = max(0, len(self.full_history) - self.window_size())
+        visible_from = self.window_start(len(self.full_history))
         texts = [str(m.get("text") or "") for m in self.full_history[-episodes.SCAN_MESSAGES:]] + [str(processed or "")]
-        blocks = episodes.recall_keywords(self.episodes, texts, visible_from)
-        if not blocks and str(processed or "").strip() and any(e.get("vec") for e in self.episodes):
+        weights = None
+        if self.policy_enabled:
+            weights = {episodes.key_for(ep): memory_policy.rank_multiplier(self.policy, episodes.key_for(ep))
+                       for ep in self.episodes}
+        found = episodes.recall_keywords(self.episodes, texts, visible_from, weights=weights, with_items=True)
+        if not found and str(processed or "").strip() and any(e.get("vec") for e in self.episodes):
             query = self._query_vector(str(processed))
             if query:
-                blocks = episodes.recall_vectors(self.episodes, query, visible_from)
-        self.episode_text = "\n\n".join(blocks)
+                found = episodes.recall_vectors(self.episodes, query, visible_from, weights=weights, with_items=True)
+        if self.policy_enabled:
+            self.policy_retrieved += [(episodes.key_for(ep), "episode", str(ep.get("text") or "")[:60])
+                                      for ep in found]
+        self.episode_text = "\n\n".join(ep["text"] for ep in found)
 
     def _query_vector(self, text):
         # One embedding for the message being sent, reused if the same text is asked again. None when it fails.
@@ -858,6 +951,11 @@ class Engine:
         return vectors[0]
 
     def send(self, processed, on_delta=None, on_think=None):
+        # The user's new message is also the outcome of the last turn's memories, so it is scored before this turn
+        # decides what to recall. Only then is the new turn's own retrieval recorded.
+        if self.policy_enabled:
+            memory_policy.start_turn(self.policy)
+            memory_policy.settle(self.policy, processed)
         self._refresh_palace(processed)
         # Run one turn (solo or group). Saves history and tracks tokens on success.
         # on_delta(speaker, text_so_far) is called as each reply streams in, if given.
@@ -872,8 +970,60 @@ class Engine:
             return result
         result.tokens_state = self._count_tokens(result.turn_tokens, detail=result.usage_detail())
         self.save()
+        if self.policy_enabled:
+            # The memories that went into this turn's prompt are credited by the user's next message. Scoring is an
+            # optimisation, never a reason to fail a turn that already succeeded, so a disk error here is swallowed.
+            try:
+                memory_policy.record(self.policy, list(self.policy_retrieved))
+                if self.policy["turn"] % memory_policy.FORGET_EVERY == 0:
+                    self.forget_memories()
+                memory_policy.save(self.policy_file, self.policy)
+            except Exception as err:
+                self.log(f"[yellow]Memory retention bookkeeping failed: {err}[/yellow]")
         result.memory_due = self.memory_enabled and len(self.full_history) > 0 and len(self.full_history) % MEMORY_EVERY == 0
         return result
+
+    def forget_memories(self):
+        # The forgetting pass: a memory that has proved no use is dropped, and one that never came up is dropped once
+        # it is old enough. Only the character's own automatic entries and its episodes are candidates. An entry the
+        # user wrote is never touched, and the character card and memory bank are never changed.
+        self.policy_forgotten = []
+        entries, cfg = palace.load_all(self.palace_dir or self.ai_dir)
+        kept = []
+        for entry in entries:
+            if entry.get("auto") and memory_policy.should_forget(self.policy, palace.palace_key(entry)):
+                self.policy_forgotten.append(entry["title"] or entry["content"][:60])
+                continue
+            kept.append(entry)
+        if len(kept) != len(entries):
+            palace.save(self.palace_dir or self.ai_dir, kept,
+                        {"recursive": cfg["recursive"], "budget": cfg["budget"], "auto": cfg["auto"],
+                         "episodes": cfg["episodes"]})
+
+        live = [ep for ep in self.episodes
+                if not memory_policy.should_forget(self.policy, episodes.key_for(ep))]
+        if len(live) != len(self.episodes):
+            self.policy_forgotten += [str(ep.get("text") or "")[:60] for ep in self.episodes if ep not in live]
+            self.episodes = live
+            self._save_episodes()
+
+        # Rows for memories that are no longer stored would otherwise pile up for every episode ever cut.
+        keys = [palace.palace_key(e) for e in kept] + [episodes.key_for(ep) for ep in self.episodes]
+        memory_policy.prune(self.policy, keys)
+        return list(self.policy_forgotten)
+
+    # What the settings page shows: the scored memories that still exist, strongest first, plus the outcome counts.
+    def memory_policy_report(self):
+        entries, _cfg = palace.load_all(self.palace_dir or self.ai_dir)
+        live = {palace.palace_key(e): ("Mind Palace", e["title"] or e["content"][:60])
+                for e in entries if e.get("auto")}
+        for ep in self.episodes:
+            live[episodes.key_for(ep)] = ("Episode", str(ep.get("text") or "")[:60])
+        items = memory_policy.report(self.policy, live)
+        return {"enabled": bool(self.policy_enabled), "turn": int(self.policy.get("turn", 0) or 0),
+                "items": items, "kept": sum(1 for i in items if i["retention"] >= memory_policy.FLOOR),
+                "at_risk": sum(1 for i in items if i["retention"] < memory_policy.FLOOR),
+                "forgotten": list(self.policy_forgotten)}
 
     def sandbox_active(self):
         return self.sandbox_root is not None and not self.is_group
@@ -907,10 +1057,16 @@ class Engine:
         # Text still in the input box is not known here; the page adds it. Reads only: no model call, no request.
         size = self.window_size()
         total = len(self.full_history)
-        start = max(0, total + 1 - size)
+        start = self.window_start(total + 1, size)
+        recent = self.full_history[start:]
+        # The same skip _window makes, so the marker names the message the prompt really starts with.
+        while recent and recent[0].get("role") != "user":
+            start += 1
+            recent = recent[1:]
+        texts, report = self._quench([str(e.get("text") or "") for e in recent],
+                                     [e.get("role", "user") for e in recent])
         window_tokens = 0
-        for e in self.full_history[start:]:
-            text = e.get("text", "")
+        for e, text in zip(recent, texts):
             if self.is_group:
                 text = f"[{e.get('speaker', e.get('role', 'user'))}]: {text}"
             window_tokens += self.estimate_tokens(text)
@@ -918,19 +1074,41 @@ class Engine:
             # each member answers with its own prompt; the largest one is the estimate
             system_tokens = max((self.estimate_tokens(self._member_prompt(m)[0]) for m in self.group_members), default=0)
         else:
-            system_tokens = self.estimate_tokens(self.system_prompt)
+            system_tokens = self.estimate_tokens(self.system_prompt) + self.estimate_tokens(self._turn_notes())
         return {"window_start": start, "total": total, "window_size": size, "is_group": bool(self.is_group),
-                "system_tokens": system_tokens, "window_tokens": window_tokens}
+                "system_tokens": system_tokens, "window_tokens": window_tokens,
+                "quench": bool(self.quench_enabled), "quench_saved": (report or {}).get("saved_tokens", 0)}
+
+    # Where the window starts, for a chat of total stored messages. It moves in steps of WINDOW_STEP, not one message a
+    # turn, so the history prefix is the same for several turns running. Messages before it are the ones the summary
+    # and episodes cover.
+    def window_start(self, total, size=None):
+        size = self.window_size() if size is None else size
+        return max(0, ((total - size) // WINDOW_STEP) * WINDOW_STEP)
+
+    # Stage 1 then the gated stage 2, when this account has quenching on. Nothing changes when it is off. The
+    # account's own messages are protected from stage 2, so its wording is never cut.
+    def _quench(self, texts, roles=None):
+        if not self.quench_enabled:
+            return list(texts), None
+        staged = [quench.strip(self.safe_text(str(t or ""))) for t in texts]
+        protect = [r != "model" for r in roles] if roles is not None else None
+        return quench.gate(staged, protect=protect)
 
     def _window(self, size, labelled):
-        recent = self.full_history[-size:]
+        recent = self.full_history[self.window_start(len(self.full_history), size):]
+        # A chat can begin on a reply once the user has deleted the message it answered. The first content sent to
+        # the model should be the user's, so leading replies are left out of the prompt.
+        while recent and recent[0].get("role") != "user":
+            recent = recent[1:]
+        texts, report = self._quench([str(e.get("text") or "") for e in recent],
+                                     [e.get("role", "user") for e in recent])
+        self.last_quench = report
         out = []
-        for e in recent:
+        for e, text in zip(recent, texts):
             role = e.get("role", "user")
             if labelled:
-                text = f"[{e.get('speaker', role)}]: {e['text']}"
-            else:
-                text = e.get("text", str(e))
+                text = f"[{e.get('speaker', role)}]: {text}"
             out.append(types.Content(role=role, parts=[types.Part.from_text(text=text)]))
         return out
 
@@ -1000,7 +1178,7 @@ class Engine:
             progress = {"at": time.time(), "live": True}
             try:
                 chat = self.create_chat_session(model)
-                response = _run_with_limit(self._call, progress, chat, processed, self.character_name,
+                response = _run_with_limit(self._call, progress, chat, self._turn_message(processed), self.character_name,
                                            _tracked(on_delta, progress), _tracked(on_think, progress))
                 if not _text(response):   # an empty answer is a failed attempt: move on, never save it
                     raise RuntimeError("the model sent an empty reply")
@@ -1036,6 +1214,8 @@ class Engine:
                                 self.model_name, get_request_bar(), thought)]
         return result
 
+    # A group turn: the director picks the first speakers, then members may answer each other, up to AUTO_REPLY_LIMIT.
+    # No member may give more than GROUP_CONSECUTIVE replies in a row within the turn.
     def _send_group(self, processed, on_delta=None, on_think=None):
         result = TurnResult(ok=True)
         selected, note = self._select_members(processed)
@@ -1043,52 +1223,31 @@ class Engine:
         result.selector_note = note
 
         self.full_history.append({"role": "user", "speaker": "user", "text": processed, "ts": _now_iso()})
-        total = 0
-        group_usage = {"prompt": 0, "cached": 0, "output": 0}
+        usage = {"total": 0, "prompt": 0, "cached": 0, "output": 0}
+        streak = {"name": None, "count": 0}   # who spoke last in this turn, and how many times in a row
         for name in selected:
-            label = display_for(name)
-            self._count_request()
-            prompt, color = self._member_prompt(name)
-            contents = self._window(self.window_size(), labelled=True)
-            resp = None
-            for model in self.ordered_models(self.group_models):
-                if on_delta:
-                    on_delta(label, "")
-                if on_think:
-                    on_think(label, "")
-                progress = {"at": time.time(), "live": True}
-                try:
-                    chat = self.client.chats.create(
-                        model=model,
-                        history=contents if contents else None,
-                        config=types.GenerateContentConfig(system_instruction=prompt, temperature=self.temperature_value(),
-                                                           thinking_config=thinking_config_for(model, self.thinking)),
-                    )
-                    resp = _run_with_limit(self._call, progress, chat, f"[{label} respond to the group]: {processed}", label,
-                                           _tracked(on_delta, progress), _tracked(on_think, progress))
-                    if not _text(resp):
-                        raise RuntimeError("the model sent an empty reply")
-                    self.model_name = model
-                    break
-                except Exception as err:
-                    progress["live"] = False
-                    result.error = str(err)
-
-            text = _text(resp)
-            if not text:
+            if self._blocked(name, streak):
                 continue
-            raw = text.strip()
-            thought = getattr(resp, "thought", "") or ""
-            result.replies.append(Reply(label, color, raw, self.restore(raw), self.model_name, get_request_bar(), thought))
-            self.full_history.append({"role": "model", "speaker": name, "text": raw, "ts": _now_iso(), **({"thinking": thought} if thought else {})})
-            usage = getattr(resp, "usage_metadata", None)
-            for field, value in (("prompt", _usage(usage, "prompt_token_count")),
-                                 ("cached", _usage(usage, "cached_content_token_count")),
-                                 ("output", _usage(usage, "candidates_token_count"))):
-                if isinstance(value, int):
-                    group_usage[field] += value
-            if usage and hasattr(usage, "total_token_count") and usage.total_token_count:
-                total += usage.total_token_count
+            if self._member_reply(name, processed, result, usage, on_delta, on_think):
+                self._record(streak, name)
+
+        # Members answer each other: the director names one more speaker after each reply, until it says NONE.
+        auto = []
+        for _ in range(AUTO_REPLY_LIMIT if result.replies else 0):
+            candidates = [m for m in self.group_members if not self._blocked(m, streak)]
+            if not candidates or not streak["name"]:
+                break
+            nxt, failure = self._select_next(processed, candidates, streak["name"])
+            if nxt is None:
+                if failure:
+                    result.selector_note = (result.selector_note or "") + f" Auto replies stopped: {failure}."
+                break
+            if not self._member_reply(nxt, AUTO_REQUEST, result, usage, on_delta, on_think):
+                break
+            self._record(streak, nxt)
+            auto.append(display_for(nxt))
+        if auto:
+            result.selector_note = (result.selector_note or "") + f" Members answered each other: {auto}."
 
         if not result.replies:
             # nobody answered: drop the user line so history never holds an unanswered turn
@@ -1097,13 +1256,72 @@ class Engine:
             result.error = result.error or "No group member replied."
             return result
 
-        result.turn_tokens = total
-        result.total_tokens = total
-        result.prompt_tokens = group_usage["prompt"]
-        result.cached_tokens = group_usage["cached"]
-        result.response_tokens = group_usage["output"]
+        result.turn_tokens = usage["total"]
+        result.total_tokens = usage["total"]
+        result.prompt_tokens = usage["prompt"]
+        result.cached_tokens = usage["cached"]
+        result.response_tokens = usage["output"]
         result.model = self.model_name
         return result
+
+    # The per-member cap: a member who has already given GROUP_CONSECUTIVE replies in a row may not speak again yet.
+    @staticmethod
+    def _blocked(name, streak):
+        return streak["name"] == name and streak["count"] >= GROUP_CONSECUTIVE
+
+    @staticmethod
+    def _record(streak, name):
+        streak["count"] = streak["count"] + 1 if streak["name"] == name else 1
+        streak["name"] = name
+
+    def _member_reply(self, name, request, result, usage, on_delta=None, on_think=None):
+        # One member's reply, added to the turn and to the chat history. Tries each group model in turn.
+        # Returns False when no model gave a reply.
+        label = display_for(name)
+        self._count_request()
+        prompt, color = self._member_prompt(name)
+        contents = self._window(self.window_size(), labelled=True)
+        resp = None
+        for model in self.ordered_models(self.group_models):
+            if on_delta:
+                on_delta(label, "")
+            if on_think:
+                on_think(label, "")
+            progress = {"at": time.time(), "live": True}
+            try:
+                chat = self.client.chats.create(
+                    model=model,
+                    history=contents if contents else None,
+                    config=types.GenerateContentConfig(system_instruction=prompt, temperature=self.temperature_value(),
+                                                       thinking_config=thinking_config_for(model, self.thinking)),
+                )
+                resp = _run_with_limit(self._call, progress, chat,
+                                       self._turn_notes() + f"[{label} respond to the group]: {request}", label,
+                                       _tracked(on_delta, progress), _tracked(on_think, progress))
+                if not _text(resp):
+                    raise RuntimeError("the model sent an empty reply")
+                self.model_name = model
+                break
+            except Exception as err:
+                progress["live"] = False
+                result.error = str(err)
+
+        text = _text(resp)
+        if not text:
+            return False
+        raw = text.strip()
+        thought = getattr(resp, "thought", "") or ""
+        result.replies.append(Reply(label, color, raw, self.restore(raw), self.model_name, get_request_bar(), thought))
+        self.full_history.append({"role": "model", "speaker": name, "text": raw, "ts": _now_iso(), **({"thinking": thought} if thought else {})})
+        found = getattr(resp, "usage_metadata", None)
+        for field, value in (("prompt", _usage(found, "prompt_token_count")),
+                             ("cached", _usage(found, "cached_content_token_count")),
+                             ("output", _usage(found, "candidates_token_count"))):
+            if isinstance(value, int):
+                usage[field] += value
+        if found and hasattr(found, "total_token_count") and found.total_token_count:
+            usage["total"] += found.total_token_count
+        return True
 
     def _member_prompt(self, name):
         char_file = os.path.join(name, "character.md")
@@ -1123,6 +1341,10 @@ class Engine:
         note = self.member_notes.get(name)
         if note:
             prompt += "\n\n--- Note from the user for you in this group ---\n" + note
+        # A group member's own example messages sit beside its card, exactly as in a solo chat.
+        block = examples_mod.prompt_block(examples_mod.load(name), display_for(name))
+        if block:
+            prompt += "\n\n" + block
         return prompt + NARRATIVE_INSTRUCTION + DIALOGUE_INSTRUCTION + FORMAT_INSTRUCTION + self.reply_length_clause(), color
 
     @staticmethod
@@ -1136,17 +1358,13 @@ class Engine:
                 found.append((m.start(), folder))
         return [folder for _, folder in sorted(found)]
 
-    def _select_members(self, processed):
-        # The director reads the whole context and returns who speaks, in what order. It uses the same model
-        # list as the members, so a DeepSeek or Claude pick runs the director on that provider too.
-        members = self.group_members
-        if not members:
-            return [], None
-        labels = {display_for(m): m for m in members}   # display name -> folder name
+    def _director_context(self, processed):
+        # What the director reads before it picks: members, chat so far, Mind Palace matches. Shared by both picks.
+        labels = {display_for(m): m for m in self.group_members}   # display name -> folder name
         shown = list(labels)
 
         bios = []
-        for name in members:
+        for name in self.group_members:
             snippet = f"Member: {display_for(name)}"
             char_file = os.path.join(name, "character.md")
             mem_file = os.path.join(name, "memory.md")
@@ -1171,7 +1389,10 @@ class Engine:
             except Exception:
                 group_memory = ""
         recent = self.full_history[-SELECTOR_WINDOW:]
-        history_text = "\n".join(f"[{display_for(e['speaker']) if 'speaker' in e else e['role']}]: {e['text']}" for e in recent)
+        texts, _report = self._quench([str(e.get("text") or "") for e in recent],
+                                      [e.get("role", "user") for e in recent])
+        history_text = "\n".join(f"[{display_for(e['speaker']) if 'speaker' in e else e['role']}]: {t}"
+                                 for e, t in zip(recent, texts))
         parts = [
             f"You are the director of the group chat '{self.character_name}'.\n",
             f"Available members: {shown}\n\n",
@@ -1181,20 +1402,37 @@ class Engine:
             parts.append(f"Chat summary so far:\n{self.summary_text}\n\n")
         if group_memory:
             parts.append(f"Group memory:\n{group_memory}\n\n")
+        recall = self._recall_text()
+        if recall:
+            parts.append(recall.strip() + "\n\n")
         parts += [
             f"Recent chat history:\n{history_text}\n\n",
             f"Current user prompt / input: {processed}\n\n",
+        ]
+        return "".join(parts)
+
+    # The model the director runs on: the pinned pick, else the first chain model.
+    def _director_model(self):
+        return (self.ordered_models(self.group_models) or [self.model_name])[0]
+
+    def _select_members(self, processed):
+        # The director reads the whole context and returns who speaks, in what order. It uses the same model
+        # list as the members, so a DeepSeek or Claude pick runs the director on that provider too.
+        members = self.group_members
+        if not members:
+            return [], None
+        labels = {display_for(m): m for m in members}   # display name -> folder name
+        shown = list(labels)
+        prompt = self._director_context(processed) + (
             f"CRITICAL INSTRUCTION: Decide which members respond to this input and the order they speak in, using the "
             f"user's prompt and all the context above. Choose between 1 and {len(members)} members, only from {shown}. "
-            "Leave out any member who should not speak this turn.\n",
+            "Leave out any member who should not speak this turn.\n"
             "Return ONLY the chosen names in speaking order, separated by commas (e.g. CharacterB, CharacterA), "
-            "with no extra text or explanation.",
-        ]
-        prompt = "".join(parts)
+            "with no extra text or explanation."
+        )
 
-        # The director answers with the same model the members use: the pinned pick, else the first chain model.
         # A failed call is not retried on another model; the turn falls back to one random member and says why.
-        director_model = (self.ordered_models(self.group_models) or [self.model_name])[0]
+        director_model = self._director_model()
         selected, failure = [], None
         try:
             self._count_request(director_model)
@@ -1211,6 +1449,26 @@ class Engine:
             reason = f" ({failure})" if failure else " (no member names in the reply)"
             return selected, f"Group chat selector fallback with {director_model}{reason}: selected {[display_for(s) for s in selected]} (OwO)"
         return selected, f"Group chat active: director ({director_model}) selected speakers: {[display_for(s) for s in selected]} (OwO)"
+
+    # After a reply, the director names the one member who answers next, from the candidates, or NONE.
+    # Returns (folder name or None, failure text or None).
+    def _select_next(self, processed, candidates, last):
+        labels = {display_for(m): m for m in candidates}
+        prompt = self._director_context(processed) + (
+            f"CRITICAL INSTRUCTION: {display_for(last)} has just replied. Decide whether one more member should answer "
+            f"right now so the members keep talking to each other. Choose one name from {list(labels)}, or reply NONE "
+            "if nobody should speak next.\n"
+            "Return ONLY that one name or NONE, with no extra text or explanation."
+        )
+        director_model = self._director_model()
+        try:
+            self._count_request(director_model)
+            chat = self.client.chats.create(model=director_model, config=types.GenerateContentConfig(temperature=0.7))
+            text = _text(chat.send_message(prompt)) or ""
+        except Exception as err:
+            return None, str(err)[:160]
+        found = self._ordered_mentions(text, labels)
+        return (found[0] if found else None), None
 
     # ---- saving, undo, memory
 
@@ -1240,6 +1498,34 @@ class Engine:
         self.episodes_covered = min(self.episodes_covered, len(self.full_history))
         self._save_episodes()
         return True
+
+    # Remove saved messages by index: one message, a run, or a selection. Returns how many went. The chat is this
+    # account's own copy, so nothing shared changes and no model call is made. Positions outside the chat are
+    # ignored, and a call that removes nothing returns 0.
+    def delete_messages(self, indexes):
+        picked = sorted({int(i) for i in indexes if 0 <= int(i) < len(self.full_history)})
+        if not picked:
+            return 0
+        start = self._exchange_start()
+        user_line = self.full_history[start] if start is not None else None
+        # The saved alternatives belong to the last exchange and mirror it exactly. Once a message of that
+        # exchange is gone they would describe a chat that no longer exists, so they go with it.
+        touched = start is not None and any(i > start for i in picked)
+        for i in reversed(picked):
+            del self.full_history[i]
+        if touched and user_line is not None and any(e is user_line for e in self.full_history):
+            user_line.pop("variants", None)
+            user_line.pop("variant", None)
+        _write_history(self.memory_file, self.full_history)
+        # Episodes and the summary are cut by position, and a removal shifts every position after it. Anything that
+        # reaches the first removed point is dropped, and the covered count is pulled back to it, so the messages
+        # that moved are read again instead of being described under the wrong index.
+        first = picked[0]
+        self.episodes = [e for e in self.episodes if e["end"] <= first]
+        self.episodes_covered = min(self.episodes_covered, first)
+        self._save_episodes()
+        self.summary_covered = min(self.summary_covered, first)
+        return len(picked)
 
     def _scene_system(self, base):
         # Instructions plus the card and persona, so suggestions and events fit this chat.
@@ -1307,14 +1593,21 @@ class Engine:
         # as the user's requests or tokens. The caller counts them against the server's own dream cap.
         # Returns the record of the dream, or None when there was nothing worth doing.
         self.dream_calls = 0
-        if self.is_group or len(self.full_history) - self.dream_len < dreams.MIN_NEW:
+        if len(self.full_history) - self.dream_len < dreams.MIN_NEW:
             return None
         pdir = self.palace_dir or self.ai_dir
         entries, cfg = palace.load_all(pdir)
         auto = [e for e in entries if e["auto"] and e["id"]]
         memory = _read_text(self.memory_bank_file) if os.path.exists(self.memory_bank_file) else ""
         recent = [e["text"] for e in self.episodes[-dreams.EPISODES_READ:]]
-        prompt = dreams.build_prompt(memory, auto, recent)
+        # Event memory: the dream reads the messages since the last event pass, and links them to the latest events.
+        events_on = self.event_memory_enabled
+        new_lines = recent_events = None
+        if events_on:
+            span = self.full_history[self.graph["covered"]:][-eventgraph.NEW_MESSAGES:]
+            new_lines = [f"- [{e.get('speaker') or e.get('role')}]: {e['text']}" for e in span if e.get("text")]
+            recent_events = eventgraph.recent_for_dream(self.graph)
+        prompt = dreams.build_prompt(memory, auto, recent, new_lines, recent_events)
         models = []
         for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
             if m and m not in models:
@@ -1348,9 +1641,16 @@ class Engine:
             if dropped:
                 palace.save(pdir, keep, {"recursive": cfg["recursive"], "budget": cfg["budget"],
                                          "auto": cfg["auto"], "episodes": cfg["episodes"]})
+        events_added = evolved = 0
+        if events_on:
+            new_events, new_evolve = eventgraph.parse_events(text)
+            events_added, evolved = eventgraph.apply(self.graph, new_events, new_evolve, _now_iso())
+            self.graph["covered"] = len(self.full_history)
+            eventgraph.save(self.graph_file, self.graph)
         self.dream_len = len(self.full_history)
         record = {"len": self.dream_len, "when": _now_iso(), "note": note, "added": counts["added"],
-                  "updated": counts["updated"], "removed": counts["removed"], "dropped": dropped}
+                  "updated": counts["updated"], "removed": counts["removed"], "dropped": dropped,
+                  "events": events_added, "evolved": evolved}
         _write_json(self.dream_file, record)
         self._build_system_prompt()
         return record
@@ -1542,8 +1842,7 @@ class Engine:
             if m and m not in models:
                 models.append(m)
 
-        window = self.window_size()
-        cutoff = max(0, len(self.full_history) - window)
+        cutoff = self.window_start(len(self.full_history))
         start = max(min(self.summary_covered, cutoff), cutoff - SUMMARY_MAX_MESSAGES)
         pending = self.full_history[start:cutoff]        # messages that have left the window since the last summary
         want_summary = bool(pending)

@@ -1,10 +1,10 @@
-Miso Chat 1.4.0 update
+Miso Chat 1.4.1 update
 
-This update brings the server to 1.4.0 from 1.3.1. It brings together the 1.4.0 betas and the features added since. The main additions are: memory that is updated by changes, so a refresh cannot silently drop facts; episodic memory, which brings back earlier moments of a chat; automatic Mind Palace entries that a character can add itself; autonomous dreaming in quiet hours; scheduled check-ins; budget alerts; EPUB and PDF export; importing SillyTavern-style character cards; and group chat pictures and backgrounds. Plural and suffix matching for Mind Palace keys is also new.
+This update brings the server to 1.4.1 from 1.4.0. It adds mood and relationship state with bars, an event memory graph, group Mind Palace entries and group auto-reply, example messages on the character card, deleting messages from a chat, and two opt-in ways to spend fewer tokens: near-lossless quenching of older history, and effectiveness-weighted memory retention. The history window also now starts on multiples of eight messages so the prompt cache can be reused.
 
-The new features are switched off, or leave the existing behaviour as it was, until someone turns them on. Episodic memory and the memory bank are on by default. Automatic palace entries, check-ins, dreams and the webhook are off. Dreams are switched off on the server until an admin turns them on.
+Every new switch starts off, and off means the old behaviour, so an install that changes nothing behaves as 1.4.0 did. Mood, relationship, the event graph and learned memory retention are admin switches on the admin page. Quenching is a per-account preference in Settings, Account. Group auto-reply is always on for group chats and has no switch.
 
-This is a release. The terminal client is now 1.4.0, and the server only accepts clients with the same major.minor version (1.4). Terminal clients from 1.3.x will be refused until you download the 1.4.0 client from the web app. Your existing chats and characters are not changed by the update.
+This is a release. The terminal client is now 1.4.1. The server accepts clients with the same major.minor version, so a 1.4.0 client keeps working; 1.3.x clients are still refused. Your existing chats and characters are not changed by the update.
 
 1. Stop the web app.
 
@@ -14,22 +14,25 @@ This is a release. The terminal client is now 1.4.0, and the server only accepts
 
    The zip leaves alone: .env, data/, every character folder, and the files you keep beside them.
 
-4. Install the packages in requirements.txt again, so that PyMuPDF (used for PDF export) is present:
+4. No new packages are needed if you are already on 1.4.0. If you are coming from 1.3.x or have not installed since, run:
 
        pip install -r requirements.txt
 
 5. Data changes are automatic on start:
 
-   - Existing non-admin accounts are set to the lite tier, if they had no tier. Admin accounts have no tier and no token cap. Lite is 10M tokens a month, standard 20M, pro 100M and free 1M. A monthly budget set by hand for an account still wins over its tier.
+   - Two new tables are created empty: moods, holding energy, affinity and the emotion per character, and attitudes, holding affection and trust per character and account.
 
-   - New tables are created empty: favourites, character message counts, personas, check-in schedules and dream schedules. Character message counts are rebuilt once from saved chat history on the first start. On a large server this can take a little time.
+   - Memory retention keeps its scores in a small file in each character folder, created when the switch is first used, and removes rows for memories that are no longer stored.
 
-   - Nothing else in data/ is changed. Episodes, palace state and dream records are created per character when they are first used.
+   - Nothing else in data/ is changed.
 
 6. Optional, from the admin page:
-   - Autonomous dreaming: switch it on, then set how many days apart dreams run and the daily cap on dream model calls.
-   - Budget alert webhook: enter the address under Budget alert webhook on the Limits page. Leave it empty to turn it off.
+   - Mood and Relationship: switch each on for the server. Off is the default.
+   - Event memory graph: switch it on only with dreaming on, because the nightly dream is what writes it.
+   - Learned memory retention: switch it on to let self-written memories decay by outcome. Entries you wrote yourself are never scored or dropped.
 
-7. The terminal client needs the 1.4.0 file. Download it from the web app, or from the release page on GitHub. Its SHA-256 is in the release notes.
+7. Optional, per account, from Settings, Account: turn on Quench history. The context marker then reports how many characters the pass saved. It is near-lossless, not lossless: the newest messages, your own messages and every sentence with a figure, a name or a quotation are kept whole, and the pass stops while at least 92 percent of the window's distinct words survive. A quenched account may show a lower cached share on the stats page, because the older text changes slightly from turn to turn.
 
-8. Optional: install chafa to draw character pictures in the terminal client. The README has the steps.
+8. The terminal client needs the 1.4.1 file, or a 1.4.0 one. Download it from the web app, or from the release page on GitHub. Its SHA-256 is in the release notes.
+
+9. Optional: install chafa to draw character pictures in the terminal client. The README has the steps.

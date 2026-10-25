@@ -4,6 +4,7 @@
 # first, and optional recursion (a matched entry can bring in another). Plain keyword matching, so
 # it costs no model calls and no requests.
 import functools
+import hashlib
 import json
 import os
 import re
@@ -287,9 +288,14 @@ def _fires(entry, text):
     return not all(found)  # not_all
 
 
-def match(entries, texts, budget=DEFAULT_BUDGET, recursive=False):
-    # texts: recent messages, oldest first, the message being sent last. Each entry scans only its own depth.
-    # Returns the matched entries' text. When the budget runs out, the lowest order is dropped first.
+# The text one entry adds to the prompt.
+def block_for(entry):
+    return f"{entry['title']}\n{entry['content']}" if entry["title"] else entry["content"]
+
+
+# The entries a turn's prompt keeps, so the caller can score them. weights maps an entry's retention key to a rank
+# multiplier; an entry with no weight is ranked exactly as before. The user's own entries are never weighted here.
+def match_entries(entries, texts, budget=DEFAULT_BUDGET, recursive=False, weights=None):
     texts = [str(t) for t in texts if t]
     scans = {}
 
@@ -311,17 +317,40 @@ def match(entries, texts, budget=DEFAULT_BUDGET, recursive=False):
             chosen_ids.update(id(e) for e in new)
             pool = "\n".join(_norm(e["content"]) for e in new)
 
-    # Highest order first, so the budget keeps the most important entries.
-    chosen.sort(key=lambda e: -e["order"])
+    # Highest order first, so the budget keeps the most important entries. A weight scales the order, so a memory
+    # that has proved useful keeps its place against one that has not. A weight is never applied to an entry the
+    # user wrote, and is clamped to at most 1.0, so a weight can only ever demote a memory the character wrote: an
+    # author's own entry always ranks at or above an automatic entry of the same order.
+    def rank(e):
+        weight = 1.0
+        if weights and e.get("auto"):
+            weight = max(0.0, min(1.0, float(weights.get(palace_key(e), 1.0) or 1.0)))
+        return -e["order"] * weight
+
+    chosen.sort(key=rank)
     kept, used = [], 0
     for e in chosen:
-        block = f"{e['title']}\n{e['content']}" if e["title"] else e["content"]
+        block = block_for(e)
         if used + len(block) > budget:
             continue
-        kept.append((e["order"], block))
+        kept.append(e)
         used += len(block)
         if len(kept) >= MAX_MATCHED:
             break
     # Lower order first in the prompt, so higher order lands nearer the end (as in SillyTavern).
-    kept.sort(key=lambda kb: kb[0])
-    return [block for _, block in kept]
+    kept.sort(key=lambda e: e["order"])
+    return kept
+
+
+def match(entries, texts, budget=DEFAULT_BUDGET, recursive=False, weights=None):
+    # texts: recent messages, oldest first, the message being sent last. Each entry scans only its own depth.
+    # Returns the matched entries' text. When the budget runs out, the lowest order is dropped first.
+    return [block_for(e) for e in match_entries(entries, texts, budget, recursive, weights)]
+
+
+# The key the caller scores an entry under: its id, or a hash of its content when it has none.
+def palace_key(entry):
+    entry_id = str(entry.get("id") or "").strip()
+    if entry_id:
+        return "p:" + entry_id
+    return "p:" + hashlib.sha1(str(entry.get("content") or "").encode("utf-8")).hexdigest()[:10]

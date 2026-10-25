@@ -143,6 +143,16 @@
           <textarea id="edCard" rows="14" maxlength="20000" required></textarea>
         </label>
         <p class="muted">The card is the character's persona. Keep the <code>Colour:</code> line as it is; the colour above updates it.</p>
+        <fieldset class="examples-box">
+          <legend>Example messages</legend>
+          <p class="muted">A few short exchanges that show how this character speaks: the shape of its sentences, its nicknames, its habits. They are reference only. The model is told not to repeat them, and they never appear in the chat.</p>
+          <div id="edExamplesList" class="example-list"></div>
+          <div class="row">
+            <button id="edExamplesAdd" class="ghost" type="button">Add an exchange</button>
+            <span id="edExamplesCount" class="muted"></span>
+          </div>
+          <p id="edExamplesErr" class="error"></p>
+        </fieldset>
         <label>Context: memories, locations, situations
           <textarea id="edContext" rows="8" maxlength="20000" placeholder="Memories, places, and situations to add to this character."></textarea>
         </label>
@@ -226,12 +236,21 @@
         <button id="memBtn" class="ghost" type="button" title="See and edit what the character remembers">Memory</button>
         <button id="rollBtn" class="ghost" type="button" title="Roll: the model adds a random event to the scene">Roll</button>
         <button id="undoBtn" class="ghost" type="button">Undo</button>
+        <button id="selectBtn" class="ghost" type="button" aria-pressed="false" title="Pick several messages to delete">Select</button>
       </div>
       <div id="budgetAlert" class="budget-alert" role="status" hidden>
         <span id="budgetAlertText"></span>
         <button id="budgetAlertClose" class="ghost" type="button" aria-label="Dismiss budget warning">Dismiss</button>
       </div>
       <div id="log" class="log" aria-live="polite"></div>
+      <div id="pickBar" class="pick-bar" role="region" aria-label="Picked messages" hidden>
+        <span id="pickCount" class="muted">No messages picked</span>
+        <span class="spacer"></span>
+        <button id="pickAll" class="ghost small" type="button">All</button>
+        <button id="pickNone" class="ghost small" type="button">None</button>
+        <button id="pickDelete" class="danger small" type="button" disabled>Delete picked</button>
+        <button id="pickCancel" class="ghost small" type="button">Cancel</button>
+      </div>
       <form id="chatForm" class="composer">
         <div class="msg-wrap">
           <textarea id="msg" rows="3" maxlength="4000" placeholder="Say something… (Enter sends, Shift+Enter for a new line, /help for commands)"></textarea>
@@ -281,12 +300,13 @@
       <div id="setGrid" class="set-grid">
         <button class="set-card" type="button" data-panel="account"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 11h14v10H5z"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span><span class="set-name">Account</span><span class="set-note">Two-factor sign-in</span></button>
         <button class="set-card" type="button" data-panel="appearance"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.8 1.7-1.6 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5c0-4.4-4-7.4-9-7.4z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7.5" r="1"/><circle cx="15" cy="8" r="1"/></svg></span><span class="set-name">Appearance</span><span class="set-note">Colour, icon shape, font, size</span></button>
-        <button class="set-card" type="button" data-panel="character"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></span><span class="set-name">Character</span><span class="set-note">Memory, model, creativity, characters</span></button>
+        <button class="set-card" type="button" data-panel="character"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></span><span class="set-name">Character</span><span class="set-note">Memory, model, mood, creativity, characters</span></button>
         <button id="pinCard" class="set-card" type="button" data-panel="pinned"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3H7l3-3-1-6z"/><path d="M12 12v9"/></svg></span><span class="set-name">Pinned facts</span><span class="set-note">Kept in every prompt, never forgotten</span></button>
         <button id="checkinCard" class="set-card" type="button" data-panel="checkin"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M19 4l2 2"/></svg></span><span class="set-name">Check-in</span><span class="set-note">The character messages you once a day</span></button>
         <button id="dreamCard" class="set-card" type="button" data-panel="dreams"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span><span class="set-name">Dreams</span><span class="set-note">Tidy memory in quiet hours</span></button>
+        <button id="attitudeCard" class="set-card" type="button" data-panel="attitude" hidden><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.6-7 10-7 10z"/></svg></span><span class="set-name">Relationship</span><span id="attitudeNote" class="set-note">How close the character feels to you</span></button>
         <button class="set-card" type="button" data-panel="persona"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9.5" cy="11" r="2"/><path d="M6.5 16c.6-1.4 1.7-2 3-2s2.4.6 3 2"/><path d="M15 10h3M15 13h3"/></svg></span><span class="set-name">Persona</span><span class="set-note">Who you are in chats</span></button>
-        <button class="set-card" type="button" data-panel="palace"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9 10v8M15 10v8M19 10v8"/><path d="M3 20h18"/></svg></span><span class="set-name">Mind Palace</span><span class="set-note">Your entries for this character</span></button>
+        <button class="set-card" type="button" data-panel="palace"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9 10v8M15 10v8M19 10v8"/><path d="M3 20h18"/></svg></span><span class="set-name">Mind Palace</span><span class="set-note">Your entries for this character or group</span></button>
         <button class="set-card" type="button" data-panel="history"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="set-name">Chat history</span><span class="set-note">Window, reply length</span></button>
         <button class="set-card" type="button" data-panel="export"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span><span class="set-name">Export</span><span class="set-note">This chat as Markdown, text, JSON, EPUB or PDF</span></button>
         <button class="set-card" type="button" data-panel="client"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/></svg></span><span class="set-name">Terminal client</span><span class="set-note">Download</span></button>
@@ -322,6 +342,11 @@
         <div class="sheet-row"><span>Token usage</span>
           <button id="tokenUsageBtn" class="ghost small" type="button">View usage</button>
         </div>
+        <div class="sheet-row"><span>Quench long chats</span>
+          <label class="inline"><input id="quenchToggle" type="checkbox"> On</label>
+        </div>
+        <p class="muted">Near-lossless token quenching. Before each reply it trims what the model does not need from the older messages: decoration first, then the least informative of the character's own sentences. It stops as soon as the wording would be lost, and your own messages are never cut. Off by default.</p>
+        <p id="quenchNote" class="muted" aria-live="polite"></p>
       </section>
       <section class="set-panel" data-panel="appearance" hidden>
         <div class="sheet-row"><span>Highlight colour</span>
@@ -349,6 +374,43 @@
         <p class="muted needs-char">Open a character to set its creativity.</p>
         <div class="sheet-row slider-row char-only"><label for="tempSlider">Creativity (temperature) <span id="tempVal" class="muted"></span></label>
           <span class="slider-ctl"><input id="tempSlider" type="range" min="0" max="1.5" step="0.05" aria-label="Creativity"><button id="tempReset" class="ghost small" type="button">Default</button></span>
+        </div>
+        <div id="retentionBox" hidden>
+          <div class="sheet-row"><span>Memory retention</span><span id="retentionNote" class="muted"></span></div>
+          <p class="muted">The memories this character wrote for itself are scored by how useful they proved. Carrying on, agreeing or thanking it earns them a little; correcting it costs them. A weak memory fades faster and is eventually dropped. Anything you wrote yourself is never scored or dropped.</p>
+          <div id="retentionList"></div>
+        </div>
+        <div id="moodBox" hidden>
+          <div class="sheet-row"><span>Mood</span><span id="moodNote" class="muted"></span></div>
+          <div class="metric">
+            <div class="metric-head"><span>Energy</span><span id="moodEnergyVal" class="muted"></span></div>
+            <div class="bar-track"><div id="moodEnergyFill" class="bar-fill"></div></div>
+          </div>
+          <div class="metric">
+            <div class="metric-head"><span>Affinity</span><span id="moodAffinityVal" class="muted"></span></div>
+            <div class="bar-track"><div id="moodAffinityFill" class="bar-fill"></div></div>
+          </div>
+          <p class="muted">Energy falls over a long conversation and recovers in silence. Affinity grows with each exchange and fades after several days apart. A lonely character may send you a check-in.</p>
+          <p id="moodTone" class="muted"></p>
+          <div id="moodAdmin" hidden>
+            <p class="muted">Admins can set these values by hand. The emotion follows the numbers unless one is picked here, and the simulation carries on from there.</p>
+            <div class="sheet-row"><label for="moodEnergyInput">Energy</label>
+              <span class="slider-ctl"><input id="moodEnergyInput" type="range" min="0" max="100" step="1"><span id="moodEnergyInputVal" class="muted"></span></span>
+            </div>
+            <div class="sheet-row"><label for="moodAffinityInput">Affinity</label>
+              <span class="slider-ctl"><input id="moodAffinityInput" type="range" min="0" max="100" step="1"><span id="moodAffinityInputVal" class="muted"></span></span>
+            </div>
+            <div class="sheet-row"><label for="moodEmotion">Emotion</label>
+              <select id="moodEmotion" aria-label="Emotion">
+                <option value="">From the numbers</option>
+                <option value="calm">Calm</option>
+                <option value="warm">Warm</option>
+                <option value="tired">Tired</option>
+                <option value="lonely">Lonely</option>
+              </select>
+            </div>
+            <p><button id="moodAdminSave" class="ghost small" type="button">Save mood</button> <span id="moodMsg" class="muted" role="status"></span></p>
+          </div>
         </div>
         <div data-slot="characters"></div>
       </section>
@@ -380,11 +442,37 @@
         <p id="dreamEvery" class="muted"></p>
         <p id="dreamLast" class="muted"></p>
       </section>
+      <section class="set-panel" data-panel="attitude" hidden>
+        <p class="muted needs-char">Open a character to see your relationship.</p>
+        <p class="muted">Affection and trust grow when you are kind, share time together and ask about the character. Insults and deceit lower them. If you go a long while without spending time together, trust eases a little.</p>
+        <p id="attitudeServerNote" class="muted" hidden>Relationships are switched off on this server, so nothing changes until an admin turns them on.</p>
+        <div class="metric">
+          <div class="metric-head"><span>Affection</span><span id="attAffectionVal" class="muted"></span></div>
+          <div class="bar-track"><div id="attAffectionFill" class="bar-fill"></div></div>
+        </div>
+        <div class="metric">
+          <div class="metric-head"><span>Trust</span><span id="attTrustVal" class="muted"></span></div>
+          <div class="bar-track"><div id="attTrustFill" class="bar-fill"></div></div>
+        </div>
+        <p id="attitudeLine"></p>
+        <p id="attitudeTone" class="muted"></p>
+        <div id="attAdmin" hidden>
+          <p class="muted">Admins can set these scores by hand. The level follows the scores, and the simulation carries on from there.</p>
+          <div class="sheet-row"><label for="attAffectionInput">Affection</label>
+            <span class="slider-ctl"><input id="attAffectionInput" type="range" min="0" max="100" step="1"><span id="attAffectionInputVal" class="muted"></span></span>
+          </div>
+          <div class="sheet-row"><label for="attTrustInput">Trust</label>
+            <span class="slider-ctl"><input id="attTrustInput" type="range" min="0" max="100" step="1"><span id="attTrustInputVal" class="muted"></span></span>
+          </div>
+          <p><button id="attAdminSave" class="ghost small" type="button">Save scores</button> <span id="attMsg" class="muted" role="status"></span></p>
+        </div>
+        <p id="attitudeMsg" class="muted" role="status"></p>
+      </section>
       <section class="set-panel" data-panel="persona" hidden>
         <div data-slot="persona"></div>
       </section>
       <section class="set-panel" data-panel="palace" hidden>
-        <p class="muted needs-char">Open a character to see its Mind Palace.</p>
+        <p class="muted needs-char">Open a character or group to see its Mind Palace.</p>
         <div id="palaceRow" class="sheet-row"><span>Mind Palace (your entries)</span><button id="palaceOpen" class="ghost small" type="button">Open</button></div>
       </section>
       <section class="set-panel" data-panel="history" hidden>
@@ -448,7 +536,7 @@
   </dialog>
   <dialog id="palaceDlg" class="dlg" aria-labelledby="palaceDlgTitle">
     <h2 id="palaceDlgTitle">Mind Palace</h2>
-    <p class="muted">Your own entries for this character. The character's starting palace was copied to your account the first time you chatted with it. Changes apply from your next message.</p>
+    <p class="muted">Your own entries for this character or group. A character's starting palace was copied to your account the first time you chatted with it. Changes apply from your next message.</p>
     <label class="inline"><input id="palRecursive" type="checkbox"> Recursive: a matched entry can trigger others</label>
     <label class="inline">Character budget <input id="palBudget" type="number" min="500" max="12000" step="100"> characters</label>
     <label class="inline"><input id="palEpisodes" type="checkbox"> Episodic memory: bring back earlier moments of this chat when the keywords come up again</label>
