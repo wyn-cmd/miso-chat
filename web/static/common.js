@@ -1,8 +1,22 @@
 // Shared helpers for every page. Model output is only ever written with textContent.
 
 // Theme and highlight colour. Stored per browser in localStorage ("rp_theme", "rp_accent").
-// The light/dark tokens live in style.css; theme-init.js sets the attribute before first paint.
-const ACCENT_DEFAULT = "#4cc4ff";      // portfolio cyan; used only as the picker's starting value
+// The light/dark tokens live in style.css and tokens.css; theme-init.js sets the attribute before first paint.
+// "rp_ui" picks which look the app wears: "spore" (1.5.0, the default), "classic" (Hyacinth, the 1.4.1 look) or "moon"
+// (Moonlit, a sheet of its own over redesign.css). The stored value stays "classic" even though the theme is named
+// Hyacinth, so choices already saved in a browser keep working. Classic switches the redesign stylesheet off, so the
+// plain style.css underneath shows through. Moonlit keeps redesign.css and adds moon.css over it, with data-look="moon".
+const UI_KEY = "rp_ui";
+const UI_SPORE = "spore";
+const UI_CLASSIC = "classic";
+const UI_MOON = "moon";
+const UI_FOLIO = "folio";
+// The sheet each look adds over redesign.css. Spore needs none; Hyacinth switches redesign.css off instead.
+const LOOK_SHEETS = { moon: "/static/moon.css", folio: "/static/folio.css" };
+const ACCENT_DEFAULT_FOLIO = "#1b6e66";
+const ACCENT_DEFAULT_SPORE = "#fb836d";
+const ACCENT_DEFAULT_CLASSIC = "#4cc4ff";
+const ACCENT_DEFAULT_MOON = "#8fd3cc";
 const THEME_KEY = "rp_theme";
 const SUN_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
 const MOON_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
@@ -11,13 +25,77 @@ function savedTheme() {
   try { return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark"; } catch (e) { return "dark"; }
 }
 
+// Moonlit is the default: a browser with no saved choice, or an unknown one, gets it.
+// Default character backgrounds come in one set per look (files named <look>-N.jpg). Keep the set for the
+// look in use now; if a look has no set, fall back to the full list.
+function lookDefaults(list) {
+  const look = uiThemeName();
+  const mine = (list || []).filter((u) => u.includes("/defaults/" + look + "-"));
+  return mine.length ? mine : (list || []);
+}
+
+function uiThemeName() {
+  try {
+    const saved = localStorage.getItem(UI_KEY);
+    return saved === UI_CLASSIC || saved === UI_SPORE || saved in LOOK_SHEETS ? saved : UI_MOON;
+  } catch (e) { return UI_MOON; }
+}
+
+function accentDefault() {
+  const look = uiThemeName();
+  if (look === UI_CLASSIC) return ACCENT_DEFAULT_CLASSIC;
+  if (look === UI_FOLIO) return ACCENT_DEFAULT_FOLIO;
+  return look === UI_MOON ? ACCENT_DEFAULT_MOON : ACCENT_DEFAULT_SPORE;
+}
+
+// The paper colour of the active look, for the browser's own chrome around the page.
+function metaThemeColor() {
+  if (uiThemeName() !== UI_CLASSIC) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue("--meta-theme").trim();
+    if (v) return v;
+  }
+  return document.documentElement.dataset.theme === "light" ? "#f6f8fc" : "#020307";
+}
+
+function applyMetaTheme() {
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = metaThemeColor();
+}
+
+// Switch looks. The stylesheet stays in the page and is disabled, so nothing reloads and no state is lost.
+// The attribute is data-look, not data-ui: data-ui is the marker design tools use for a cropped interface fragment,
+// and setting it on <html> makes an inspector read the whole page as a fragment.
+function applyUi(name) {
+  const look = name === UI_CLASSIC || name === UI_SPORE || name in LOOK_SHEETS ? name : UI_MOON;
+  document.documentElement.dataset.look = look;
+  const link = document.getElementById("uiTheme");
+  if (link) link.disabled = look === UI_CLASSIC;
+  // A look's sheet is added the first time it is chosen, after redesign.css, so it wins the cascade; then it is switched.
+  let sheet = document.getElementById("lookSheet");
+  const href = LOOK_SHEETS[look];
+  if (href && !sheet) {
+    sheet = document.createElement("link");
+    sheet.id = "lookSheet";
+    sheet.rel = "stylesheet";
+    document.head.appendChild(sheet);
+  }
+  if (sheet) {
+    if (href) sheet.href = href;
+    sheet.disabled = !href;
+  }
+  try { localStorage.setItem(UI_KEY, look); } catch (e) { /* private mode */ }
+  applyMetaTheme();
+  const pick = document.getElementById("accentPick");
+  if (pick && !savedAccent()) pick.value = accentDefault();
+}
+
 function applyAccent(hex) {
   const s = document.documentElement.style;
   const v = /^#[0-9a-f]{6}$/i.test(hex || "") ? hex.toLowerCase() : null;
   if (!v) {
-    // No custom colour: drop the overrides so the theme's own accent (cyan dark, blue light) applies.
+    // No custom colour: drop the overrides so the look's own accent (coral or cyan) applies.
     for (const n of ["--accent", "--accent-2", "--on-accent", "--accent-soft", "--accent-glow"]) s.removeProperty(n);
-    return ACCENT_DEFAULT;
+    return accentDefault();
   }
   const r = parseInt(v.slice(1, 3), 16), g = parseInt(v.slice(3, 5), 16), b = parseInt(v.slice(5, 7), 16);
   const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;   // light accent gets dark text, and the reverse
@@ -25,7 +103,7 @@ function applyAccent(hex) {
   s.setProperty("--on-accent", lum > 0.6 ? "#04121f" : "#ffffff");
   s.setProperty("--accent-soft", `rgba(${r}, ${g}, ${b}, 0.14)`);
   s.setProperty("--accent-glow", `rgba(${r}, ${g}, ${b}, 0.38)`);
-  // The gradient's second stop: half the chosen colour, half the portfolio violet, so buttons keep the two-tone look.
+  // The gradient's second stop: half the chosen colour, half the Hyacinth violet, so buttons keep the two-tone look.
   const mix = [[r, 0x9b], [g, 0x8c], [b, 0xff]].map(([c, t]) => Math.round((c + t) / 2));
   s.setProperty("--accent-2", "#" + mix.map((n) => n.toString(16).padStart(2, "0")).join(""));
   return v;
@@ -38,8 +116,7 @@ function savedAccent() {
 function applyTheme(theme) {
   const t = theme === "light" ? "light" : "dark";
   document.documentElement.dataset.theme = t;
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = t === "light" ? "#f6f8fc" : "#020307";
+  applyMetaTheme();
   for (const b of document.querySelectorAll("#themeBtn")) {
     const label = t === "light" ? "Switch to dark theme" : "Switch to light theme";
     b.setAttribute("aria-label", label);
@@ -64,6 +141,7 @@ function toggleTheme() {
 
 function wireThemeButtons() {
   for (const b of document.querySelectorAll("#themeBtn")) b.addEventListener("click", toggleTheme);
+  applyUi(uiThemeName());
   applyTheme(savedTheme());
 }
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wireThemeButtons);

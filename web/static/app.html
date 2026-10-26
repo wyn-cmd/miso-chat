@@ -8,10 +8,12 @@
   <title>Miso Chat</title>
   <script src="/static/theme-init.js"></script>
   <link rel="stylesheet" href="/static/style.css">
+  <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=rpUi===null?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
-  <meta name="theme-color" content="#020307">
+  <meta name="theme-color" content="#0f0a06">
 </head>
 <body>
   <header>
@@ -35,7 +37,12 @@
       <div id="groupBox">
         <h2>Group chats</h2>
         <div id="groupList" class="char-list"></div>
-        <button id="newGroupBtn" class="ghost small" type="button">+ New group chat</button>
+        <a id="newGroupBtn" class="button-link ghost small" href="/create/group">+ New group chat</a>
+      </div>
+      <div id="novelBox">
+        <h2>Novels</h2>
+        <div id="novelList" class="char-list"></div>
+        <a id="newNovelBtn" class="button-link ghost small" href="/create/novel">+ New novel</a>
       </div>
       <div id="personaBox" hidden>
         <h2>Persona (you)</h2>
@@ -215,10 +222,14 @@
           <span id="tokenText" class="muted"></span>
         </span>
           <button id="settingsBtn" class="ghost settings-btn" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-controls="settingsSheet" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke-width="3"/></svg></button>
-          <select id="fontSelect" class="font-select" aria-label="Chat font" title="Chat font">
-            <option value="sans">Sans-serif</option>
-            <option value="serif">Serif (Merriweather)</option>
-            <option value="mono">Monospace</option>
+          <select id="fontSelect" class="font-select" aria-label="Font" title="Font for the chat and the interface">
+            <option value="theme">Theme's own font</option>
+            <option value="instrument">Instrument Sans</option>
+            <option value="inter">Inter</option>
+            <option value="atkinson">Atkinson Hyperlegible</option>
+            <option value="merriweather">Merriweather (serif)</option>
+            <option value="literata">Literata (serif)</option>
+            <option value="mono">JetBrains Mono</option>
           </select>
           <select id="bubbleSelect" class="font-select" aria-label="Bubble style" title="Bubble style">
             <option value="badge">Name badge</option>
@@ -306,7 +317,8 @@
         <button id="dreamCard" class="set-card" type="button" data-panel="dreams"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span><span class="set-name">Dreams</span><span class="set-note">Tidy memory in quiet hours</span></button>
         <button id="attitudeCard" class="set-card" type="button" data-panel="attitude" hidden><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.6-7 10-7 10z"/></svg></span><span class="set-name">Relationship</span><span id="attitudeNote" class="set-note">How close the character feels to you</span></button>
         <button class="set-card" type="button" data-panel="persona"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9.5" cy="11" r="2"/><path d="M6.5 16c.6-1.4 1.7-2 3-2s2.4.6 3 2"/><path d="M15 10h3M15 13h3"/></svg></span><span class="set-name">Persona</span><span class="set-note">Who you are in chats</span></button>
-        <button class="set-card" type="button" data-panel="palace"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9 10v8M15 10v8M19 10v8"/><path d="M3 20h18"/></svg></span><span class="set-name">Mind Palace</span><span class="set-note">Your entries for this character or group</span></button>
+        <button class="set-card" type="button" data-panel="worlds"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18"/></svg></span><span class="set-name">Worlds</span><span class="set-note">Places, magic, rules and civilisations for your stories</span></button>
+      <button class="set-card" type="button" data-panel="palace"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9 10v8M15 10v8M19 10v8"/><path d="M3 20h18"/></svg></span><span class="set-name">Mind Palace</span><span class="set-note">Your entries for this character or group</span></button>
         <button class="set-card" type="button" data-panel="history"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="set-name">Chat history</span><span class="set-note">Window, reply length</span></button>
         <button class="set-card" type="button" data-panel="export"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span><span class="set-name">Export</span><span class="set-note">This chat as Markdown, text, JSON, EPUB or PDF</span></button>
         <button class="set-card" type="button" data-panel="client"><span class="set-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/></svg></span><span class="set-name">Terminal client</span><span class="set-note">Download</span></button>
@@ -345,10 +357,18 @@
         <div class="sheet-row"><span>Quench long chats</span>
           <label class="inline"><input id="quenchToggle" type="checkbox"> On</label>
         </div>
-        <p class="muted">Near-lossless token quenching. Before each reply it trims what the model does not need from the older messages: decoration first, then the least informative of the character's own sentences. It stops as soon as the wording would be lost, and your own messages are never cut. Off by default.</p>
+        <p class="muted">Near-lossless token quenching. Before each reply it trims what the model does not need from the older messages: decoration first, then the least informative of the character's own sentences. It stops as soon as the wording would be lost, and your own messages are never cut. Off by default for solo chats; group chats are quenched unless you switch this off.</p>
         <p id="quenchNote" class="muted" aria-live="polite"></p>
       </section>
       <section class="set-panel" data-panel="appearance" hidden>
+        <div class="sheet-row"><span>Theme</span>
+          <select id="uiThemePick" aria-label="Theme">
+            <option value="moon">Moonlit (default)</option>
+            <option value="folio">Soft Shadows (reading view)</option>
+            <option value="spore">Spore (1.5.0)</option>
+            <option value="classic">Hyacinth (1.4.1)</option>
+          </select>
+        </div>
         <div class="sheet-row"><span>Highlight colour</span>
           <span class="accent-ctl"><input id="accentPick" type="color" aria-label="Highlight colour"><button id="accentReset" class="ghost small" type="button">Reset</button></span>
         </div>
@@ -412,7 +432,51 @@
             <p><button id="moodAdminSave" class="ghost small" type="button">Save mood</button> <span id="moodMsg" class="muted" role="status"></span></p>
           </div>
         </div>
+        <div id="storyBox" hidden>
+          <div class="sheet-row"><span>Story</span></div>
+          <div class="sheet-row"><label for="storyWorld">World for this chat</label><select id="storyWorld" aria-label="World for this chat"></select></div>
+          <div class="sheet-row"><label for="tensionMode">Narrative tensions</label>
+            <select id="tensionMode" aria-label="Narrative tensions">
+              <option value="off">Off</option>
+              <option value="dream">Read on the nightly dream</option>
+              <option value="save">Read on each memory save</option>
+            </select>
+          </div>
+          <p class="muted">Open threads are secrets not yet revealed, promises not yet kept and contradictions not yet settled. They stay open in every reply until the story earns a resolution. Resolve one here once the chat has resolved it.</p>
+          <div id="tensionList"></div>
+        </div>
         <div data-slot="characters"></div>
+      </section>
+      <section class="set-panel" data-panel="worlds" hidden>
+        <p class="muted">A world is the setting of your stories: its places, magic systems, rules, civilisations, factions, technology and other details. Only you see your worlds. A chat or novel uses its own world, the default below, or none. Write one entry per line.</p>
+        <div class="sheet-row"><label for="worldPick">World</label>
+          <span class="slider-ctl"><select id="worldPick" aria-label="World"></select><button id="newWorldBtn" class="ghost small" type="button">+ New world</button></span>
+        </div>
+        <div id="worldEditor" hidden>
+          <label>Name <input id="worldName" maxlength="60"></label>
+          <label>Summary <textarea id="worldSummary" rows="3" maxlength="2000"></textarea></label>
+          <ol class="tok-entries" id="worldSummary_entries" aria-label="Summary token count"></ol>
+          <label>Locations <textarea id="world_locations" rows="4" maxlength="12000"></textarea></label>
+          <ol class="tok-entries" id="world_locations_entries" aria-label="Locations entry token counts" hidden></ol>
+          <label>Magic systems <textarea id="world_magic" rows="3" maxlength="12000"></textarea></label>
+          <ol class="tok-entries" id="world_magic_entries" aria-label="Magic systems entry token counts" hidden></ol>
+          <label>Rules <textarea id="world_rules" rows="3" maxlength="12000"></textarea></label>
+          <ol class="tok-entries" id="world_rules_entries" aria-label="Rules entry token counts" hidden></ol>
+          <label>Civilisations <textarea id="world_civilisations" rows="3" maxlength="12000"></textarea></label>
+          <ol class="tok-entries" id="world_civilisations_entries" aria-label="Civilisations entry token counts" hidden></ol>
+          <label>Factions <textarea id="world_factions" rows="3" maxlength="12000"></textarea></label>
+          <ol class="tok-entries" id="world_factions_entries" aria-label="Factions entry token counts" hidden></ol>
+          <label>Technology <textarea id="world_technology" rows="3" maxlength="12000"></textarea></label>
+          <ol class="tok-entries" id="world_technology_entries" aria-label="Technology entry token counts" hidden></ol>
+          <label>Other details <textarea id="world_other" rows="3" maxlength="12000"></textarea></label>
+          <ol class="tok-entries" id="world_other_entries" aria-label="Other details entry token counts" hidden></ol>
+          <p class="tok-totals" id="worldTotals" aria-live="polite"></p>
+          <p><button id="worldSave" class="ghost small" type="button">Save world</button> <button id="worldDelete" class="ghost small" type="button" hidden>Delete world</button> <span id="worldMsg" class="muted" role="status"></span></p>
+        </div>
+        <div class="sheet-row"><label for="worldDefault">Default world</label>
+          <span class="slider-ctl"><select id="worldDefault" aria-label="Default world"></select><button id="worldDefaultSave" class="ghost small" type="button">Save default</button></span>
+        </div>
+        <p id="worldDefaultMsg" class="muted" role="status"></p>
       </section>
       <section class="set-panel" data-panel="pinned" hidden>
         <p class="muted needs-char">Open a character or group chat to pin facts for it.</p>
@@ -484,6 +548,10 @@
           <span class="slider-ctl"><input id="replySlider" type="range" step="10" aria-label="Reply length target in tokens"><button id="replyReset" class="ghost small" type="button">No target</button></span>
         </div>
         <p id="replyNote" class="muted"></p>
+        <div class="sheet-row"><span>Clip older messages</span>
+          <label class="inline"><input id="clipToggle" type="checkbox"> On</label>
+        </div>
+        <p id="clipNote" class="muted" aria-live="polite"></p>
       </section>
       <section class="set-panel" data-panel="export" hidden>
         <p class="muted needs-char">Open a character to export its chat.</p>
@@ -500,40 +568,6 @@
       <p id="charMsg" class="muted"></p>
     </div>
   </div>
-  <dialog id="groupDlg" class="dlg" aria-labelledby="groupDlgTitle">
-    <h2 id="groupDlgTitle">New group chat</h2>
-    <label class="dlg-field">Name
-      <input id="groupName" maxlength="40" autocomplete="off">
-    </label>
-    <fieldset class="dlg-field">
-      <legend id="groupPickLegend">Characters</legend>
-      <div id="groupPick" class="group-pick"></div>
-    </fieldset>
-    <fieldset id="groupNotesBox" class="dlg-field" hidden>
-      <legend>Notes for each character</legend>
-      <p class="muted">Only you see these. The director and the character both read them when the group replies.</p>
-      <div id="groupNotes"></div>
-    </fieldset>
-    <fieldset id="groupIconBox" class="dlg-field" hidden>
-      <legend>Picture</legend>
-      <p class="muted">The picture shown beside this group in the sidebar. Only you see it. A new picture replaces the old one.</p>
-      <input id="groupIconFile" type="file" accept="image/png,image/jpeg" aria-label="Group picture">
-      <p><button id="groupIconRemove" class="ghost small" type="button" hidden>Remove picture</button> <span id="groupIconMsg" class="muted" role="status"></span></p>
-    </fieldset>
-    <fieldset id="groupBgBox" class="dlg-field" hidden>
-      <legend>Background</legend>
-      <p class="muted">Shown behind this group's chat. Only you see it. A new picture replaces the old one.</p>
-      <input id="groupBgFile" type="file" accept="image/*" aria-label="Group background picture">
-      <p><button id="groupBgRemove" class="ghost small" type="button" hidden>Remove background</button> <span id="groupBgMsg" class="muted" role="status"></span></p>
-    </fieldset>
-    <p id="groupMsg" class="error-msg" role="alert"></p>
-    <div class="dlg-actions">
-      <button id="groupDelete" class="ghost small" type="button" hidden>Delete group</button>
-      <span class="grow"></span>
-      <button id="groupCancel" class="ghost" type="button">Cancel</button>
-      <button id="groupSave" type="button">Save</button>
-    </div>
-  </dialog>
   <dialog id="palaceDlg" class="dlg" aria-labelledby="palaceDlgTitle">
     <h2 id="palaceDlgTitle">Mind Palace</h2>
     <p class="muted">Your own entries for this character or group. A character's starting palace was copied to your account the first time you chatted with it. Changes apply from your next message.</p>

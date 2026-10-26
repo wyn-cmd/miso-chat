@@ -9,6 +9,8 @@ let editableSet = new Set();   // characters this account may change (shows the 
 let busy = false;     // a turn is streaming: keep the character list and buttons locked
 let picking = false;   // Select mode is on: every line shows a pick box
 const picked = new Set();   // saved-chat positions picked for deletion
+let novelNames = {};           // novel ID -> its name, for the sidebar and the chat header
+let worldCache = { worlds: [], default: null };   // the account's worlds and default, as the server last sent them
 
 function setSidebar(open) {
   $("sidebar").classList.toggle("open", open);
@@ -22,7 +24,6 @@ function mobileNav() { return window.matchMedia("(max-width: 760px)").matches; }
 function closeSidebar() { if (mobileNav()) setSidebar(false); }
 
 // chat font is chosen per browser: sans-serif, Merriweather (serif) or monospace
-const FONT_CHOICES = ["sans", "serif", "mono"];
 // Chat text size, per browser (12px to 24px, default 15px). Only the message text and the input change;
 // speaker names, notes and the thinking panel keep their own sizes.
 const SIZE_MIN = 12, SIZE_MAX = 24, SIZE_DEFAULT = 15;
@@ -38,10 +39,9 @@ function applySize(px) {
   return n;
 }
 
+// The chat and interface font, shared with every page through applyFontChoice in theme-init.js.
 function applyFont(name) {
-  const font = FONT_CHOICES.includes(name) ? name : "sans";
-  document.body.classList.remove("font-sans", "font-serif", "font-mono");
-  document.body.classList.add("font-" + font);
+  const font = window.applyFontChoice(name);
   $("fontSelect").value = font;
   localStorage.setItem("rp_font", font);
 }
@@ -453,7 +453,7 @@ function applyCharSettings(d) {
   $("winSlider").value = w;
   $("winVal").textContent = w + (d.window == null ? " (default)" : "");
   $("winReset").disabled = d.window == null;
-  $("winNote").textContent = `Messages from the chat sent to the model with each reply. Default: ${d.window_defaults.solo} for 1:1 chats, ${d.window_defaults.group} for group chats.`;
+  $("winNote").textContent = `Messages from the chat sent to the model with each reply, at least this many: the window moves in steps of 10, so it can run up to 9 messages over. Default: ${d.window_defaults.solo} for 1:1 chats, ${d.window_defaults.group} for group chats.`;
 }
 
 async function saveCharSettings(patch) {
@@ -573,10 +573,13 @@ async function refreshContext() {
   }
 }
 
+// The next prompt's size, and how much of it the provider can reuse from its cache: the system text and the window
+// texts sent last time, up to the first change. The text still in the input box is all new.
 function nextPromptTokens() {
   if (!ctxInfo) return null;
   const typed = Math.ceil(($("msg").value || "").length / 4);
-  return ctxInfo.system_tokens + ctxInfo.window_tokens + typed;
+  const total = ctxInfo.system_tokens + ctxInfo.window_tokens + typed;
+  return { total, cached: Math.min(ctxInfo.cached_tokens || 0, total) };
 }
 
 function updateEstimate() {
@@ -587,10 +590,17 @@ function updateEstimate() {
     label.textContent = "";
     return;
   }
-  // When this account has quenching on, the marker says how much the window was trimmed for this reply.
-  const saved = ctxInfo.quench ? (ctxInfo.quench_saved || 0) : 0;
-  label.textContent = "next prompt \u2248 " + n.toLocaleString() + " tokens"
-    + (saved ? " (quenched, " + saved.toLocaleString() + " saved)" : "");
+  const fresh = n.total - n.cached;
+  // One figure per line: the whole prompt, the part the provider can reuse, and the part that is new.
+  const lines = ["prompt \u2248 " + n.total.toLocaleString() + " tokens",
+                 "\u2248 " + n.cached.toLocaleString() + " cached",
+                 "\u2248 " + fresh.toLocaleString() + " new"];
+  // Quenching and clipping savings for this prompt, when either is on.
+  const saved = (ctxInfo.quench ? (ctxInfo.quench_saved || 0) : 0) + (ctxInfo.clip ? (ctxInfo.clip_saved || 0) : 0);
+  if (saved) lines.push(saved.toLocaleString() + " saved");
+  label.textContent = lines.join("\n");
+  label.title = "Estimates, about 4 characters a token. Reused from cache: the part of this prompt the provider can "
+    + "reuse, which holds only while the system text and the older messages stay the same as the last reply's.";
 }
 
 function placeMarker() {
@@ -957,7 +967,25 @@ function renderAccountPrefs() {
   $("quenchNote").textContent = on
     ? "On. Older messages are trimmed for each reply, within the fidelity floor."
     : "Off. Nothing is trimmed from the messages the model gets.";
+  const clip = !!(me && me.clip);
+  $("clipToggle").checked = clip;
+  $("clipNote").textContent = clip
+    ? "On. Messages older than the newest 8 or more are cut to about 550 characters; the summary keeps what is cut."
+    : "Off. Older messages are sent in full.";
 }
+
+async function saveClip(on) {
+  try {
+    const data = await api("POST", "/api/settings", { clip: on });
+    if (me) me.clip = !!data.clip;
+    renderAccountPrefs();
+    refreshContext();
+  } catch (err) {
+    $("clipNote").textContent = err.message;
+    renderAccountPrefs();
+  }
+}
+$("clipToggle").addEventListener("change", (e) => saveClip(e.target.checked));
 
 async function saveQuench(on) {
   try {
@@ -1020,7 +1048,7 @@ function markActive() {
     if (on) b.setAttribute("aria-current", "true");
     else b.removeAttribute("aria-current");
   }
-  setChatHeader(current || "");
+  setChatHeader(displayName(current || ""));
 }
 
 async function loadCharacters(choose = true) {
@@ -1045,9 +1073,11 @@ async function loadCharacters(choose = true) {
   }
   for (const g of data.groups) groups.appendChild(g.private ? privateGroupRow(g) : charButton(g.name));
   $("groupBox").hidden = false;   // always shown, so any account can start its own group
+  renderNovels(data.novels || []);
+  worldCache = { worlds: data.worlds || [], default: data.world_default || null };
   paintUnread();
   soloNames = data.solo || [];
-  const all = [...data.solo, ...data.groups.map((g) => g.name)];
+  const all = [...data.solo, ...data.groups.map((g) => g.name), ...(data.novels || []).map((n) => n.id)];
   // A card on the home page sends the name as ?c=; that wins over the last character used.
   const asked = new URLSearchParams(location.search).get("c");
   const saved = localStorage.getItem("rp_character");
@@ -1066,7 +1096,7 @@ function applyChatArt(name) {
   // A character without backgrounds of its own, or no character at all, takes a shared default.
   const pool = ids.length
     ? ids.map((b) => "/api/background/" + encodeURIComponent(name) + "?b=" + encodeURIComponent(b))
-    : defaultArt;
+    : lookDefaults(defaultArt);
   if (pool.length) {
     // One picture is chosen at random each time the page or character opens.
     const url = pool[Math.floor(Math.random() * pool.length)];
@@ -1094,6 +1124,8 @@ async function pickCharacter(name) {
   closeSidebar();
   showMemory(false);
   $("chatErr").textContent = "";
+  $("log").classList.toggle("novel", isNovelName(name));   // a novel's replies are drawn as prose
+  refreshStory().catch(() => {});
   await loadHistory();
 }
 
@@ -2039,6 +2071,18 @@ setInterval(refreshUnread, 60000);
   });
 })();
 
+// The look itself: Spore (1.5.0) or Hyacinth, the 1.4.1 look. Kept per browser, like the light/dark theme.
+(function uiThemePicker() {
+  const pick = document.getElementById("uiThemePick");
+  if (!pick) return;
+  pick.value = uiThemeName();
+  pick.addEventListener("change", (e) => {
+    applyUi(e.target.value);
+    const accent = document.getElementById("accentPick");
+    if (accent && !savedAccent()) accent.value = accentDefault();
+  });
+})();
+
 // Settings sheet. Ten cards (nine categories and Admin) open one category at a time. On phones the chat bar's font, name
 // badge and size controls, and the sidebar's model, persona, character tools and memory move into the sheet. On desktop
 // they move in only while the sheet is open and go back to their places when it closes.
@@ -2227,176 +2271,6 @@ setInterval(refreshUnread, 60000);
 
 // ---- Private group chats: an account's own groups of solo characters, with a note for each member.
 let soloNames = [];
-let groupEditing = null;       // id of the group being edited; null when a new one is being made
-let groupEditingName = "";
-let groupLimits = { min_members: 2, max_members: 8, note_max: 500 };
-
-function privateGroupRow(g) {
-  const row = el("div", "", "group-row");
-  row.appendChild(charButton(g.name));
-  const edit = el("button", "Edit", "ghost small group-edit");
-  edit.type = "button";
-  edit.title = "Change this group's characters and notes";
-  edit.setAttribute("aria-label", "Edit group " + g.name);
-  edit.addEventListener("click", () => openGroupDialog(g.id));
-  row.appendChild(edit);
-  return row;
-}
-
-async function refreshGroups() {
-  const data = await api("GET", "/api/characters");
-  soloNames = data.solo || [];
-  colorMap = data.colors || {};
-  const groups = $("groupList");
-  groups.textContent = "";
-  for (const g of data.groups) groups.appendChild(g.private ? privateGroupRow(g) : charButton(g.name));
-  markActive();
-  return data.groups.map((g) => g.name);
-}
-
-async function openGroupDialog(gid) {
-  $("groupMsg").textContent = "";
-  const data = await api("GET", "/api/groups");
-  groupLimits = { min_members: data.min_members, max_members: data.max_members, note_max: data.note_max };
-  const item = gid ? data.groups.find((g) => g.id === gid) : null;
-  if (gid && !item) {
-    $("chatErr").textContent = "That group no longer exists.";
-    return;
-  }
-  groupEditing = item ? item.id : null;
-  groupEditingName = item ? item.name : "";
-  $("groupDlgTitle").textContent = item ? "Edit group chat" : "New group chat";
-  $("groupPickLegend").textContent = `Characters (${groupLimits.min_members} to ${groupLimits.max_members})`;
-  $("groupName").value = item ? item.name : "";
-  $("groupDelete").hidden = !item;
-  const chosen = new Set(item ? item.members.map((m) => m.name) : []);
-  const known = item ? item.notes : {};
-  const pick = $("groupPick");
-  pick.replaceChildren();
-  for (const name of soloNames) {
-    const label = el("label", "", "group-check");
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.value = name;
-    box.checked = chosen.has(name);
-    box.addEventListener("change", () => renderGroupNotes(known));
-    label.append(box, document.createTextNode(" " + name));
-    pick.appendChild(label);
-  }
-  renderGroupNotes(known);
-  // A group's background can be set once the group exists; a new group gets one after it is saved.
-  $("groupBgBox").hidden = !item;
-  $("groupBgMsg").textContent = "";
-  $("groupBgFile").value = "";
-  $("groupBgRemove").hidden = !(item && item.has_background);
-  $("groupIconBox").hidden = !item;
-  $("groupIconMsg").textContent = "";
-  $("groupIconFile").value = "";
-  $("groupIconRemove").hidden = !(item && item.has_icon);
-  $("groupDlg").showModal();
-  $("groupName").focus();
-}
-
-// Sends a private group's picture or background, or removes it, then reloads the lists so the chat shows it.
-// kind is "icon" (the sidebar picture) or "background" (behind the chat).
-async function changeGroupArt(kind, method, file) {
-  if (!groupEditing) return;
-  const icon = kind === "icon";
-  const msg = $(icon ? "groupIconMsg" : "groupBgMsg");
-  const remove = $(icon ? "groupIconRemove" : "groupBgRemove");
-  const input = $(icon ? "groupIconFile" : "groupBgFile");
-  msg.textContent = method === "DELETE" ? "Removing…" : "Uploading…";
-  try {
-    const r = await fetch("/api/groups/" + encodeURIComponent(groupEditing) + "/" + kind, {
-      method,
-      headers: { "X-Requested-With": "roleplay", "Content-Type": "application/octet-stream" },
-      credentials: "same-origin",
-      body: method === "POST" ? await file.arrayBuffer() : undefined,
-    });
-    if (!r.ok) {
-      let data = {};
-      try { data = await r.json(); } catch (e) { /* no body */ }
-      throw apiError(r.status, data);
-    }
-    const data = await r.json();
-    const has = icon ? data.has_icon : data.has_background;
-    remove.hidden = !has;
-    msg.textContent = has ? (icon ? "Picture saved." : "Background saved.") : (icon ? "Picture removed." : "Background removed.");
-    input.value = "";
-    await loadCharacters(false);
-    applyChatArt(current);
-  } catch (err) {
-    msg.textContent = err.message;
-  }
-}
-$("groupBgFile").addEventListener("change", () => {
-  const file = $("groupBgFile").files[0];
-  if (file) changeGroupArt("background", "POST", file);
-});
-$("groupBgRemove").addEventListener("click", () => changeGroupArt("background", "DELETE"));
-$("groupIconFile").addEventListener("change", () => {
-  const file = $("groupIconFile").files[0];
-  if (file) changeGroupArt("icon", "POST", file);
-});
-$("groupIconRemove").addEventListener("click", () => changeGroupArt("icon", "DELETE"));
-
-// Rebuilds one note box per ticked character. Text already typed is kept when a tick changes.
-function renderGroupNotes(known) {
-  const typed = {};
-  for (const ta of $("groupNotes").querySelectorAll("textarea")) typed[ta.dataset.name] = ta.value;
-  const chosen = [...$("groupPick").querySelectorAll("input:checked")].map((b) => b.value);
-  const box = $("groupNotes");
-  box.replaceChildren();
-  $("groupNotesBox").hidden = chosen.length === 0;
-  for (const name of chosen) {
-    const wrap = el("label", "", "group-note");
-    wrap.appendChild(el("span", name, "group-note-name"));
-    const ta = document.createElement("textarea");
-    ta.dataset.name = name;
-    ta.maxLength = groupLimits.note_max;
-    ta.rows = 2;
-    ta.value = typed[name] !== undefined ? typed[name] : (known[name] || "");
-    wrap.appendChild(ta);
-    box.appendChild(wrap);
-  }
-}
-
-async function saveGroup() {
-  $("groupMsg").textContent = "";
-  const members = [...$("groupPick").querySelectorAll("input:checked")].map((b) => b.value);
-  const notes = {};
-  for (const ta of $("groupNotes").querySelectorAll("textarea")) {
-    const text = ta.value.trim();
-    if (text) notes[ta.dataset.name] = text;
-  }
-  const body = { name: $("groupName").value, members, notes };
-  const wasOpen = groupEditing !== null && current === groupEditingName;
-  try {
-    const saved = groupEditing
-      ? await api("PUT", "/api/groups/" + encodeURIComponent(groupEditing), body)
-      : await api("POST", "/api/groups", body);
-    $("groupDlg").close();
-    const names = await refreshGroups();
-    if (wasOpen && !busy) await pickCharacter(saved.name);
-    else if (current && !names.includes(current) && !soloNames.includes(current)) await loadCharacters();
-  } catch (err) {
-    $("groupMsg").textContent = err.message;
-  }
-}
-
-async function deleteGroup() {
-  if (!groupEditing) return;
-  if (!confirm("Delete this group chat? Its messages, memory and notes are removed. The characters are kept.")) return;
-  try {
-    await api("DELETE", "/api/groups/" + encodeURIComponent(groupEditing));
-    $("groupDlg").close();
-    const names = await refreshGroups();
-    if (current && !names.includes(current) && !soloNames.includes(current)) await loadCharacters();
-  } catch (err) {
-    $("groupMsg").textContent = err.message;
-  }
-}
-
 // ---- Branch tree. Everyone sees their own; admins can also open any account's tree, read-only.
 async function openTree() {
   const admin = !!(me && me.is_admin);
@@ -2476,10 +2350,304 @@ async function switchFromTree(id) {
   }
 }
 
-$("newGroupBtn").addEventListener("click", () => openGroupDialog(null));
-$("groupSave").addEventListener("click", saveGroup);
-$("groupCancel").addEventListener("click", () => $("groupDlg").close());
-$("groupDelete").addEventListener("click", deleteGroup);
 $("branchTree").addEventListener("click", openTree);
 $("treeAccount").addEventListener("change", loadTree);
 $("treeClose").addEventListener("click", () => $("treeDlg").close());
+
+// ---- Novels and worlds. A novel is a narrator's story for a cast of characters, in a world. A world is the setting:
+// its places, magic, rules, civilisations and other details. Both belong to the account alone.
+function isNovelName(name) {
+  return typeof name === "string" && name.startsWith("nvl-");
+}
+
+function displayName(name) {
+  return novelNames[name] || name;
+}
+
+function novelButton(n) {
+  const b = el("button", "", "char-item");
+  b.type = "button";
+  b.dataset.name = n.id;
+  b.dataset.chatName = n.id;   // where the missed check-in dot goes
+  b.disabled = busy;
+  b.appendChild(el("span", n.name, "char-name"));
+  b.addEventListener("click", () => pickCharacter(n.id));
+  return b;
+}
+
+// A private group's row in the sidebar: the chat, and an edit link to its page.
+function privateGroupRow(g) {
+  const row = el("div", "", "group-row");
+  row.appendChild(charButton(g.name));
+  const edit = el("button", "Edit", "ghost small group-edit");
+  edit.type = "button";
+  edit.title = "Change this group's characters and notes";
+  edit.setAttribute("aria-label", "Edit group " + g.name);
+  edit.addEventListener("click", () => { location.href = "/create/group?id=" + encodeURIComponent(g.id); });
+  row.appendChild(edit);
+  return row;
+}
+
+function novelRow(n) {
+  const row = el("div", "", "group-row");
+  row.appendChild(novelButton(n));
+  const edit = el("button", "Edit", "ghost small group-edit");
+  edit.type = "button";
+  edit.title = "Change this novel's name, cast or world";
+  edit.setAttribute("aria-label", "Edit novel " + n.name);
+  edit.addEventListener("click", () => { location.href = "/create/novel?id=" + encodeURIComponent(n.id); });
+  row.appendChild(edit);
+  return row;
+}
+
+// Draws the novel list in the sidebar and remembers each novel's name for the header.
+function renderNovels(list) {
+  novelNames = {};
+  for (const n of list) novelNames[n.id] = n.name;
+  const box = $("novelList");
+  box.textContent = "";
+  for (const n of list) box.appendChild(novelRow(n));
+  if (!list.length) box.appendChild(el("p", "No novels yet. A narrator tells a novel with the characters you pick.", "muted"));
+}
+
+// The world choices for a novel or chat: the account default (""), no world ("none"), or one of the account's worlds.
+function fillWorldSelect(sel, selected) {
+  sel.textContent = "";
+  sel.appendChild(new Option("Account default", ""));
+  sel.appendChild(new Option("No world", "none"));
+  for (const w of worldCache.worlds) sel.appendChild(new Option(w.name, w.id));
+  sel.value = selected || "";
+  if (sel.value !== (selected || "")) sel.value = "";   // a world that is gone falls back to the default
+}
+
+async function refreshWorldCache() {
+  worldCache = await api("GET", "/api/worlds");
+  renderWorldEditor();
+}
+
+// ---- Worlds (settings panel)
+const WORLD_SECTIONS = ["locations", "magic", "rules", "civilisations", "factions", "technology", "other"];
+let worldEditing = null;   // the world ID being edited; null while a new one is made
+
+function renderWorldEditor() {
+  const pick = $("worldPick");
+  pick.textContent = "";
+  pick.appendChild(new Option("New world", ""));
+  for (const w of worldCache.worlds) pick.appendChild(new Option(w.name, w.id));
+  pick.value = worldEditing || "";
+  const def = $("worldDefault");
+  def.textContent = "";
+  def.appendChild(new Option("None", ""));
+  for (const w of worldCache.worlds) def.appendChild(new Option(w.name, w.id));
+  def.value = worldCache.default || "";
+}
+
+function openWorld(id) {
+  worldEditing = id || null;
+  const item = id ? worldCache.worlds.find((w) => w.id === id) : null;
+  $("worldName").value = item ? item.name : "";
+  $("worldSummary").value = item ? item.summary : "";
+  for (const key of WORLD_SECTIONS) $("world_" + key).value = item ? (item.sections[key] || []).join("\n") : "";
+  $("worldDelete").hidden = !item;
+  $("worldEditor").hidden = false;
+  $("worldMsg").textContent = "";
+  renderWorldEditor();
+  updateWorldCounters();
+}
+
+// The token limits, the same numbers as web/worlds.py (ENTRY_TOKENS, SECTION_TOKENS). The server refuses an over-limit
+// save; this only shows the count while the user types.
+const WORLD_ENTRY_TOKENS = 300;
+const WORLD_SECTION_TOKENS = { locations: 1500, magic: 1500, rules: 1500, civilisations: 1500, factions: 1500, technology: 1500, other: 1500 };
+const WORLD_TITLES = { locations: "Locations", magic: "Magic systems", rules: "Rules", civilisations: "Civilisations", factions: "Factions", technology: "Technology", other: "Other details" };
+const WORLD_SUMMARY_TOKENS = 250;
+
+// The same estimate as worlds.estimate_tokens: about four characters a token, counted in characters, not UTF-16 units.
+function worldTokens(text) {
+  return Math.ceil(Array.from(text).length / 4);
+}
+
+// Each line is one entry, stored the way web/worlds.py normalise_entry stores it: whitespace squeezed, the [NEW] tag and
+// a leading bullet dropped. A number is kept.
+function worldEntry(s) {
+  return s.split(/\s+/).filter(Boolean).join(" ").replace(/\s*\[new\]/gi, "").replace(/^[-*•]\s+/, "").trim();
+}
+
+function worldEntries(text) {
+  return text.split("\n").map(worldEntry).filter(Boolean);
+}
+
+// The summary is one entry, so it shows its count under its own box.
+function updateSummaryCounter() {
+  const list = $("worldSummary_entries");
+  const cost = worldTokens(worldEntries($("worldSummary").value).join(" "));
+  list.textContent = "";
+  const li = document.createElement("li");
+  li.classList.toggle("over", cost > WORLD_SUMMARY_TOKENS);
+  const label = document.createElement("span");
+  label.textContent = "Summary";
+  const count = document.createElement("span");
+  count.textContent = `${cost} / ${WORLD_SUMMARY_TOKENS}`;
+  li.append(label, count);
+  list.appendChild(li);
+}
+
+// Each entry shows its own count under its box, and the section totals sit at the foot beside the save button.
+function updateWorldCounters() {
+  updateSummaryCounter();
+  const totals = $("worldTotals");
+  totals.textContent = "";
+  for (const key of WORLD_SECTIONS) {
+    const entries = worldEntries($("world_" + key).value);
+    const list = $("world_" + key + "_entries");
+    list.textContent = "";
+    list.hidden = entries.length === 0;
+    let total = 0;
+    entries.forEach((text, i) => {
+      const cost = worldTokens(text);
+      total += cost;
+      const li = document.createElement("li");
+      li.classList.toggle("over", cost > WORLD_ENTRY_TOKENS);
+      const label = document.createElement("span");
+      const head = Array.from(text).slice(0, 36).join("");
+      label.textContent = `${i + 1}. ${head}${Array.from(text).length > 36 ? "..." : ""}`;
+      const count = document.createElement("span");
+      count.textContent = `${cost} / ${WORLD_ENTRY_TOKENS}`;
+      li.append(label, count);
+      list.appendChild(li);
+    });
+    const limit = WORLD_SECTION_TOKENS[key];
+    const part = document.createElement("span");
+    part.classList.toggle("over", total > limit);
+    part.textContent = `${WORLD_TITLES[key]} ${total} / ${limit}`;
+    totals.appendChild(part);
+  }
+}
+
+for (const key of WORLD_SECTIONS) $("world_" + key).addEventListener("input", updateWorldCounters);
+$("worldSummary").addEventListener("input", updateSummaryCounter);
+
+async function saveWorld() {
+  $("worldMsg").textContent = "";
+  const sections = {};
+  for (const key of WORLD_SECTIONS) {
+    sections[key] = $("world_" + key).value.split("\n").map((s) => s.trim()).filter(Boolean);
+  }
+  const body = { name: $("worldName").value, summary: $("worldSummary").value, sections };
+  try {
+    const saved = worldEditing
+      ? await api("PUT", "/api/worlds/" + encodeURIComponent(worldEditing), body)
+      : await api("POST", "/api/worlds", body);
+    await refreshWorldCache();
+    openWorld(saved.id);
+    $("worldMsg").textContent = "Saved.";
+    if (current) await refreshStory();
+  } catch (err) {
+    $("worldMsg").textContent = err.message;
+  }
+}
+
+async function deleteWorld() {
+  if (!worldEditing) return;
+  if (!confirm("Delete this world? Novels that used it fall back to the account default.")) return;
+  try {
+    await api("DELETE", "/api/worlds/" + encodeURIComponent(worldEditing));
+    worldEditing = null;
+    $("worldEditor").hidden = true;
+    await refreshWorldCache();
+    if (current) await refreshStory();
+  } catch (err) {
+    $("worldMsg").textContent = err.message;
+  }
+}
+
+async function saveDefaultWorld() {
+  try {
+    const data = await api("POST", "/api/worlds/default", { world: $("worldDefault").value || null });
+    worldCache.default = data.default;
+    $("worldDefaultMsg").textContent = "Saved.";
+    if (current) await refreshStory();
+  } catch (err) {
+    $("worldDefaultMsg").textContent = err.message;
+  }
+}
+
+// ---- Story panel: the world a chat uses, and its narrative tensions (Character settings).
+async function refreshStory() {
+  const name = current;
+  $("storyBox").hidden = !name;
+  if (!name) return;
+  await refreshWorldCache();
+  const data = await api("GET", "/api/tensions?character=" + encodeURIComponent(name));
+  if (name !== current) return;   // the user switched chats while this was loading
+  fillWorldSelect($("storyWorld"), data.world || "");
+  $("tensionMode").value = data.mode;
+  renderTensions(data.items);
+}
+
+function renderTensions(items) {
+  const box = $("tensionList");
+  box.textContent = "";
+  const open = items.filter((t) => t.status === "open");
+  const done = items.filter((t) => t.status === "resolved").slice(-5).reverse();
+  if (!open.length) box.appendChild(el("p", "No open threads right now.", "muted"));
+  for (const t of open) box.appendChild(tensionRow(t));
+  if (done.length) {
+    box.appendChild(el("p", "Recently resolved", "muted"));
+    for (const t of done) {
+      const text = t.how ? t.text + " Resolved: " + t.how : t.text;
+      box.appendChild(el("p", text, "tension-done muted"));
+    }
+  }
+}
+
+function tensionRow(t) {
+  const row = el("div", "", "tension-row");
+  row.appendChild(el("div", t.kind + (t.who ? " (" + t.who + ")" : ""), "tension-kind"));
+  row.appendChild(el("p", t.text, "tension-text"));
+  const how = document.createElement("input");
+  how.type = "text";
+  how.maxLength = 240;
+  how.placeholder = "How it resolved (optional)";
+  how.setAttribute("aria-label", "How it resolved");
+  const close = el("button", "Resolve", "ghost small");
+  close.type = "button";
+  close.addEventListener("click", () => tensionAction("/api/tensions/resolve", { id: t.id, how: how.value }));
+  const drop = el("button", "Remove", "ghost small");
+  drop.type = "button";
+  drop.addEventListener("click", () => tensionAction("/api/tensions/drop", { id: t.id }));
+  row.append(how, close, drop);
+  return row;
+}
+
+async function tensionAction(url, extra) {
+  try {
+    const data = await api("POST", url, { character: current, ...extra });
+    renderTensions(data.items);
+  } catch (err) {
+    $("chatErr").textContent = err.message;
+  }
+}
+
+document.querySelector('.set-card[data-panel="worlds"]').addEventListener("click", () => {
+  refreshWorldCache().catch(() => {});   // the Worlds panel always shows the account's current worlds
+});
+$("newWorldBtn").addEventListener("click", () => openWorld(null));
+$("worldPick").addEventListener("change", (e) => openWorld(e.target.value || null));
+$("worldSave").addEventListener("click", saveWorld);
+$("worldDelete").addEventListener("click", deleteWorld);
+$("worldDefaultSave").addEventListener("click", saveDefaultWorld);
+$("storyWorld").addEventListener("change", async (e) => {
+  try {
+    await api("POST", "/api/chat-world", { character: current, world: e.target.value });
+  } catch (err) {
+    $("chatErr").textContent = err.message;
+  }
+});
+$("tensionMode").addEventListener("change", async (e) => {
+  try {
+    await api("POST", "/api/tensions/mode", { character: current, mode: e.target.value });
+  } catch (err) {
+    $("chatErr").textContent = err.message;
+  }
+});
