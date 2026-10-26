@@ -133,7 +133,7 @@ function creatorHandle(name, linkable) {
 function renderCard(card, container) {
   const wrap = el("div", "", "home-card");
   wrap.dataset.chatName = card.name;   // where the missed check-in dot goes
-  const artIds = (card.backgrounds || []).length ? card.backgrounds : (card.default_backgrounds || []);
+  const artIds = (card.backgrounds || []).length ? card.backgrounds : lookDefaults(card.default_backgrounds);
   if (artIds.length) {
     wrap.classList.add("has-art");
     buildArt(wrap, card.name, artIds, container);
@@ -199,7 +199,7 @@ function showInfo(card) {
   const dlg = $("infoDialog");
   stopArt(dlg);
   dlg.querySelector(":scope > .art-stack")?.remove();
-  const ids = (card.backgrounds || []).length ? card.backgrounds : (card.default_backgrounds || []);
+  const ids = (card.backgrounds || []).length ? card.backgrounds : lookDefaults(card.default_backgrounds);
   dlg.classList.toggle("has-art", ids.length > 0);
   if (ids.length) buildArt(dlg, card.name, ids, dlg);
   dlg.addEventListener("close", () => stopArt(dlg), { once: true });

@@ -4,7 +4,24 @@ data/
 users/
 *.bak
 
+# per-install runtime files: never belong in a repo
+substitutions.json
+personas.json
+config.json
+device_id.json
+peers.json
+user_id.json
+request_tracker.json
+token_tracker.json
+
 # Python
 __pycache__/
 *.pyc
 .venv/
+
+# release and design tooling: local only
+.release/
+dist/
+.taste-skill/
+.hallmark/
+CLAUDE.md

@@ -1,0 +1,93 @@
+/* Moonlit: the third look. It loads over redesign.css, so the layout, ids and behaviour are Spore's, and this sheet
+   changes the surface. Elevation is a lightness step with no shadow at rest; colour is kept for the data and for the
+   reader's own marks; the primary action is an inverted pill (ink on the ground), not an accent fill. Every value is a
+   token, and the three rules below (dark, light, and the shared surface) are the whole theme. The sheet is applied by
+   the data-look="moon" attribute that common.js and theme-init.js set on <html>. */
+
+/* Faces: one grotesk. Instrument Sans is already bundled, so the display face is the body face at a heavier weight. */
+:root[data-look="moon"] {
+  --font-display: "Instrument Sans", system-ui, sans-serif;
+  --display-weight: 600;
+  --tracking-display: -0.018em;
+  --grain: 0;
+  --radius-card: 12px;
+  --radius-field: 8px;
+  --shadow-card: none;
+  --color-error: #f08a8a;
+  color-scheme: dark;
+  /* dark, the default: a cool near-black with a slate cast, cards a lightness step above it */
+  --color-paper: #0b1016; --color-paper-2: #111922; --color-paper-3: #1a2430;
+  --color-ink: #e8eef5; --color-ink-2: #c4cfdb; --color-muted: #8c9aab;
+  --color-rule: #243140;
+  --color-accent: #8fd3cc; --color-accent-2: #b5e6e1; --color-accent-ink: #071816; --color-focus: #b5e6e1;
+  --color-jade: #86b8d9; --color-jade-ink: #06141c;
+  --meta-theme: #0b1016;
+}
+
+/* light, the moon by day: the same ink and the same silver-teal, darkened to hold 4.5:1 on paper */
+:root[data-look="moon"][data-theme="light"] {
+  color-scheme: light;
+  --color-paper: #eef2f6; --color-paper-2: #ffffff; --color-paper-3: #e2e9f1;
+  --color-ink: #111b26; --color-ink-2: #34465a; --color-muted: #566879;
+  --color-rule: #cfd9e3;
+  --color-accent: #1d7770; --color-accent-2: #155f5a; --color-accent-ink: #f4fbfa; --color-focus: #1d7770;
+  --color-jade: #2f6f98; --color-jade-ink: #f4f9fc;
+  --meta-theme: #eef2f6;
+  --color-error: #b3262e;
+}
+
+/* The primary action is the page's ink turned into a pill: a white pill with a dark label in the dark look, the
+   reverse in the light one. Secondary and ghost controls keep their outlines from redesign.css. */
+:root[data-look="moon"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn) {
+  background: var(--color-ink); color: var(--color-paper);
+}
+:root[data-look="moon"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):hover {
+  background: var(--color-ink-2);
+}
+:root[data-look="moon"] button:not(.ghost):disabled {
+  background: var(--color-paper-3); color: var(--color-muted); box-shadow: none;
+}
+
+/* Navigation recedes: the active character is marked by its label going to full ink, not by a filled row. */
+:root[data-look="moon"] .char-item {
+  background: transparent; border-color: transparent; box-shadow: none;
+}
+:root[data-look="moon"] .char-item .char-name { color: var(--color-muted); }
+:root[data-look="moon"] .char-item:hover:not(:disabled) { background: var(--color-paper-2); }
+:root[data-look="moon"] .char-item.active { background: transparent; border-color: transparent; box-shadow: none; }
+:root[data-look="moon"] .char-item.active .char-name { color: var(--color-ink); }
+
+/* Chat: the reader's lines are flat tone steps, not bubbles; the user's own lines carry a thin sky edge. */
+:root[data-look="moon"] .line {
+  background: var(--color-paper-2); border: 0; box-shadow: none; border-radius: 10px;
+}
+:root[data-look="moon"] .line.mine, :root[data-look="moon"] .line.mine:not(.note) {
+  box-shadow: inset 2px 0 0 var(--color-jade);
+}
+:root[data-look="moon"] .line.note, :root[data-look="moon"] .line.event {
+  background: transparent; box-shadow: inset 2px 0 0 var(--color-rule);
+}
+
+/* Settings panels and cards separate by tone, never by a line or a shadow. */
+:root[data-look="moon"] .set-card, :root[data-look="moon"] .home-card {
+  box-shadow: none; border-color: transparent;
+}
+
+/* Muted labels read as a second ink, not as disabled text. */
+:root[data-look="moon"] .muted { color: var(--color-muted); }
+
+/* Chat art: the character's picture sits behind the page. Moonlit lays its own scrim over the picture, in the ground's
+   colour, so the ink holds on any picture; the reader's brightness setting still works as a layer beneath it. */
+:root[data-look="moon"] { --moon-scrim: color-mix(in oklab, var(--color-paper) 76%, transparent); }
+:root[data-look="moon"] body.page-art {
+  background: linear-gradient(var(--moon-scrim), var(--moon-scrim)), linear-gradient(var(--shade-overlay), var(--shade-overlay)), var(--chat-art) center / cover no-repeat fixed; /* taste-skill-ignore: a flat neutral scrim over a photograph */
+}
+:root[data-look="moon"] #chatSection.has-art .log {
+  background: color-mix(in oklab, var(--color-paper-2) 62%, transparent);
+}
+
+/* Phone header: the chat's name is squeezed to a sliver beside the wordmark. Moonlit's narrower wordmark leaves room
+   for that sliver, so it is hidden at the same width where Spore hides it, rather than shown as one letter. */
+@media (max-width: 760px) {
+  :root[data-look="moon"] #headerChat .chat-title { display: none; }
+}

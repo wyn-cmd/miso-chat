@@ -2,6 +2,52 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.5.0 - 2026-10-26
+
+A feature and visual release. It adds worlds for stories, novels, narrative tension and a second reading look. It keeps long chats cheaper to run without losing the thread, through clipping and quenching that work with the provider's prompt cache. It also hardens sign-in for internet-facing use. The server's endpoints and data layout are the same as 1.4.1, so chats, characters, accounts and the switches from 1.4.1 carry over. Everyone is signed out once, because the login cookie has a new name, and the terminal client must be the 1.5.0 file.
+
+### Added
+- Worlds, under Settings, Worlds. An account keeps up to 20 worlds, private to it. Each has a name, a summary and seven sections: locations, magic systems, rules, civilisations, factions, technology and other details. A chat or novel uses its own world, the account default, or none.
+- Token counts while you write a world. Each entry shows its own count, and the section totals sit by Save. An entry can be up to 300 estimated tokens, a section up to 1,500 (Other details too), and a summary up to 250. A save over a limit is refused with a message that names the entry or section.
+- Bullets and `[NEW]` tags at the start of a world line are removed when it is saved. Numbers are kept, so a numbered rules list stays citable. The world block in the prompt is capped at 10,000 estimated tokens.
+- Novels. A narrator tells a story for a cast of solo characters, in one world or none. The narrator sets the scene and voices the cast in the third person. A novel has its own chat, memory and tensions, and only its owner can see it. Novels are listed apart from group chats.
+- Narrative tensions. Open threads of a story, such as a secret nobody has revealed, a promise nobody has kept or a contradiction between two accounts, stay in the prompt as constraints until the story resolves them. A chat sets whether they are read on the nightly dream, on each memory save, or not at all.
+- A maker page for creating novels and group chats, with a quick form for a new world.
+- Soft Shadows, a reading look that sets the chat as a written page: the speaker in a margin, the words in Literata, and your own lines in an umber pen. Every control stays where it was.
+- Clipping of older messages, a switch under Settings, Chat history, on by default. Messages older than the newest eight or more are cut to about 550 characters, at a word break where one is near.
+- A next-prompt marker that shows the estimated prompt size, the part the provider can reuse from its cache, the part that is new, and the tokens that quenching and clipping saved.
+- A password check wherever a password is set or changed: a user's own change, an admin creating an account, and an admin resetting one. Common passwords, passwords equal to the username, and runs of one or two characters are refused.
+
+### Changed
+- Moonlit is the default look. Soft Shadows, Spore (1.5.0) and Hyacinth (1.4.1) are the other choices under Settings, Appearance, Theme. The reading look was called Folio while it was in testing; its saved choices still apply.
+- The default backgrounds are a set per look (`moon`, `folio`, `spore` and `classic`) in place of the old default images.
+- The chat window is at least the size set under Chat history (25 messages for a 1:1 chat, 40 for a group) and up to nine messages more. Its start moves in ten-message steps, which line up with the clip boundary, so the same history stays cached for ten turns at a time.
+- The running summary covers each message as it is clipped, and reads each one to 550 characters. Before, it covered only messages that had left the window, and read them to 300 characters.
+- Quenching's second stage works only on messages older than the clip boundary, and its result is kept until those messages change. It is on by default in group chats for an account that has never set it. An explicit off applies everywhere.
+- The memory bank refreshes every 20 messages, up from 18.
+- A group runs at most two extra replies a turn after the director's picks, down from four. A group with one member skips the director, since the choice is forced.
+- Group replies no longer repeat the user's line, which is already the newest message each member reads. Each member's card, note and examples now come in the message after the shared history, and every member shares one system text, so the history can be reused across members. This changes how members are prompted, so check a few group replies after updating.
+- The director reads each member as one line of its card, and no longer reads the memory snippet. It reads the last 20 messages for the first pick and the last 8 for the next speaker, and the recalled material comes after the history.
+- Sign-in cookies are named `__Host-rp_session` when served over HTTPS, so no other subdomain can set or replace them. A sign-in request that does not say whether to remember the device gets a session cookie, not a 30-day one. The sign-in page's own checkbox is unchanged.
+- The terminal client is 1.5.0.
+
+### Security
+- A fresh install no longer creates `admin` with the password `admin`. It generates a random one-time password and prints it once to the server log. Sign in with it and change it.
+- Sign-in hardening for internet-facing use. Throttle records for quiet names and addresses are removed after 30 days, and each table is capped at 50,000 rows, so random names cannot grow the database. At most four password checks run at once. A request body is limited as it arrives, not only when it declares its length. A password change no longer blocks the server while the current password is checked.
+- Over HTTPS the server sends a one-year Strict-Transport-Security header, X-Frame-Options DENY, and a Permissions-Policy that turns off camera, microphone, geolocation and payment, which the app does not use.
+
+### Fixed
+- Signing out with no session cookie, such as an expired one, returns a normal response rather than a server error.
+- Clipped messages are covered by the running summary and the episodes. Before, a message was not summarised until it had left the window, so its detail was missing from the summary while it stayed in the window.
+- A group member's reply no longer repeats the user's message.
+- Worlds: an entry or section over its limit is refused with a message, not cut silently.
+- Unused prompt text and a helper were removed from the server code.
+
+### Notes
+- The theme choice, the highlight colour and the light or dark setting are kept per browser, not per account.
+- Known: at 1440 px the gallery fits four 242 px columns, which leaves about 96 px for the text inside each card, so long headlines wrap one word per line and the cards grow tall. The grid width is the app's existing rule, and 1.4.1 has the same effect.
+- Prompt-cache hits depend on the provider. The app counts what the provider reports, so the stats page shows the real cached share.
+
 ## 1.4.1 - 2026-10-25
 
 A feature release on the 1.4 line. It adds mood and relationship state, a memory graph written by dreams, group Mind Palace entries and group auto-reply, example messages on the character card, deleting messages from a chat, and two opt-in ways to spend fewer tokens. Every new switch starts off. Back up before updating, and take the 1.4.1 terminal client. See UPDATE.txt.
@@ -136,7 +182,7 @@ The first full release of the 1.3.1 line. It includes everything in 1.3.1-beta a
 
 - Settings as a grid of category cards.
 
-- Default word substitutions in `rp_core.py` for a short private list of words. New installs get them in `substitutions.json`. Existing installs keep their own file, so they do not change unless you merge the defaults in by hand.
+- An optional private list of default word substitutions in `rp_core.py`. The published build ships the list empty; put your own in `substitutions.json`. Existing installs keep their own file.
 
 ### Changed
 
@@ -162,7 +208,7 @@ A beta follow-up to 1.3.1-beta. It keeps the 1.3 protocol, so terminal clients f
 
 ### Changed
 
-- Default word substitutions in `rp_core.py`: an optional private list.
+- An optional private list of default word substitutions in `rp_core.py`; the published build ships it empty.
 
 ## 1.3.1-beta - 2026-10-20
 

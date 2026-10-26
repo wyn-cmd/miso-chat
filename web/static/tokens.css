@@ -1,0 +1,66 @@
+/* Spore tokens, the shared scale, and the self-hosted faces. Every colour and font in
+   redesign.css resolves through a token declared here. Young Serif and Instrument Sans
+   are OFL; the licence texts sit beside the files in fonts/. */
+
+@font-face { font-family: "Young Serif"; src: url("/static/fonts/young-serif-latin.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Young Serif"; src: url("/static/fonts/young-serif-latin-ext.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; unicode-range: U+0100-024F, U+1E00-1EFF, U+20A0-20AB, U+2C60-2C7F; }
+@font-face { font-family: "Instrument Sans"; src: url("/static/fonts/instrument-sans-latin-variable.woff2") format("woff2"); font-weight: 400 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Instrument Sans"; src: url("/static/fonts/instrument-sans-latin-ext-variable.woff2") format("woff2"); font-weight: 400 700; font-style: normal; font-display: swap; unicode-range: U+0100-024F, U+1E00-1EFF, U+20A0-20AB, U+2C60-2C7F; }
+@font-face { font-family: "Instrument Sans"; src: url("/static/fonts/instrument-sans-latin-italic.woff2") format("woff2"); font-weight: 400; font-style: italic; font-display: swap; }
+
+:root {
+  color-scheme: dark;
+  --space-3xs: 2px; --space-2xs: 4px; --space-xs: 8px; --space-sm: 12px; --space-md: 16px; --space-lg: 24px; --space-xl: 40px; --space-2xl: 64px; --space-3xl: 96px;
+  --text-xs: 0.8125rem; --text-sm: 0.875rem; --text-md: 1rem; --text-lg: 1.25rem; --text-xl: 1.5625rem; --text-2xl: 1.953rem; --text-3xl: 2.441rem;
+  --text-section: clamp(1.75rem, 1.5vw + 1rem, 2.5rem); --text-title: clamp(1.125rem, 0.4vw + 1rem, 1.375rem); --text-lead: 1.0625rem;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); --ease-in: cubic-bezier(0.7, 0, 0.84, 0); --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms; --dur-short: 220ms; --dur-long: 420ms;
+  --color-error: #f97770;
+  --container: 1440px; --gutter: 40px; --gap-columns: 28px;
+  --z-base: 1; --z-raised: 10; --z-dropdown: 100; --z-sticky: 200; --z-modal: 400; --z-toast: 500;
+  /* ember: a warm umber ground, parchment ink, a hot coral signal and a jade answer */
+  --color-paper: #1c0a04; --color-paper-2: #2b130b; --color-paper-3: #3f1f16;
+  --color-ink: #fffaf1; --color-ink-2: #f4e9d6; --color-muted: #d3c2ab;
+  --color-rule: #57422f;
+  --color-accent: #fb836d; --color-accent-2: #ffb57c; --color-accent-ink: #1c0a04; --color-focus: #ffb57c;
+  --color-jade: #57b9a1; --color-jade-ink: #06231c;
+  --meta-theme: #1c0a04;
+  --font-display: "Young Serif", Georgia, serif; --font-body: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius-card: 14px; --radius-pill: 999px; --radius-field: 10px; --rule-hair: 1px;
+  --shadow-card: 0 16px 40px #08060566;
+  --tracking-display: -0.012em;
+  --grain: 0.15; --display-weight: 400;
+}
+
+/* lab: a cream ground, ink, a deeper coral with cream on it, and the same jade */
+[data-theme="light"] {
+  color-scheme: light;
+  --color-paper: #f9edd5; --color-paper-2: #fff8ea; --color-paper-3: #efdbbd;
+  --color-ink: #1f0f08; --color-ink-2: #443028; --color-muted: #675447;
+  --color-rule: #d1c1b0;
+  --color-accent: #bd432f; --color-accent-2: #a43427; --color-accent-ink: #fff8ea; --color-focus: #bd432f;
+  --color-jade: #007560; --color-jade-ink: #fff8ea;
+  --meta-theme: #f9edd5;
+  --color-error: #b02a2d;
+  --shadow-card: 0 16px 40px #2a231c29;
+  --grain: 0.06;
+}
+
+/* the bridge: the app's own token names now resolve to the theme */
+:root {
+  --bg: var(--color-paper); --bg-soft: var(--color-paper-2); --card: var(--color-paper-2); --surface: var(--color-paper-2); --surface-2: var(--color-paper-3);
+  --ink: var(--color-ink); --text: var(--color-ink); --text-soft: var(--color-ink-2); --muted: var(--color-muted);
+  --line: var(--color-rule); --border-strong: var(--color-ink-2);
+  --accent: var(--color-accent); --accent-2: var(--color-accent-2); --accent-3: var(--color-ink-2);
+  --accent-soft: color-mix(in oklab, var(--color-accent) 16%, transparent);
+  --accent-glow: color-mix(in oklab, var(--color-accent) 42%, transparent);
+  --mine: color-mix(in oklab, var(--color-jade) 12%, var(--color-paper-2));
+  --theirs: var(--color-paper-2);
+  --input: var(--color-paper-2); --chip: var(--color-paper-3);
+  --char-bg: transparent; --char-hover: var(--color-paper-2); --char-line: transparent;
+  --char-active-bg: var(--color-paper-3); --char-active-line: var(--color-accent);
+  --error: var(--color-error); --on-accent: var(--color-accent-ink); --em: var(--color-ink-2);
+  --radius: var(--radius-card); --radius-sm: 4px; --shadow: var(--shadow-card);
+  --font-sans: var(--font-body);
+}
