@@ -6,6 +6,7 @@ import hmac
 import os
 import secrets
 import sqlite3
+import sys
 import threading
 import time
 import datetime
@@ -20,13 +21,21 @@ SETUP_PENDING_SECONDS = 900            # a first set-up needs time to install an
 
 # Failed sign-ins for one username. A lock starts at each count; the next count is 5 more failures.
 LOCK_STEPS = ((10, 15 * 60), (15, 30 * 60), (20, 60 * 60), (25, 2 * 60 * 60), (30, 4 * 60 * 60))
-PERMANENT_FAILS = 35     # from here the account stays locked until an admin unlocks it
+# Past the last step the lock repeats: every REPEAT_FAILS more wrong guesses lock the name again for REPEAT_SECONDS.
+# There is no permanent lock, because one stranger could otherwise lock anyone out for good; guessing is still
+# slowed to a handful of tries every few hours.
+REPEAT_FAILS = 5
+REPEAT_SECONDS = 4 * 3600
 IP_LOCK_FAILS = 15     # consecutive wrong guesses from one address that block it for one account
+# The throttle tables forget a name or address that has been quiet this long, and never hold more than
+# THROTTLE_MAX_ROWS rows. Locked and blocked rows are kept until their lock ends or an admin clears them.
+THROTTLE_IDLE_SECONDS = 30 * 24 * 3600
+THROTTLE_MAX_ROWS = 50_000
+THROTTLE_PRUNE_EVERY = 3600
 HASH_N = 2 ** 16         # scrypt cost for new hashes; about 64 MB per check
 # OpenSSL refuses scrypt above 32 MB unless told otherwise, and that refusal reads as a wrong password.
 SCRYPT_MAXMEM = 128 * 1024 * 1024
 ADMIN_NAME = "admin"
-ADMIN_DEFAULT_PASSWORD = "admin"   # forced to change on first login
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -43,13 +52,15 @@ CREATE TABLE IF NOT EXISTS login_throttle (
     username TEXT PRIMARY KEY,
     fails INTEGER NOT NULL DEFAULT 0,
     locked_until REAL NOT NULL DEFAULT 0,
-    permanent INTEGER NOT NULL DEFAULT 0
+    permanent INTEGER NOT NULL DEFAULT 0,
+    last_fail REAL NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS login_ip_throttle (
     username TEXT NOT NULL,
     ip TEXT NOT NULL,
     fails INTEGER NOT NULL DEFAULT 0,
     blocked INTEGER NOT NULL DEFAULT 0,
+    last_fail REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (username, ip)
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -178,6 +189,7 @@ DEFAULT_SETTINGS = {
     "dreams_enabled": "0",       # autonomous dreaming in quiet hours: 1 on, 0 off (off until an admin turns it on)
     "dream_every_days": "1",     # dreams run once every this many days at the least, 1 to 30
     "dream_daily_cap": "40",     # most model calls the dreams may make across the server each Pacific day
+    "dreams_in_novels": "1",     # novels dream on their own switch, apart from dreams_enabled: 1 on, 0 off (on by default)
     "mood_enabled": "0",         # character mood (energy, affinity, emotion) and lonely check-ins: 1 on, 0 off
     "attitude_enabled": "0",     # relationship with the user (affection, trust, five levels): 1 on, 0 off
     "event_memory_enabled": "0", # event memory graph, written by dreams and recalled into prompts: 1 on, 0 off
@@ -232,9 +244,15 @@ class Store:
     def __init__(self, path):
         self.path = path
         self._throttle_lock = threading.Lock()
+        self._pruned_at = 0.0
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with self._conn() as c:
             c.executescript(SCHEMA)
+            for table in ("login_throttle", "login_ip_throttle"):
+                # databases made before the idle timestamp existed: old rows read as idle since the epoch
+                tcols = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+                if "last_fail" not in tcols:
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN last_fail REAL NOT NULL DEFAULT 0")
             ucols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
             for col in ("token_daily", "token_weekly", "token_monthly"):   # NULL = no budget
                 if col not in ucols:
@@ -293,9 +311,14 @@ class Store:
     # ---- accounts
 
     def ensure_admin(self):
-        # Create admin/admin with a forced password change if there are no accounts yet.
+        # On the first start with no accounts, create the admin with a random one-time password and print it once.
+        # A fixed default let whoever reached a new install first sign in as the admin.
         if self._run("SELECT COUNT(*) AS n FROM users", fetch="one")["n"] == 0:
-            self.create_user(ADMIN_NAME, ADMIN_DEFAULT_PASSWORD, is_admin=True, must_change=True)
+            password = secrets.token_urlsafe(12)
+            self.create_user(ADMIN_NAME, password, is_admin=True, must_change=True)
+            print(f"[web] First start: created the admin account '{ADMIN_NAME}' with the one-time password "
+                  f"{password}. Sign in and change it before the site is reachable from anywhere else.",
+                  file=sys.stderr, flush=True)
 
     def create_user(self, username, password, is_admin=False, must_change=True, daily_cap=None, tier=None):
         try:
@@ -368,20 +391,41 @@ class Store:
         now = time.time() if now is None else now
         key = username.strip().lower()
         with self._throttle_lock:
+            self._prune_throttles(now)
             row = self._run("SELECT fails, locked_until, permanent FROM login_throttle WHERE username = ?",
                             (key,), fetch="one") or {"fails": 0, "locked_until": 0.0, "permanent": 0}
             fails = row["fails"] + 1
-            locked_until, permanent = row["locked_until"], row["permanent"]
+            locked_until, permanent = row["locked_until"], 0
             for threshold, seconds in LOCK_STEPS:
                 if fails == threshold:
                     locked_until = now + seconds
-            if fails >= PERMANENT_FAILS:
-                permanent = 1
-            self._run("INSERT INTO login_throttle (username, fails, locked_until, permanent) VALUES (?, ?, ?, ?) "
+            last_step = LOCK_STEPS[-1][0]
+            if fails > last_step and (fails - last_step) % REPEAT_FAILS == 0:
+                locked_until = now + REPEAT_SECONDS
+            self._run("INSERT INTO login_throttle (username, fails, locked_until, permanent, last_fail) "
+                      "VALUES (?, ?, ?, ?, ?) "
                       "ON CONFLICT(username) DO UPDATE SET fails = excluded.fails, "
-                      "locked_until = excluded.locked_until, permanent = excluded.permanent",
-                      (key, fails, locked_until, permanent))
+                      "locked_until = excluded.locked_until, permanent = excluded.permanent, "
+                      "last_fail = excluded.last_fail",
+                      (key, fails, locked_until, permanent, now))
         return self.login_block(key, now)
+
+    def _prune_throttles(self, now):
+        # Called with the throttle lock held. Once an hour: drop quiet names and addresses, then keep each table
+        # under THROTTLE_MAX_ROWS by dropping the quietest unlocked rows. Without this, failed sign-ins for random
+        # names would grow the database for ever.
+        if now - self._pruned_at < THROTTLE_PRUNE_EVERY:
+            return
+        self._pruned_at = now
+        cut = now - THROTTLE_IDLE_SECONDS
+        self._run("DELETE FROM login_throttle WHERE last_fail < ? AND locked_until <= ?", (cut, now))
+        self._run("DELETE FROM login_ip_throttle WHERE last_fail < ? AND blocked = 0", (cut,))
+        for table, keep in (("login_throttle", "locked_until <= ?"), ("login_ip_throttle", "blocked = 0")):
+            args = (now,) if table == "login_throttle" else ()
+            over = self._run(f"SELECT COUNT(*) AS n FROM {table}", fetch="one")["n"] - THROTTLE_MAX_ROWS
+            if over > 0:
+                self._run(f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {keep} "
+                          f"ORDER BY last_fail LIMIT ?)", args + (over,))
 
     def clear_login_lock(self, username):
         self._run("DELETE FROM login_throttle WHERE username = ?", (username.strip().lower(),))
@@ -391,17 +435,21 @@ class Store:
                         (username.strip().lower(), ip), fetch="one")
         return bool(row and row["blocked"])
 
-    def record_failed_ip(self, username, ip):
+    def record_failed_ip(self, username, ip, now=None):
         # Counts one wrong guess from this address for this account; True once the address is blocked.
         key = username.strip().lower()
+        now = time.time() if now is None else now
         with self._throttle_lock:
+            self._prune_throttles(now)
             row = self._run("SELECT fails, blocked FROM login_ip_throttle WHERE username = ? AND ip = ?",
                             (key, ip), fetch="one")
             fails = (row["fails"] if row else 0) + 1
             blocked = 1 if (fails >= IP_LOCK_FAILS or (row and row["blocked"])) else 0
-            self._run("INSERT INTO login_ip_throttle (username, ip, fails, blocked) VALUES (?, ?, ?, ?) "
-                      "ON CONFLICT(username, ip) DO UPDATE SET fails = excluded.fails, blocked = excluded.blocked",
-                      (key, ip, fails, blocked))
+            self._run("INSERT INTO login_ip_throttle (username, ip, fails, blocked, last_fail) "
+                      "VALUES (?, ?, ?, ?, ?) "
+                      "ON CONFLICT(username, ip) DO UPDATE SET fails = excluded.fails, blocked = excluded.blocked, "
+                      "last_fail = excluded.last_fail",
+                      (key, ip, fails, blocked, now))
         return bool(blocked)
 
     def clear_ip_throttle(self, username, ip):
@@ -451,6 +499,9 @@ class Store:
         return bool(row and row["remember"])
 
     def end_session(self, token):
+        # A sign-out with no session cookie (already expired, or cleared) has nothing to end.
+        if not token:
+            return
         self._run("DELETE FROM sessions WHERE token_hash = ?", (_token_hash(token),))
 
     def end_all_sessions(self, user_id):

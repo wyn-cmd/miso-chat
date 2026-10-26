@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Miso Chat">
+  <meta name="apple-mobile-web-app-title" content="Miso Chat">
+  <title>Make - Miso Chat</title>
+  <script src="/static/theme-init.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=rpUi===null?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#0f0a06">
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">Miso Chat</a>
+    <span id="who" class="muted"></span>
+    <span class="spacer"></span>
+    <a id="adminLink" href="/admin" hidden>Admin</a>
+    <a href="/chat">Back to chat</a>
+    <button id="logoutBtn" class="ghost" type="button">Log out</button>
+    <button id="themeBtn" class="icon-btn" type="button" aria-label="Switch to light theme"></button>
+  </header>
+  <main class="maker-main">
+    <p id="loading" class="muted">Loading…</p>
+    <p id="pageErr" class="error" role="alert"></p>
+    <section id="makerSection" hidden>
+      <h1 id="makerTitle" class="chat-title"></h1>
+      <p id="makerIntro" class="muted"></p>
+      <form id="makerForm" class="stack editor-form" autocomplete="off">
+        <label>Name <input id="makerName" maxlength="60" required></label>
+        <fieldset class="maker-set">
+          <legend id="castLegend">Characters</legend>
+          <div id="castPick" class="cast-grid"></div>
+        </fieldset>
+        <fieldset id="notesBox" class="maker-set" hidden>
+          <legend>Notes for each character</legend>
+          <p class="muted">Only you see these. The director and the character both read them when the group replies.</p>
+          <div id="notes"></div>
+        </fieldset>
+        <fieldset id="worldBox" class="maker-set" hidden>
+          <legend>World</legend>
+          <p class="muted">The setting the narrator writes in. Pick one you have, or make a new one right here. Worlds can also be kept and edited under Settings, Worlds.</p>
+          <label>World <select id="makerWorld"></select></label>
+          <p><button id="worldNewBtn" class="ghost small" type="button">+ New world</button></p>
+          <div id="worldNew" class="maker-world" hidden>
+            <label>Name <input id="newWorldName" maxlength="60"></label>
+            <label>Summary <textarea id="newWorldSummary" rows="2" maxlength="2000"></textarea></label>
+            <label>Locations <span class="muted">one per line</span> <textarea id="newWorld_locations" rows="3" maxlength="12000"></textarea></label>
+            <label>Magic systems <span class="muted">one per line</span> <textarea id="newWorld_magic" rows="2" maxlength="12000"></textarea></label>
+            <label>Rules <span class="muted">one per line</span> <textarea id="newWorld_rules" rows="2" maxlength="12000"></textarea></label>
+            <label>Civilisations <span class="muted">one per line</span> <textarea id="newWorld_civilisations" rows="2" maxlength="12000"></textarea></label>
+            <label>Factions <span class="muted">one per line</span> <textarea id="newWorld_factions" rows="2" maxlength="12000"></textarea></label>
+            <label>Technology <span class="muted">one per line</span> <textarea id="newWorld_technology" rows="2" maxlength="12000"></textarea></label>
+            <label>Other details <span class="muted">one per line</span> <textarea id="newWorld_other" rows="2" maxlength="12000"></textarea></label>
+            <p><button id="newWorldSave" class="ghost small" type="button">Create world</button> <button id="newWorldCancel" class="ghost small" type="button">Cancel</button> <span id="newWorldMsg" class="muted" role="status"></span></p>
+          </div>
+        </fieldset>
+        <fieldset id="artBox" class="maker-set" hidden>
+          <legend>Pictures</legend>
+          <p class="muted">The picture shown beside this group in the sidebar, and the background behind its chat. Only you see them. A new picture replaces the old one.</p>
+          <div class="sheet-row"><label for="iconFile">Picture</label>
+            <span class="slider-ctl"><input id="iconFile" type="file" accept="image/png,image/jpeg" aria-label="Group picture"><button id="iconRemove" class="ghost small" type="button" hidden>Remove</button></span>
+          </div>
+          <p id="iconMsg" class="muted" role="status"></p>
+          <div class="sheet-row"><label for="bgFile">Background</label>
+            <span class="slider-ctl"><input id="bgFile" type="file" accept="image/*" aria-label="Group background picture"><button id="bgRemove" class="ghost small" type="button" hidden>Remove</button></span>
+          </div>
+          <p id="bgMsg" class="muted" role="status"></p>
+        </fieldset>
+        <p id="makerMsg" class="error-msg" role="alert"></p>
+        <div class="row">
+          <button id="makerDelete" class="ghost small" type="button" hidden>Delete</button>
+          <span class="spacer"></span>
+          <a class="button-link ghost" href="/chat">Cancel</a>
+          <button id="makerSave" type="submit">Save</button>
+        </div>
+      </form>
+    </section>
+  </main>
+  <script src="/static/common.js"></script>
+  <script src="/static/maker.js"></script>
+</body>
+</html>

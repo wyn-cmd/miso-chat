@@ -1,10 +1,10 @@
-Miso Chat 1.4.1 update
+Miso Chat 1.5.0 update
 
-This update brings the server to 1.4.1 from 1.4.0. It adds mood and relationship state with bars, an event memory graph, group Mind Palace entries and group auto-reply, example messages on the character card, deleting messages from a chat, and two opt-in ways to spend fewer tokens: near-lossless quenching of older history, and effectiveness-weighted memory retention. The history window also now starts on multiples of eight messages so the prompt cache can be reused.
+This update brings the server to 1.5.0 from 1.4.1. It adds worlds for stories, novels, narrative tension, a second reading look called Soft Shadows, clipping and quenching that keep long chats cheaper to run, and sign-in hardening for internet-facing use. The endpoints and the data layout are the same as 1.4.1, so chats, characters, accounts and the switches from 1.4.1 carry over.
 
-Every new switch starts off, and off means the old behaviour, so an install that changes nothing behaves as 1.4.0 did. Mood, relationship, the event graph and learned memory retention are admin switches on the admin page. Quenching is a per-account preference in Settings, Account. Group auto-reply is always on for group chats and has no switch.
+Everyone is signed out once after the update, because the login cookie has a new name. Sign in again as usual.
 
-This is a release. The terminal client is now 1.4.1. The server accepts clients with the same major.minor version, so a 1.4.0 client keeps working; 1.3.x clients are still refused. Your existing chats and characters are not changed by the update.
+The terminal client is now 1.5.0, and the server accepts clients with the same major.minor version. A 1.4.1 client is refused, so download the 1.5.0 client from the web app, or from the release page on GitHub.
 
 1. Stop the web app.
 
@@ -14,25 +14,19 @@ This is a release. The terminal client is now 1.4.1. The server accepts clients 
 
    The zip leaves alone: .env, data/, every character folder, and the files you keep beside them.
 
-4. No new packages are needed if you are already on 1.4.0. If you are coming from 1.3.x or have not installed since, run:
+4. No new packages are needed. requirements.txt is unchanged. The update adds new modules (worlds, novels, tensions and passwords), new stylesheets and two new font families, all inside the folders the zip brings.
 
-       pip install -r requirements.txt
+5. Data: no migration step is needed. Each account's worlds and novels are created on first use. The sign-in throttle tables gain one column at first start, added automatically. Nothing in data/ is rewritten.
 
-5. Data changes are automatic on start:
+6. A new install creates the admin account with a random one-time password, printed once in the server log. Sign in with it and change it. An existing install keeps its admin account and password unchanged; change the password if it is still a default one.
 
-   - Two new tables are created empty: moods, holding energy, affinity and the emotion per character, and attitudes, holding affection and trust per character and account.
+7. Settings you may want to look at:
+   - Appearance, Theme: Moonlit (the new default), Soft Shadows, Spore (1.5.0) or Hyacinth (1.4.1).
+   - Chat history: Clip older messages, on by default. Turn it off to send older messages in full.
+   - Chat history: the rolling window. It is at least the size you set, and up to nine messages more.
+   - Account: Quench long chats. Off for solo chats until you switch it on. Group chats are quenched unless you switch it off here.
+   - Worlds: write a world for a chat or novel. Each entry shows its own token count, and a save over a limit is refused with a message.
 
-   - Memory retention keeps its scores in a small file in each character folder, created when the switch is first used, and removes rows for memories that are no longer stored.
-
-   - Nothing else in data/ is changed.
-
-6. Optional, from the admin page:
-   - Mood and Relationship: switch each on for the server. Off is the default.
-   - Event memory graph: switch it on only with dreaming on, because the nightly dream is what writes it.
-   - Learned memory retention: switch it on to let self-written memories decay by outcome. Entries you wrote yourself are never scored or dropped.
-
-7. Optional, per account, from Settings, Account: turn on Quench history. The context marker then reports how many characters the pass saved. It is near-lossless, not lossless: the newest messages, your own messages and every sentence with a figure, a name or a quotation are kept whole, and the pass stops while at least 92 percent of the window's distinct words survive. A quenched account may show a lower cached share on the stats page, because the older text changes slightly from turn to turn.
-
-8. The terminal client needs the 1.4.1 file, or a 1.4.0 one. Download it from the web app, or from the release page on GitHub. Its SHA-256 is in the release notes.
+8. Group chats: each member's reply is prompted differently in this release, so check a few replies after the update. A group now allows two extra replies a turn after the director's picks, down from four.
 
 9. Optional: install chafa to draw character pictures in the terminal client. The README has the steps.

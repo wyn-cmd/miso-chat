@@ -1,0 +1,342 @@
+/* Hallmark · shape: Workbench (app screen) · genre: atmospheric · theme: Spore, ember (deal 3/3, seed miso-chat-roleplay-chat-ceca.ecf1eb16.2026-10-25.r0) · job: continue the story · draw: app-shell
+ * hero: none, the chat is the first screen · nav: edge-aligned header, brand and one action · footer: none · imagery: character art in the gallery, chat icon and backgrounds · signature: the chat as a candlelit ledger, each exchange a ruled well on warm paper · spore: ember
+ * axes: dark/roman-serif/warm · posture: committed · contrast: pass · fold: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P_ H_ E_ S_ R_ V_ · weakest: imagery, the app ships no art of its own, so the gallery leans on the user's pictures and the type carries the rest */
+@import url("./tokens.css");
+@import url("./base.css");
+
+/* labels: body face, a step smaller, sentence case, untracked (never tracked capitals) */
+.sidebar h2, .sheet h2, .example-label, .ctx-label, .usage-window-head, .set-name, .stats h2, .admin h2 {
+  font-family: var(--font-body); font-size: var(--text-xs); font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--color-muted);
+}
+.sidebar h2, .sheet h2 { margin: var(--space-md) 0 var(--space-xs); }
+
+/* art keeps its own colour; only the light is brought into the room */
+.art-layer, .profile-art, .page-art, .char-bg-img { filter: sepia(0.16) saturate(1.08) contrast(1.02) brightness(0.95); }
+
+/* the ground: one warm wash from the top, so no screen is a flat field */
+body {
+  background-color: var(--color-paper);
+  background-image:
+    radial-gradient(1100px 620px at 10% -12%, color-mix(in oklab, var(--color-accent) 16%, transparent), transparent 62%),
+    radial-gradient(900px 520px at 96% -6%, color-mix(in oklab, var(--color-jade) 12%, transparent), transparent 58%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+
+/* ---- 1. page: the label pass comes first, then the ground ---- */
+body { background: var(--color-paper); color: var(--color-ink-2); }
+h1, h2, h3 { color: var(--color-ink); font-family: var(--font-display); font-weight: var(--display-weight); letter-spacing: var(--tracking-display); }
+h1 { font-size: var(--text-section); line-height: 1.06; }
+h2 { font-size: var(--text-title); }
+h3 { font-size: var(--text-lg); }
+p { color: inherit; }
+a { color: var(--color-ink); }
+a:hover { color: var(--color-accent-2); }
+.muted { color: var(--color-muted); }
+/* the token counters for a world: one line per entry under its box, and the section totals beside the save button.
+   An entry or section past its limit turns red. */
+.tok-entries { list-style: none; margin: var(--space-2xs) 0 var(--space-xs); padding: 0; font-size: var(--text-xs); color: var(--color-muted); }
+.tok-entries li { display: flex; justify-content: space-between; gap: var(--space-sm); }
+.tok-entries li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tok-entries li > span:last-child { flex: none; font-variant-numeric: tabular-nums; }
+.tok-entries li.over { color: var(--color-error); }
+.tok-totals { font-size: var(--text-xs); color: var(--color-muted); display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-md); }
+.tok-totals span.over { color: var(--color-error); }
+.small { font-size: var(--text-sm); }
+strong, b { color: var(--color-ink); font-weight: 600; }
+em { color: var(--color-ink-2); }
+hr { border: 0; border-top: 1px solid var(--color-rule); margin: var(--space-md) 0; }
+
+/* ---- 2. controls: a pink pill and an outlined pill, nothing else ---- */
+:root:not([data-theme="light"]) button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn),
+[data-theme="light"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn) {
+  background: var(--color-accent); color: var(--color-accent-ink);
+  border: 0; border-radius: var(--radius-pill); padding: var(--space-xs) var(--space-md);
+  font-family: var(--font-body); font-weight: 600; font-size: var(--text-sm); line-height: 1.3;
+  box-shadow: none; transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+:root:not([data-theme="light"]) button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):hover,
+[data-theme="light"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):hover { background: var(--color-accent-2); }
+:root:not([data-theme="light"]) button:not(.ghost):disabled,
+[data-theme="light"] button:not(.ghost):disabled {
+  background: var(--color-paper-3); color: var(--color-muted); box-shadow: inset 0 0 0 1.5px var(--color-rule); cursor: not-allowed;
+}
+button:disabled { cursor: not-allowed; }
+button.ghost:disabled { color: var(--color-muted); box-shadow: inset 0 0 0 1.5px var(--color-rule); background: transparent; }
+button.small { padding: var(--space-2xs) var(--space-sm); font-size: var(--text-xs); }
+button.ghost { background: transparent; color: var(--color-ink-2); box-shadow: inset 0 0 0 1.5px var(--color-ink-2); border: 0; border-radius: var(--radius-pill); padding: var(--space-xs) var(--space-md); font-weight: 500; transition: color var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out); }
+button.ghost:hover { color: var(--color-accent-2); box-shadow: inset 0 0 0 1.5px var(--color-accent-2); background: color-mix(in oklab, var(--color-accent) 8%, transparent); }
+button.ghost:active { background: color-mix(in oklab, var(--color-accent) 14%, transparent); }
+button.danger { background: transparent; color: var(--color-error); box-shadow: inset 0 0 0 1.5px var(--color-error); border: 0; border-radius: var(--radius-pill); }
+button.danger:hover { background: color-mix(in oklab, var(--color-error) 14%, transparent); }
+.icon-btn { background: transparent; color: var(--color-ink-2); border: 0; border-radius: var(--radius-pill); padding: var(--space-2xs); width: 32px; height: 32px; display: inline-grid; place-items: center; }
+.icon-btn:hover { color: var(--color-accent-2); background: color-mix(in oklab, var(--color-accent) 8%, transparent); }
+
+/* fields and selections share one soft corner, 10px, the same radius 1.4.1 used, with the 1.5px ink edge */
+input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=file]):not([type=range]),
+select, textarea {
+  background: var(--color-paper-2); color: var(--color-ink); border: 0; border-radius: var(--radius-field);
+  box-shadow: inset 0 0 0 1.5px var(--color-ink-2); padding: var(--space-xs) var(--space-sm);
+  transition: box-shadow var(--dur-micro) var(--ease-out);
+}
+/* the open list of a select takes the paper colour, so it does not fall back to the browser's grey menu */
+select option, select optgroup { background: var(--color-paper-2); color: var(--color-ink); }
+input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=file]):not([type=range]):focus,
+select:focus, textarea:focus { outline: none; box-shadow: inset 0 0 0 1.5px var(--color-ink-2), 0 0 0 3px var(--color-accent-soft); }
+input::placeholder, textarea::placeholder { color: var(--color-muted); }
+input[type=checkbox], input[type=radio] { accent-color: var(--color-accent); width: 16px; height: 16px; }
+input[type=color] { background: var(--color-paper-2); border: 0; border-radius: var(--radius-sm); padding: var(--space-3xs); box-shadow: inset 0 0 0 1.5px var(--color-ink-2); }
+input[type=range] { accent-color: var(--color-accent); }
+label { color: var(--color-ink-2); font-size: var(--text-sm); }
+fieldset { border: 0; border-top: 1px solid var(--color-rule); padding: var(--space-md) 0 0; margin: 0 0 var(--space-lg); }
+legend { font-family: var(--font-display); font-size: var(--text-lg); color: var(--color-ink); padding: 0 var(--space-xs) 0 0; }
+::placeholder { opacity: 1; }
+
+/* ---- 3. header ---- */
+header { height: 56px; padding: 0 var(--space-lg); gap: var(--space-sm); background: var(--color-paper-2); border-bottom: 1px solid var(--color-rule); position: relative; }
+header::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: var(--grain); mix-blend-mode: screen;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.6 0 0 0 0 0.55 0 0 0 0 0.45 0 0 0 0.35 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E"); }
+.brand { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 400; letter-spacing: var(--tracking-display); color: var(--color-ink); text-decoration: none; }
+.header-chat { font-family: var(--font-display); font-size: var(--text-md); color: var(--color-ink); }
+
+/* ---- 4. shell and sidebar ---- */
+.shell { background: transparent; }
+.sidebar { background: var(--color-paper-2); border-right: 1px solid var(--color-rule); padding: var(--space-md); }
+.sidebar h2 { font-family: var(--font-body); font-size: var(--text-xs); font-weight: 500; letter-spacing: 0; color: var(--color-muted); margin: var(--space-md) 0 var(--space-xs); }
+.side-head { margin: 0 0 var(--space-xs); }
+.side-section { border-top: 1px solid var(--color-rule); padding-top: var(--space-sm); margin-top: var(--space-md); }
+.side-label { font-size: var(--text-xs); color: var(--color-muted); }
+/* sidebar rows: flat paper until chosen, then the third paper step with a coral edge. The prefix keeps
+   these above the app's global `button:not(.ghost)` gradient, which would otherwise paint every row. */
+.sidebar button.char-item, .sheet button.char-item, .sidebar .char-item, .sheet .char-item {
+  background: transparent; color: var(--color-ink-2); border: 0; border-radius: var(--radius-sm);
+  box-shadow: none; padding: var(--space-xs) var(--space-sm); text-align: left; font-weight: 500; font-size: var(--text-sm);
+  transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.sidebar button.char-item:hover, .sheet button.char-item:hover, .sidebar .char-item:hover, .sheet .char-item:hover {
+  background: var(--color-paper-3); color: var(--color-ink);
+}
+.sidebar button.char-item.active, .sheet button.char-item.active, .sidebar .char-item.active, .sheet .char-item.active {
+  background: var(--color-paper-3); color: var(--color-ink); box-shadow: inset 3px 0 0 var(--color-accent);
+}
+.char-item::before { background: var(--dot, transparent); }
+.char-item.active::before { box-shadow: 0 0 0 2px var(--color-paper-3); }
+.unread-dot { background: var(--color-accent); color: var(--color-accent-ink); }
+.fav-star { color: var(--color-accent); }
+.sidebar .muted a, .account-box a { color: var(--color-ink-2); }
+
+/* ---- 5. chat ---- */
+.content { background: transparent; }
+#chatSection .bar { border-bottom: 1px solid var(--color-rule); padding-bottom: var(--space-sm); }
+.chat-title { font-family: var(--font-display); font-size: var(--text-title); font-weight: 400; letter-spacing: var(--tracking-display); color: var(--color-ink); }
+.chat-icon, .char-icon { border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px var(--color-rule); }
+.log { background: transparent; border: 0; border-radius: 0; box-shadow: none; padding: var(--space-md) 0; }
+/* bubbles keep the account's own bubble-opacity setting (--bubble-alpha), so the slider still works */
+.line { background: color-mix(in oklab, var(--color-paper-2) var(--bubble-alpha), transparent); border: 0; border-radius: var(--radius-card); box-shadow: none; padding: var(--space-sm) var(--space-md); margin: 0 0 var(--space-sm); }
+.line.mine, .line.mine:not(.note) { background: color-mix(in oklab, var(--mine) var(--bubble-alpha), transparent); margin-left: auto; margin-right: 0; width: fit-content; max-width: 82%; box-shadow: inset -2px 0 0 color-mix(in oklab, var(--color-jade) 70%, transparent); }
+.line.mine .speaker { color: color-mix(in oklab, var(--color-jade) 72%, var(--color-ink)); }
+.line.note, .line.event { background: transparent; border-radius: 0; padding-left: 0; color: var(--color-muted); box-shadow: inset 2px 0 0 var(--color-rule); padding-left: var(--space-md); }
+.line.thinking { color: var(--color-muted); font-style: italic; }
+.speaker { font-family: var(--font-body); font-size: var(--text-xs); font-weight: 500; letter-spacing: 0; color: var(--color-muted); }
+.text { color: var(--color-ink-2); }
+.line.mine .text { color: var(--color-ink); }
+.text a { color: var(--color-ink); text-decoration-color: var(--color-accent); }
+.text em { color: var(--color-ink-2); font-family: var(--font-body); }
+.text code, .text pre { background: var(--color-paper); color: var(--color-ink); border-radius: var(--radius-sm); }
+.text blockquote { border-left: 2px solid var(--color-accent); color: var(--color-ink-2); margin: var(--space-sm) 0; padding-left: var(--space-md); }
+.ctx-marker { border-color: var(--color-rule); color: var(--color-muted); }
+.ctx-rule { background: var(--color-rule); }
+.turn-tools button { color: var(--color-muted); }
+.turn-tools button:hover { color: var(--color-accent-2); }
+.del-btn { color: var(--color-muted); background: transparent; border: 0; }
+.del-btn:hover { color: var(--color-error); }
+.think { background: var(--color-paper); border-radius: var(--radius-sm); }
+.think-summary { color: var(--color-muted); }
+.think-body { color: var(--color-ink-2); }
+
+/* ---- 6. composer ---- */
+.composer { background: var(--color-paper-2); border-top: 1px solid var(--color-rule); padding: var(--space-sm) var(--space-md); margin: 0; gap: var(--space-sm); position: relative; }
+.composer::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: var(--grain); mix-blend-mode: screen;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.6 0 0 0 0 0.55 0 0 0 0 0.45 0 0 0 0.35 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E"); }
+.msg-wrap { background: var(--color-paper); box-shadow: inset 0 0 0 1.5px var(--color-ink-2); border-radius: var(--radius-field); padding: var(--space-xs); }
+#msg, .msg-wrap textarea { background: transparent; box-shadow: none; border: 0; border-radius: 0; color: var(--color-ink); }
+#msg:focus, .msg-wrap textarea:focus { box-shadow: none; outline: none; }
+.msg-wrap:focus-within { box-shadow: inset 0 0 0 1.5px var(--color-ink-2), 0 0 0 3px var(--color-accent-soft); }
+#sendBtn { background: var(--color-accent); color: var(--color-accent-ink); border-radius: var(--radius-pill); border: 0; width: 44px; height: 44px; align-self: flex-end; display: grid; place-items: center; padding: 0; }
+#sendBtn:hover { background: var(--color-accent-2); }
+.dice-btn { background: transparent; color: var(--color-muted); border: 0; border-radius: var(--radius-sm); }
+.dice-btn:hover { color: var(--color-accent-2); }
+
+/* ---- 7. bars: one pink fill on a paper track ---- */
+.bar-track, .metric .bar-track, .token-meter .bar-track { background: var(--color-paper); border-radius: var(--radius-pill); box-shadow: inset 0 0 0 1px var(--color-rule); overflow: hidden; }
+.bar-fill, .token-meter .bar-fill { background: var(--color-accent); border-radius: inherit; }
+.token-meter.warn .bar-fill { background: var(--color-accent-2); }
+.token-meter.warn #tokenText { color: var(--color-accent-2); }
+.metric { display: grid; gap: var(--space-2xs); }
+.metric-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-sm); font-size: var(--text-sm); color: var(--color-ink-2); }
+.metric-value, .metric .metric-value { font-family: var(--font-display); color: var(--color-ink); }
+.budget-alert { background: color-mix(in oklab, var(--color-accent) 12%, transparent); border: 0; box-shadow: inset 0 0 0 1px var(--color-accent); border-radius: var(--radius-sm); color: var(--color-ink); }
+.budget-alert.over { background: color-mix(in oklab, var(--color-error) 14%, transparent); box-shadow: inset 0 0 0 1px var(--color-error); }
+
+/* ---- 8. picking messages ---- */
+.pick-bar { background: var(--color-paper-2); border: 0; box-shadow: inset 0 0 0 1px var(--color-rule); border-radius: var(--radius-sm); }
+.pick-box { accent-color: var(--color-accent); }
+.line.picked { box-shadow: inset 0 0 0 1.5px var(--color-accent); }
+
+/* ---- 9. wells, cards, dialogs ---- */
+.card { background: var(--color-paper-2); border: 0; border-radius: var(--radius-card); box-shadow: var(--shadow-card); padding: var(--space-lg); }
+/* the settings panel is a plate: its rows sit inside it with room on all four sides, and the plate's own corner is
+   never clipped by a row running out to the edge */
+.set-panel { background: var(--color-paper-2); border: 0; border-radius: var(--radius-card); box-shadow: none;
+  padding: var(--space-sm) var(--space-md) var(--space-lg); }
+.set-panel > :first-child { margin-top: 0; }
+.set-panel > :last-child { margin-bottom: 0; }
+.set-panel p { margin: var(--space-sm) 0; }
+.set-panel .sheet-row { padding: var(--space-sm) 0; gap: var(--space-md); }
+.set-panel .sheet-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.set-panel .metric { margin: var(--space-md) 0; }
+.set-panel .metric + .metric { margin-top: var(--space-sm); }
+/* one recipe per role: a filled band for import and export, a hairline for lists, a rule for the palace */
+.import-box, .export-box { background: var(--color-paper-3); border: 0; border-radius: var(--radius-card); box-shadow: none; }
+.tag-panel, .sandbox-list, .tree { background: transparent; border: 0; border-radius: var(--radius-card); box-shadow: inset 0 0 0 1px var(--color-rule); }
+.palace-box { background: transparent; border: 0; border-top: 1px solid var(--color-rule); border-radius: 0; box-shadow: none; }
+.example-row { background: color-mix(in oklab, var(--color-paper-2) 72%, transparent); border: 0; border-radius: var(--radius-card); box-shadow: none; }
+.profile-field { background: transparent; border: 0; border-radius: 0; box-shadow: inset 0 -1px 0 var(--color-rule); }
+dialog { background: var(--color-paper-2); color: var(--color-ink-2); border: 0; border-radius: var(--radius-card); box-shadow: var(--shadow-card); padding: var(--space-lg); }
+dialog::backdrop { background: color-mix(in oklab, var(--color-paper) 78%, transparent); }
+.sheet, .sheet-card { background: var(--color-paper); border-radius: var(--radius-card) var(--radius-card) 0 0; box-shadow: var(--shadow-card); }
+@media (min-width: 761px) {
+  .sheet-card { border-radius: var(--radius-card); border: 0; box-shadow: var(--shadow-card); padding-bottom: var(--space-lg); }
+}
+.sheet-head { border-bottom: 1px solid var(--color-rule); }
+/* the grid's own card, not the 1.4.1 navy one: same paper as the panel, a warm hover, and the real card corner */
+#settingsSheet .set-grid { gap: var(--space-md); margin: var(--space-md) 0 0; }
+#settingsSheet .set-card { background: var(--color-paper-2); background-image: none; border: 0; border-radius: var(--radius-card);
+  color: var(--color-ink); padding: var(--space-md); gap: var(--space-2xs); }
+#settingsSheet .set-card:hover, #settingsSheet .set-card:focus-visible { background: var(--color-paper-3); box-shadow: inset 0 0 0 1px var(--color-rule); outline: none; }
+#settingsSheet .set-card:focus-visible { box-shadow: 0 0 0 3px var(--color-accent-soft); }
+.set-grid { gap: var(--space-sm); }
+.set-card { background: var(--color-paper-2); border: 0; border-radius: var(--radius-card); box-shadow: none; transition: background-color var(--dur-micro) var(--ease-out); }
+.set-card:hover { background: var(--color-paper-3); }
+.set-name { font-family: var(--font-display); font-size: var(--text-md); color: var(--color-ink); }
+.set-note, .set-icon { color: var(--color-muted); }
+.dlg-field { border-bottom: 1px solid var(--color-rule); }
+.dlg-actions { border-top: 1px solid var(--color-rule); }
+
+/* ---- 10. gallery ---- */
+.home-title { font-family: var(--font-display); font-size: var(--text-section); font-weight: 400; letter-spacing: var(--tracking-display); }
+.home-search input, .home-search select { border-radius: var(--radius-field); }
+.home-card { background: var(--color-paper-2); border: 0; border-radius: var(--radius-card); box-shadow: none; overflow: hidden; transition: background-color var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out); }
+.home-card:hover { background: var(--color-paper-3); }
+.home-card { position: relative; }
+.home-name { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 400; letter-spacing: var(--tracking-display); color: var(--color-ink); }
+.home-headline, .home-creator, .home-reason, .home-stats { color: var(--color-muted); font-size: var(--text-sm); }
+.home-tag, .tag-chip { background: var(--color-paper-3); color: var(--color-ink-2); border: 0; border-radius: var(--radius-pill); font-family: var(--font-body); font-size: var(--text-xs); padding: var(--space-3xs) var(--space-sm); }
+.tag-chip.on, .home-tag.on { background: var(--color-accent); color: var(--color-accent-ink); }
+.home-open { background: none; color: inherit; border: 0; border-radius: var(--radius-card); cursor: pointer; }
+:root:not([data-theme="light"]) .home-card .home-open,
+:root:not([data-theme="light"]) .home-card .home-open:hover { background: none; color: inherit; }
+:root:not([data-theme="light"]) .home-card .home-info { background: color-mix(in oklab, var(--color-paper) 88%, transparent); }
+.home-card.has-art .home-info { color: var(--color-ink); }
+:root:not([data-theme="light"]) .home-card .home-info { background: var(--color-paper-2); color: var(--color-ink-2); }
+/* over the art the card keeps the theme ink and a warm paper scrim, not a blue-black one */
+.home-card.has-art { background: linear-gradient(var(--color-paper), var(--color-paper)) padding-box, linear-gradient(135deg, var(--color-accent), var(--color-accent-2)) border-box; }
+.art-shade { background: color-mix(in oklab, var(--color-paper) 58%, transparent); }
+.home-dialog .art-shade { background: linear-gradient(color-mix(in oklab, var(--color-paper) 22%, transparent), color-mix(in oklab, var(--color-paper) 78%, transparent)); }
+.home-card.has-art .home-name, .home-card.has-art .home-headline, .home-card.has-art .home-creator, .home-card.has-art .home-reason { color: var(--color-ink); }
+.home-card.has-art .home-tag { background: color-mix(in oklab, var(--color-paper) 62%, transparent); color: var(--color-ink); border-color: transparent; }
+:root:not([data-theme="light"]) .home-card.has-art .home-info { background: color-mix(in oklab, var(--color-paper) 62%, transparent); color: var(--color-ink); }
+.home-reason { color: var(--color-muted); }
+:root:not([data-theme="light"]) .home-search button.icon-btn { background: var(--color-paper-2); color: var(--color-ink-2); }
+.home-recs { border-top: 1px solid var(--color-rule); }
+
+/* ---- 11. editor: example messages and tags ---- */
+.example-label, .example-row-title, .example-row-head { color: var(--color-muted); }
+.examples-box { border-top: 1px solid var(--color-rule); }
+.palace-entry { border-bottom: 1px solid var(--color-rule); }
+.tag-input { border-radius: var(--radius-field); }
+
+/* ---- 12. tables, admin, stats ---- */
+table { border-collapse: collapse; width: 100%; }
+main > section:has(> table) { overflow-x: auto; }
+th { font-family: var(--font-body); font-size: var(--text-xs); font-weight: 500; letter-spacing: 0; color: var(--color-muted); text-align: left; white-space: nowrap; }
+th, td { border-bottom: 1px solid var(--color-rule); padding: var(--space-xs) var(--space-sm); }
+td { vertical-align: middle; }
+/* controls inside a table are one step smaller, so the row stays a row */
+td button, td .row button { padding: var(--space-3xs) var(--space-sm); font-size: var(--text-xs); white-space: nowrap; }
+td input, td select { padding: var(--space-3xs) var(--space-xs); font-size: var(--text-xs); }
+td input.cap { width: 72px; }
+.stats .chart, .chart { background: var(--color-paper-2); border-radius: var(--radius-card); }
+.breakdown, .series { color: var(--color-ink-2); }
+
+/* ---- 13. login and centred pages ---- */
+body.centered { background: var(--color-paper); }
+body.centered .card { width: min(420px, 92vw); padding: var(--space-xl) var(--space-lg) var(--space-lg); border-radius: var(--radius-card); background: var(--color-paper-2); box-shadow: var(--shadow-card); }
+body.centered .card h1 { margin: 0 0 var(--space-lg); }
+body.centered .card label { margin-bottom: var(--space-xs); }
+body.centered .card label > input { margin-top: var(--space-2xs); }
+body.centered h1 { font-size: var(--text-section); }
+.login-tagline { color: var(--color-muted); font-size: var(--text-sm); }
+
+/* ---- 14. profiles ---- */
+.profile-hero { border-radius: var(--radius-card); overflow: hidden; }
+.profile-name, .profile-char-name { font-family: var(--font-display); color: var(--color-ink); }
+.profile-shade { background: color-mix(in oklab, var(--color-paper) 55%, transparent); }
+.profile-bio, .profile-meta { color: var(--color-ink-2); }
+
+/* ---- 15. motion is state only ---- */
+@media (prefers-reduced-motion: no-preference) {
+  .line, .home-card, .set-card { transition: background-color var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out); }
+}
+
+/* phones: the sheet is narrower, so the plate and its rows give back a step. Two cards a row, not three: at three the
+   names wrapped mid-word and the padding had nowhere to go. */
+@media (max-width: 760px) {
+  .set-panel { padding: var(--space-xs) var(--space-sm) var(--space-md); }
+  .set-panel .sheet-row { padding: var(--space-xs) 0; gap: var(--space-sm); }
+  #settingsSheet .set-card { padding: var(--space-sm); gap: var(--space-3xs); }
+  #settingsSheet .set-grid { gap: var(--space-sm); }
+  #settingsSheet .set-grid .set-card { flex-basis: 150px; }
+}
+
+/* Novels: a narrator's replies are drawn as prose, not bubbles. */
+#log.novel .line { background: transparent; border: none; box-shadow: none; padding: 4px 2px; margin: 0 0 14px; }
+#log.novel .line.mine { background: transparent; width: auto; max-width: none; margin-left: 0; margin-right: 0; font-style: italic; }
+.log .line .text { font-family: var(--chat-font); }
+#log.novel .line .text { font-size: 1.05em; line-height: 1.75; }
+#log.novel .line .speaker { font-variant: small-caps; letter-spacing: .04em; }
+
+/* Narrative tensions in the Character panel. */
+.tension-row { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+.tension-kind { font-size: 13px; color: var(--muted); }
+.tension-text { margin: 0; }
+.tension-row input { min-width: 0; }
+.tension-done { margin: 2px 0; font-size: 13px; }
+
+/* The maker page: a novel or group chat is made here, like a character. */
+.maker-main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+.maker-set { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 14px; }
+.maker-set legend { padding: 0 6px; }
+.maker-main .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* The cast of a novel or group: each character is a card with its picture beside its name, on its own background. */
+.cast-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: var(--space-sm); }
+.cast-card {
+  position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: flex-end; min-height: 112px; padding: var(--space-sm);
+  border-radius: var(--radius-card); background: var(--color-paper-2) center / cover no-repeat; overflow: hidden; cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--color-rule); transition: box-shadow var(--dur-micro) var(--ease-out);
+}
+.cast-card::before { content: ""; position: absolute; inset: 0; z-index: -1; background: color-mix(in oklab, var(--color-paper) 58%, transparent); }
+.cast-card:hover { box-shadow: inset 0 0 0 1px var(--color-muted); }
+.cast-card.on { box-shadow: inset 0 0 0 2px var(--color-accent); }
+.cast-card:focus-within { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.cast-row { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; width: 100%; }
+.cast-avatar { width: 40px; height: 40px; flex: none; border-radius: 50%; object-fit: cover; }
+.cast-initial { display: grid; place-items: center; background: var(--color-paper-3); color: var(--color-ink); font-weight: 600; }
+.cast-name { color: var(--color-ink); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A world made inside the maker page. */
+.maker-world { display: grid; gap: var(--space-sm); padding: var(--space-sm) 0 0; }
+.maker-world label { display: grid; gap: var(--space-2xs); }
+.maker-world textarea, .maker-world input { width: 100%; }

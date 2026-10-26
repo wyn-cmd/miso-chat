@@ -8,26 +8,78 @@ This is a personal project. It is built for use on one machine or a private netw
 
 ## Screenshots
 
-The pictures below use six made-up characters, with generated art and made-up chats. They show no real account, character or data.
+The pictures use seven made-up characters and made-up chats. They show no real account, character or data. The characters have no backgrounds of their own, so each picture shows the default backgrounds for its look.
 
-![Sign in](docs/screenshots/01-login-desktop.png)
+Miso Chat has four looks, chosen under Settings, Appearance, Theme: Moonlit (the default), Soft Shadows, Spore (1.5.0) and Hyacinth (1.4.1). The first four pictures show every look on desktop and on a phone. The Moonlit set comes after them.
 
-![Search and home page](docs/screenshots/02-search-desktop.png)
-
-![A chat on desktop](docs/screenshots/03-chat-desktop.png)
-
-![Settings grid on desktop](docs/screenshots/04-settings-grid-desktop.png)
-
-![Appearance settings with the background and bubble sliders](docs/screenshots/05-settings-appearance-desktop.png)
-
-![The character editor with several backgrounds](docs/screenshots/09-editor-backgrounds-desktop.png)
-
-![The character info card](docs/screenshots/08-info-card-desktop.png)
+Desktop, home page, all four looks:
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/06-chat-phone.png" alt="A chat on a phone" width="300"><br>A chat on a phone</td>
-    <td align="center"><img src="docs/screenshots/07-settings-grid-phone.png" alt="Settings grid on a phone" width="300"><br>Settings grid on a phone</td>
+    <td align="center"><img src="docs/screenshots/moonlit-desktop-home.png" alt="Moonlit (default): home on desktop" width="480"><br>Moonlit (default): home</td>
+    <td align="center"><img src="docs/screenshots/soft-shadows-desktop-home.png" alt="Soft Shadows: home on desktop" width="480"><br>Soft Shadows: home</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/spore-desktop-home.png" alt="Spore (1.5.0): home on desktop" width="480"><br>Spore (1.5.0): home</td>
+    <td align="center"><img src="docs/screenshots/hyacinth-desktop-home.png" alt="Hyacinth (1.4.1): home on desktop" width="480"><br>Hyacinth (1.4.1): home</td>
+  </tr>
+</table>
+
+Desktop, a chat, all four looks:
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/moonlit-desktop-chat.png" alt="Moonlit (default): a chat on desktop" width="480"><br>Moonlit (default): a chat</td>
+    <td align="center"><img src="docs/screenshots/soft-shadows-desktop-chat.png" alt="Soft Shadows: a chat on desktop" width="480"><br>Soft Shadows: a chat</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/spore-desktop-chat.png" alt="Spore (1.5.0): a chat on desktop" width="480"><br>Spore (1.5.0): a chat</td>
+    <td align="center"><img src="docs/screenshots/hyacinth-desktop-chat.png" alt="Hyacinth (1.4.1): a chat on desktop" width="480"><br>Hyacinth (1.4.1): a chat</td>
+  </tr>
+</table>
+
+Phone, home, all four looks (left to right: Moonlit, Soft Shadows, Spore, Hyacinth):
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/moonlit-phone-home.png" alt="Moonlit (default): home on a phone" width="200"><br>Moonlit (default): home</td>
+    <td align="center"><img src="docs/screenshots/soft-shadows-phone-home.png" alt="Soft Shadows: home on a phone" width="200"><br>Soft Shadows: home</td>
+    <td align="center"><img src="docs/screenshots/spore-phone-home.png" alt="Spore (1.5.0): home on a phone" width="200"><br>Spore (1.5.0): home</td>
+    <td align="center"><img src="docs/screenshots/hyacinth-phone-home.png" alt="Hyacinth (1.4.1): home on a phone" width="200"><br>Hyacinth (1.4.1): home</td>
+  </tr>
+</table>
+
+Phone, a chat, all four looks (same order):
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/moonlit-phone-chat.png" alt="Moonlit (default): a chat on a phone" width="200"><br>Moonlit (default): chat</td>
+    <td align="center"><img src="docs/screenshots/soft-shadows-phone-chat.png" alt="Soft Shadows: a chat on a phone" width="200"><br>Soft Shadows: chat</td>
+    <td align="center"><img src="docs/screenshots/spore-phone-chat.png" alt="Spore (1.5.0): a chat on a phone" width="200"><br>Spore (1.5.0): chat</td>
+    <td align="center"><img src="docs/screenshots/hyacinth-phone-chat.png" alt="Hyacinth (1.4.1): a chat on a phone" width="200"><br>Hyacinth (1.4.1): chat</td>
+  </tr>
+</table>
+
+Moonlit, the default look, on desktop:
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/moonlit-desktop-login.png" alt="Moonlit: sign in" width="480"><br>Moonlit: sign in</td>
+    <td align="center"><img src="docs/screenshots/moonlit-desktop-home.png" alt="Moonlit: home page" width="480"><br>Moonlit: home page</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/moonlit-desktop-chat.png" alt="Moonlit: a chat on desktop" width="480"><br>Moonlit: a chat on desktop</td>
+    <td align="center"><img src="docs/screenshots/moonlit-desktop-settings.png" alt="Moonlit: settings on desktop" width="480"><br>Moonlit: settings on desktop</td>
+  </tr>
+</table>
+
+Moonlit, on a phone:
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/moonlit-phone-chat.png" alt="Moonlit: a chat on a phone" width="220"><br>A chat</td>
+    <td align="center"><img src="docs/screenshots/moonlit-phone-settings.png" alt="Moonlit: settings on a phone" width="220"><br>Settings</td>
+    <td align="center"><img src="docs/screenshots/moonlit-phone-home.png" alt="Moonlit: home on a phone" width="220"><br>Home</td>
   </tr>
 </table>
 
@@ -70,7 +122,7 @@ The Python packages `pymupdf`, `python-docx` and `pillow` come from `requirement
 
     python -m uvicorn web.app:make_app --factory --host 127.0.0.1 --port 8000
 
-Open http://127.0.0.1:8000 in a browser. The first login is `admin` with the password `admin`. The app asks you to change it before anything else. Create other accounts from the admin page.
+Open http://127.0.0.1:8000 in a browser. On a new install the first account is `admin`, with a random one-time password printed once in the server log at first start. Sign in with it and change it before anything else. Create other accounts from the admin page.
 
 Run the web app from the project folder, because character folders are read relative to it.
 
@@ -126,7 +178,7 @@ The account keeps up to 20 automatic entries by default, 1 to 60 in the settings
 
 ### Episodic memory
 
-Earlier moments of a chat can come back when they become relevant again. When messages leave the 25-message window, they are cut into short episodes of six messages, each with a few keys: the names and distinctive words in it. A later message that touches those keys brings the best matching episodes back into the prompt, up to three and about 1,500 characters.
+Earlier moments of a chat can come back when they become relevant again. When messages move out of the recent window, they are cut into short episodes of six messages, each with a few keys: the names and distinctive words in it. A later message that touches those keys brings the best matching episodes back into the prompt, up to three and about 1,500 characters.
 
 When the keys find nothing, the new message is compared with the episodes by meaning, using an embedding from `gemini-embedding-001` at 256 dimensions. Episodes are embedded in one batch when the memory refresh cuts them, not on every message, and only the message being sent is embedded on a turn. Each message is shortened to 200 characters before it is embedded. An episode that failed to embed is still found by its keys.
 
@@ -151,13 +203,23 @@ The admin page also sets the dream frequency and the server's daily cap on dream
 
 A character has five kinds of memory, and each one has a different job.
 
-- **Recent window.** The last 25 to 32 messages (40 in group chats) go to the model word for word. The window starts on a multiple of eight messages, so its first message stays put for several turns and the provider's prompt cache can reuse the part that has not changed.
-- **Memory bank (`memory.md`).** Long-term facts about the people, places and history of the chat. It is refreshed every 18 messages from the last 30 messages. The refresh does not rewrite the file: the model replies with changes only (added facts, corrected lines and removed lines), and the app applies them. A fact the model does not mention is kept. The memory bank is limited to 20,000 characters.
+- **Recent window.** The recent messages go to the model. The window is at least the size set under Settings, Chat history (25 messages for a 1:1 chat and 40 for a group by default) and up to nine messages more. Older messages in the window are clipped (see Clipping below), and the newest eight or more are sent whole. The window starts a whole number of ten-message steps before the clip boundary, so its first message stays put for ten turns at a time and the provider's prompt cache can reuse the part that has not changed.
+- **Memory bank (`memory.md`).** Long-term facts about the people, places and history of the chat. It is refreshed every 20 messages from the last 30 messages. The refresh does not rewrite the file: the model replies with changes only (added facts, corrected lines and removed lines), and the app applies them. A fact the model does not mention is kept. The memory bank is limited to 20,000 characters.
 - **Pinned facts.** Facts you pin in Settings, Pinned facts. They are sent with every reply, so the character never forgets them, and the refresh never changes them.
-- **Running summary and episodes.** Messages that leave the window are folded into a running summary, and cut into episodes that can be recalled (see Episodic memory under Mind Palace).
+- **Running summary and episodes.** Messages are folded into a running summary as the clip boundary passes them, and each one is read to the same 550 characters the window keeps. Messages that have left the window are also cut into episodes that can be recalled (see Episodic memory under Mind Palace).
 - **Event memory (`events.json`).** The nightly dream also writes dated events: who did what, the belief it left and what followed, plus a few evolving lines that change as the chat does. A later message brings back the events whose words overlap it. Capped at 200 events and 12 evolving lines, so it cannot grow without end. Off by default.
 
 Automatic palace entries and dreams add to the memory over time. See Mind Palace and Dreams.
+
+## Worlds
+
+A world is the setting of your stories: its places, magic systems, rules, civilisations, factions, technology and other details. Each account keeps its own worlds, private to it, under Settings, Worlds. An account can keep up to 20. A novel or a chat uses its own world, the account's default world, or no world.
+
+Each world has a name, a summary and seven sections. Write one entry per line in a section. Each entry can be up to 300 estimated tokens, the summary up to 250, and each section up to 1,500, except Other details, which is also 1,500. Every entry shows its own count under its box, and the section totals sit by the Save button. A save over a limit is refused with a message that says which entry or section is too long, so nothing is cut without your knowing.
+
+A bullet (`-`, `*` or `•`) or a `[NEW]` tag at the start of a line is removed when the world is saved, because the prompt adds its own list marks. A number such as `1.` or `2)` is kept, so a numbered rule can still be cited. A title line such as `Expedition rules` is kept as the first item of its list.
+
+The world is sent in the system prompt after the example messages, so it is the same on every turn. Its block is capped at 10,000 estimated tokens, and anything past the cap is left out at a whole entry.
 
 ## Mood and relationship
 
@@ -199,7 +261,7 @@ Any account can make a group chat from the sidebar. A group takes two to eight c
 
 Each group turn starts with a director. The director reads the new message, the chat history, the summary, the memory and the member notes, then returns the speakers in the order they should answer. Each chosen member replies in that order, so a group can have one reply or several. The director uses the same model as the group members: whichever model the account has picked, or the first model in the chain if none is picked. If the director fails, one random member replies and the note in the chat says why. The director is used in the web app only.
 
-After the director's picks, each reply may bring in one more speaker, up to four extra replies a turn, and no member gives more than two replies in a row. This keeps a group from answering with a single voice without letting one member take the turn over.
+After the director's picks, each reply may bring in one more speaker, up to two extra replies a turn, and no member gives more than two replies in a row. A group with one member skips the director, since there is only one choice. This keeps a group from answering with a single voice without letting one member take the turn over.
 
 A group also has its own Mind Palace, one per account, kept in the same place as a solo chat's. Matched entries reach every member's reply and the director, so shared history lives in one place instead of in each member's card.
 
@@ -237,9 +299,19 @@ Two optional features cut the prompt without changing what the chat is. Both are
 
 Quenching is a per-account preference in Settings, Account. It runs in two stages. The first is the same safe-word and whitespace cleaning the app already does: zero-width characters, runs of spaces, extra blank lines, HTML comments and decoration-only lines are removed, and no word is lost. The second reads only the older part of the history and removes the least informative sentences, the ones whose words are already common in that window.
 
-The newest four messages, every message you wrote, and every sentence shorter than six content words are left whole. So is any sentence with a figure, a quantity, a proper noun, a shouted word or a quotation. A removal is accepted only while at least 92 percent of the window's distinct content words survive and no more than 35 percent of its characters are gone, so the pass stops well before the text thins out. The context marker in Settings shows how much it saved.
+The second stage only touches messages older than the clip boundary (see Clipping below). Every message you wrote is left whole, and so is every sentence shorter than six content words. So is any sentence with a figure, a quantity, a proper noun, a shouted word or a quotation. A removal is accepted only while at least 92 percent of the window's distinct content words survive and no more than 35 percent of its characters are gone, so the pass stops well before the text thins out. The context marker in Settings shows how much it saved.
 
-This is near-lossless, not lossless. Wording is bounded, meaning is not proven. It also shifts the older text slightly from turn to turn, which can lower the cached share on the stats page for a quenched account. The saved tokens are still the larger number.
+This is near-lossless, not lossless. Wording is bounded, meaning is not proven. The result for a stretch of older messages is kept while those messages do not change, so the text sent stays the same between clip steps and the provider's prompt cache can reuse it.
+
+Quenching is on by default in group chats, where an account has never set it. Solo chats keep it off until you switch it on, and an account that has switched it off keeps it off everywhere.
+
+### Clipping
+
+Messages older than the newest eight or more in the window are cut to about 550 characters, at a word break where one is near, and end with " ...". The boundary moves in steps of ten messages, so the same messages stay cut for ten turns at a time, which keeps the provider's prompt cache working. The running summary covers each message as it is clipped and reads it to the same 550 characters, so the model keeps the thread even where the detail is shortened.
+
+Clipping is on by default. Turn it off under Settings, Chat history, and older messages are then sent in full.
+
+The context marker above the chat shows the estimated size of the next prompt, the part the provider can reuse from its cache, the part that is new, and the tokens that quenching and clipping saved. These are estimates, about four characters per token.
 
 ### Memory retention
 
@@ -289,10 +361,20 @@ Admins add backgrounds to a character in the character editor. A character can h
 
 - A chat picks one background at random each time it opens.
 - Home cards and the info card cycle through the backgrounds at random. Each change waits 5 to 8 seconds, then fades to the next picture. Reduced-motion settings keep one still picture.
-- A character with no backgrounds uses the shared defaults in `web/static/defaults/`. These cycle the same way.
+- A character with no backgrounds uses the default set for the look in use, in `web/static/defaults/`: blurred circles in each look's main colour (`moon-N` for Moonlit, `folio-N` for Soft Shadows, `spore-N` for Spore, `classic-N` for Hyacinth). These cycle the same way.
 - Under Settings, Appearance, two sliders set the background brightness (darker or lighter) and the chat bubble opacity. Each account keeps its own values.
 
 A background is never read by OCR and is never used as the profile picture.
+
+## Themes
+
+Four looks ship with this version. **Moonlit** is the default. **Soft Shadows** is a reading view that sets the chat as a written page. **Spore** is the 1.5.0 look: a warm umber ground with parchment text, a hot coral for actions, bars and the active row, and a jade for what you wrote yourself. **Hyacinth** is the 1.4.1 look, unchanged.
+
+Choose one under Settings, Appearance, Theme. The choice applies to every page, login included, and takes effect at once with no reload and no lost chat state. It is kept per browser, next to the light/dark setting, not per account: two accounts on one browser share it, and a different browser starts on Moonlit.
+
+- The light/dark button works in both looks, and the browser's toolbar colour follows it.
+- The highlight colour still applies under both. Reset returns the default for whichever look is active.
+- Hyacinth works by switching the redesign stylesheet off, so the plain `style.css` underneath shows through. That is why the layout, element ids and the JavaScript are the same either way.
 
 ## Characters and personas
 
@@ -335,7 +417,7 @@ Run it with the server address:
 
 Options: `--username`, `--character` (open a character or group straight away) and `--persona`. Use an https address for any server other than localhost. The password is typed at a prompt and is never saved. If two-factor sign-in is on for the account, the client then asks for the 6-digit code from the authenticator app; the first sign-in with it required shows the key once to add to the app. Type `/help` inside the client for its commands.
 
-It checks the server's version before it asks for a password. It works only with a server that has the same major and minor version: 1.4.0 and 1.4.2 work together, but 1.3.1 and 1.4.0 do not. Download the client from the server's web app, which always matches that server.
+It checks the server's version before it asks for a password. It works only with a server that has the same major and minor version: any 1.5.x client works with a 1.5.x server, but 1.4.1 and 1.5.0 do not work together. Download the client from the server's web app, which always matches that server.
 
 Replies show quoted speech in green, `*italic*` and `**bold**`, and each character's reply sits in a box in that character's colour. Colours and italics need a terminal with 24-bit colour and italic support, such as Windows Terminal; other terminals show plain text.
 
@@ -363,9 +445,9 @@ The client refuses any redirect to a non-https address, so a password is never s
 
 ## Security
 
-- Use the web app over HTTPS, or on a private network behind a private tunnel or VPN. The session cookie is marked Secure by default. Set `MISO_COOKIE_SECURE=0` only for plain-http testing on a private network, or sign-in will not work.
-- Change the admin password on first login. Use long, unique passwords for every account. Passwords need at least 10 characters.
-- Failed sign-ins lock an account. 10 failures lock it for 15 minutes; 5 more lock it for 30 minutes, then 1, 2 and 4 hours. 35 failures with no successful sign-in lock it until an admin unlocks it on the admin page. If no admin can sign in, run `python unlock_account.py USERNAME` on the server. The count resets only on a successful sign-in or an unlock. Separately, 15 consecutive wrong guesses from one address block that address for that account until an admin unlocks it. Other addresses are not affected. Behind Cloudflare the address comes from the `CF-Connecting-IP` header, which the server trusts only from localhost, so run cloudflared on the same machine as the web app.
+- Use the web app over HTTPS, or on a private network behind a private tunnel or VPN. The session cookie is marked Secure by default, and over HTTPS it is named `__Host-rp_session`, so no other subdomain can set or replace it. Sign-ins from 1.4.1 are signed out once by this update. Set `MISO_COOKIE_SECURE=0` only for plain-http testing on a private network, or sign-in will not work.
+- Change the admin password on first login. A fresh install prints its random admin password once in the server log, so keep that log private until the password is changed. Use long, unique passwords for every account. Passwords need at least 10 characters, and common passwords, passwords that repeat the username and one- or two-character runs are refused.
+- Failed sign-ins lock an account. 10 failures lock it for 15 minutes, then 15 failures for 30 minutes, 20 for an hour, 25 for two hours and 30 for four hours. Past 30, every 5 more wrong guesses lock it for four hours again, so there is no permanent lock. If no admin can sign in, run `python unlock_account.py USERNAME` on the server. The count resets only on a successful sign-in or an unlock. Separately, 15 consecutive wrong guesses from one address block that address for that account until an admin unlocks it. Other addresses are not affected. Behind Cloudflare the address comes from the `CF-Connecting-IP` header, which the server trusts only from localhost, so run cloudflared on the same machine as the web app.
 - Passwords are stored as scrypt hashes at cost 2^16. Each check uses about 64 MB of memory for a moment.
 - Two-factor sign-in uses an authenticator app. Any account can turn it on in Settings, and admins can require it on an account. Set-up happens on a page straight after the password, and nothing else is usable until it is finished. `MISO_SECRET_KEY` in `.env` is needed to read two-factor secrets and to restore a backup.
 - Backups are encrypted with a password chosen by the first admin. Other admins can download a backup but cannot read it without that password. Nothing can recover a backup without its password.
@@ -413,5 +495,12 @@ This copy does not include the automated test suite. A basic static check is:
 
 ## Credits and licences
 
-- Merriweather, in `web/static/fonts`, is licensed under the SIL Open Font License 1.1. See `web/static/fonts/OFL.txt`.
+The fonts in `web/static/fonts` are all licensed under the SIL Open Font License 1.1. Each licence text sits beside its files.
+
+- Young Serif, the Moonlit and Spore display face: copyright 2023 The Young Serif Project Authors. See `web/static/fonts/OFL-youngserif.txt`.
+- Instrument Sans, the Moonlit and Spore interface face: copyright 2022 The Instrument Sans Project Authors. See `web/static/fonts/OFL-instrumentsans.txt`.
+- Inter, the Hyacinth interface face and a chat font choice: copyright The Inter Project Authors. JetBrains Mono, the monospace choice: copyright JetBrains s.r.o. Both are in `web/static/fonts/OFL-inter-jetbrains-mono.txt`.
+- Merriweather, a serif chat font choice: copyright 2024 The Merriweather Project Authors. See `web/static/fonts/OFL.txt`.
+- Literata, a serif chat font choice: copyright 2017 The Literata Project Authors. See `web/static/fonts/OFL-literata.txt`.
+- Atkinson Hyperlegible, a sans-serif chat font choice: copyright 2020 Braille Institute of America, Inc. See `web/static/fonts/OFL-atkinson-hyperlegible.txt`.
 - Miso Chat is released under the MIT licence. See `LICENSE`. Copyright (c) 2026 wyn-cmd.

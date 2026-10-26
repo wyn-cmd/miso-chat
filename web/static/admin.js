@@ -154,6 +154,7 @@ async function loadSettings() {
   $("s_palace_enabled").checked = s.palace_enabled === "1";
   $("s_episodes_enabled").checked = s.episodes_enabled === "1";
   $("s_dreams_enabled").checked = s.dreams_enabled === "1";
+  $("s_dreams_in_novels").checked = s.dreams_in_novels === "1";
   $("s_mood_enabled").checked = s.mood_enabled === "1";
   $("s_attitude_enabled").checked = s.attitude_enabled === "1";
   $("s_event_memory_enabled").checked = s.event_memory_enabled === "1";
@@ -196,6 +197,7 @@ $("settingsForm").addEventListener("submit", async (ev) => {
       palace_enabled: $("s_palace_enabled").checked,
       episodes_enabled: $("s_episodes_enabled").checked,
       dreams_enabled: $("s_dreams_enabled").checked,
+      dreams_in_novels: $("s_dreams_in_novels").checked,
       mood_enabled: $("s_mood_enabled").checked,
       attitude_enabled: $("s_attitude_enabled").checked,
       event_memory_enabled: $("s_event_memory_enabled").checked,

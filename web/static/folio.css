@@ -1,0 +1,150 @@
+/* Folio: the reading view. The chat is a page being written together, not a stream of bubbles. Speakers sit in a margin
+   column beside their words, the words are set in Literata at a comfortable measure, your own lines are in the umber
+   of a pen, and the composer is a writing line under the page. The rest of the app keeps its layout and every control,
+   so each feature is still where it was. Loads over redesign.css with data-look="folio"; the light page is the
+   data-theme="light" colourway. */
+
+:root[data-look="folio"] {
+  --font-display: "Literata", Georgia, "Times New Roman", serif;
+  --font-body: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --chat-font: "Literata", Georgia, "Times New Roman", serif;
+  --display-weight: 400;
+  --tracking-display: -0.012em;
+  --grain: 0;
+  --radius-card: 18px;
+  --radius-field: 10px;
+  --shadow-card: none;
+  --folio-margin: 168px;   /* the speaker's column, to the left of the text */
+  --folio-measure: 40rem;  /* the width of the written page */
+  color-scheme: dark;
+  /* the lamp (default): warm near-black, a pen of soft gold for your own lines, a sage-teal for the page's marks */
+  --color-paper: #1a1816; --color-paper-2: #221f1c; --color-paper-3: #2c2824;
+  --color-ink: #ece6da; --color-ink-2: #cfc7b8; --color-muted: #a39c8f;
+  --color-rule: #3a3530;
+  --color-accent: #7fc8bd; --color-accent-2: #a6dcd3; --color-accent-ink: #10201d; --color-focus: #a6dcd3;
+  --color-jade: #d9b77e; --color-jade-ink: #1a1816;
+  --color-error: #f08a7e;
+  --meta-theme: #1a1816;
+}
+
+/* the page (light): paper, ink, a deep teal for marks and an umber pen for your lines */
+:root[data-look="folio"][data-theme="light"] {
+  color-scheme: light;
+  --color-paper: #fbf9f4; --color-paper-2: #f3efe5; --color-paper-3: #e9e3d3;
+  --color-ink: #1f201d; --color-ink-2: #3b3c37; --color-muted: #6b6862;
+  --color-rule: #dcd5c4;
+  --color-accent: #1b6e66; --color-accent-2: #145a53; --color-accent-ink: #f7fbfa; --color-focus: #1b6e66;
+  --color-jade: #7a5c2e; --color-jade-ink: #fbf9f4;
+  --color-error: #b42318;
+  --meta-theme: #fbf9f4;
+}
+
+/* The page: paper under everything. A character's picture, when it has one, shows as a band at the top that fades into
+   the paper, so the setting stays visible without competing with the words. The band is a fixed layer behind the page,
+   so it does not scroll, and the fade is a flat scrim over the photograph. */
+:root[data-look="folio"] { background: var(--color-paper); }
+:root[data-look="folio"] body { background: var(--color-paper); }
+:root[data-look="folio"] body.page-art { background: transparent; }
+:root[data-look="folio"] body.page-art::before {
+  content: ""; position: fixed; left: 0; right: 0; top: 0; height: 320px; z-index: -2; pointer-events: none;
+  background: var(--chat-art) center top / cover no-repeat;
+}
+:root[data-look="folio"] body.page-art::after {
+  content: ""; position: fixed; left: 0; right: 0; top: 0; height: 320px; z-index: -1; pointer-events: none;
+  background: linear-gradient(color-mix(in oklab, var(--color-paper) 72%, transparent), var(--color-paper)); /* taste-skill-ignore: a neutral scrim over a photograph */
+}
+
+/* Masthead: the chat's name is the page's title, set large in Literata, with its controls on the same line. */
+:root[data-look="folio"] #chatSection .bar {
+  align-items: center; flex-wrap: wrap; gap: var(--space-xs) var(--space-sm);
+  padding: var(--space-md) var(--space-lg); border-bottom: 1px solid var(--color-rule); background: transparent;
+}
+:root[data-look="folio"] .chat-title { font-family: var(--font-display); font-size: 1.6rem; line-height: 1.2; letter-spacing: var(--tracking-display); }
+:root[data-look="folio"] .chat-icon { border-radius: 50%; }
+
+/* The written page. The log is one column, centred, with the speaker's margin to its left on a wide screen. */
+:root[data-look="folio"] .log {
+  padding: var(--space-xl) clamp(16px, 4vw, 48px) var(--space-xl) clamp(16px, 4vw, 48px);
+  background: transparent; box-shadow: none; border: 0;
+}
+:root[data-look="folio"] .log .line {
+  position: relative; max-width: var(--folio-measure); margin: 0 auto var(--space-lg); padding: 0;
+  background: transparent !important; border: 0; box-shadow: none; border-radius: 0;
+  font-size: var(--chat-size); line-height: 1.72; color: var(--color-ink);
+}
+:root[data-look="folio"] .log .line .speaker {
+  position: absolute; top: .35em; right: calc(100% + 18px); width: calc(var(--folio-margin) - 18px); text-align: right;
+  font-family: var(--font-body); font-size: 12px; font-weight: 600; line-height: 1.35; letter-spacing: 0;
+  color: var(--color-muted); background: none !important; border: 0; padding: 0; overflow-wrap: anywhere;
+}
+:root[data-look="folio"] .log .line .text { font-family: var(--chat-font); font-size: var(--chat-size); color: inherit; }
+:root[data-look="folio"] .log .line .text p { margin: 0 0 .7em; }
+
+/* Your own lines, in the pen's umber, marked by a thin margin rule instead of a bubble. */
+:root[data-look="folio"] .log .line.mine { width: auto; max-width: var(--folio-measure); margin-left: auto; margin-right: auto; color: var(--color-jade); }
+:root[data-look="folio"] .log .line.mine .text { color: var(--color-jade); }
+:root[data-look="folio"] .log .line.mine .speaker { color: var(--color-jade); }
+:root[data-look="folio"] .log .line.mine::before {
+  content: ""; position: absolute; top: .2em; bottom: .2em; left: -18px; width: 2px; border-radius: 2px;
+  background: color-mix(in oklab, var(--color-jade) 60%, transparent);
+}
+
+/* Narration, notes and random events sit centred on the page, small and quiet. */
+:root[data-look="folio"] .log .line.note,
+:root[data-look="folio"] .log .line.event { text-align: center; font-size: 14px; color: var(--color-muted); padding: 0; }
+:root[data-look="folio"] .log .line.note .speaker,
+:root[data-look="folio"] .log .line.event .speaker { display: none; }
+:root[data-look="folio"] .log .line.thinking { color: var(--color-muted); }
+
+/* Per-message tools (Edit, Branch, the stamp) sit under the words, quietly. */
+:root[data-look="folio"] .log .line .stamp { color: var(--color-muted); font-size: 12px; margin-top: var(--space-2xs); text-align: left; display: block; }
+:root[data-look="folio"] .log .line button { font-size: 12px; }
+
+/* The writing line: a page's foot, not a box. The text is the pen's, the send is the one filled mark. */
+:root[data-look="folio"] .composer {
+  max-width: var(--folio-measure); margin: 0 auto; padding: var(--space-md) clamp(16px, 4vw, 48px) var(--space-sm);
+  border-top: 1px solid var(--color-rule); background: transparent; align-items: flex-end;
+}
+:root[data-look="folio"] .composer { width: 100%; max-width: calc(var(--folio-measure) + 64px); }
+:root[data-look="folio"] .composer .msg-wrap { flex: 1 1 auto; min-width: 0; width: 100%; display: flex; background: transparent; box-shadow: none; padding: 0; }
+:root[data-look="folio"] #msg, :root[data-look="folio"] .composer textarea {
+  flex: 1 1 auto; width: 100%; height: auto; min-height: 44px; min-width: 0; background: transparent; border: 0; border-bottom: 1px solid var(--color-rule); border-radius: 0;
+  font-family: var(--chat-font); font-size: var(--chat-size); line-height: 1.6; padding: var(--space-xs) var(--space-2xs);
+  box-shadow: none; resize: none;
+}
+:root[data-look="folio"] .composer textarea:focus { border-bottom-color: var(--color-accent); }
+:root[data-look="folio"] #sendBtn { border-radius: 50%; width: 42px; height: 42px; padding: 0; display: grid; place-items: center; }
+
+/* Navigation: the characters are listed as the page's contents, the active one underlined in the teal. */
+:root[data-look="folio"] .sidebar { background: transparent; border-right: 1px solid var(--color-rule); }
+:root[data-look="folio"] .sidebar h2 { font-family: var(--font-display); font-size: 15px; font-weight: 400; color: var(--color-ink-2); letter-spacing: 0; }
+:root[data-look="folio"] .char-item .char-name { font-family: var(--font-display); font-size: 16px; color: var(--color-ink-2); }
+:root[data-look="folio"] .char-item.active .char-name {
+  color: var(--color-ink); text-decoration: underline; text-decoration-color: var(--color-accent); text-decoration-thickness: 2px; text-underline-offset: .28em;
+}
+:root[data-look="folio"] .char-item { background: transparent; border-color: transparent; box-shadow: none; }
+
+/* Cards, panels and the settings sheet are paper tones, separated by a step, never a line or a shadow. */
+:root[data-look="folio"] .set-card, :root[data-look="folio"] .home-card { box-shadow: none; border-color: transparent; background: var(--color-paper-2); }
+:root[data-look="folio"] .set-name, :root[data-look="folio"] .home-name { font-family: var(--font-display); }
+
+/* Controls: pills for actions, text-weight ghosts, the teal filled as the page's one mark. */
+:root[data-look="folio"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn) {
+  background: var(--color-accent); color: var(--color-accent-ink);
+}
+:root[data-look="folio"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):hover { background: var(--color-accent-2); }
+:root[data-look="folio"] button.ghost { color: var(--color-ink-2); box-shadow: inset 0 0 0 1px var(--color-rule); }
+:root[data-look="folio"] button.ghost:hover { color: var(--color-ink); box-shadow: inset 0 0 0 1px var(--color-muted); }
+
+/* Phone: the speaker moves above the words; the margin is gone, the measure is the screen's own. */
+@media (max-width: 760px) {
+  :root[data-look="folio"] #chatSection .bar { padding: var(--space-sm) var(--space-md); }
+  :root[data-look="folio"] .chat-title { font-size: 1.25rem; }
+  :root[data-look="folio"] .log { padding: var(--space-lg) var(--space-md); }
+  :root[data-look="folio"] .log .line { margin-bottom: var(--space-md); }
+  :root[data-look="folio"] .log .line .speaker { position: static; width: auto; text-align: left; margin-bottom: 2px; }
+  :root[data-look="folio"] .log .line.mine::before { left: -10px; }
+  :root[data-look="folio"] .composer { padding-left: var(--space-md); padding-right: var(--space-md); }
+  :root[data-look="folio"] .chat-title { font-size: 1.25rem; }
+  :root[data-look="folio"] #headerChat .chat-title { display: none; }
+}

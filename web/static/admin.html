@@ -8,10 +8,12 @@
   <title>Admin · Miso Chat</title>
   <script src="/static/theme-init.js"></script>
   <link rel="stylesheet" href="/static/style.css">
+  <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=rpUi===null?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
-  <meta name="theme-color" content="#020307">
+  <meta name="theme-color" content="#0f0a06">
 </head>
 <body>
   <header>
@@ -59,6 +61,7 @@
       <label class="inline"><input id="s_palace_enabled" type="checkbox"> Mind Palace (database searching: keyword entries)</label>
       <label class="inline"><input id="s_episodes_enabled" type="checkbox"> Episodic memory (earlier moments recalled by keyword)</label>
       <label class="inline"><input id="s_dreams_enabled" type="checkbox"> Autonomous dreaming in quiet hours (off by default)</label>
+      <label class="inline"><input id="s_dreams_in_novels" type="checkbox"> Dreaming in novels (on by default; separate from the switch above)</label>
       <label class="inline"><input id="s_mood_enabled" type="checkbox"> Character mood (energy, affinity, emotion) and lonely check-ins (off by default)</label>
       <label class="inline"><input id="s_attitude_enabled" type="checkbox"> Relationship with the user (affection, trust, five levels) (off by default)</label>
       <label class="inline"><input id="s_event_memory_enabled" type="checkbox"> Event memory graph, written in quiet hours by dreams (off by default)</label>

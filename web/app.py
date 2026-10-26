@@ -7,6 +7,7 @@
 #     GEMINI_API_KEY          required
 #     MISO_DATA_DIR           app.db and per-user chat state (default ./data)
 #     MISO_COOKIE_SECURE      defaults to 1; set to 0 only for plain-http testing on a private network
+import asyncio
 import collections
 import datetime
 import hashlib
@@ -33,7 +34,7 @@ from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_T
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude, novels, worlds, tensions, passwords
 import pytz
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, TIERS, TIER_MONTHLY_TOKENS, budget_days, recent_days, verify_password, needs_rehash
 
@@ -58,11 +59,27 @@ if not os.environ.get("MISO_SECRET_KEY"):
     except OSError:
         pass
 DATA_DIR = os.environ.get("MISO_DATA_DIR") or os.environ.get("ROLEPLAY_DATA_DIR") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-COOKIE = "rp_session"
 COOKIE_SECURE = (os.environ.get("MISO_COOKIE_SECURE") or os.environ.get("ROLEPLAY_COOKIE_SECURE") or "1") != "0"   # on unless turned off for plain-http testing
+# The __Host- prefix makes the browser accept the cookie only from this exact host over https, so no other
+# subdomain can set or replace it. Plain-http testing keeps the plain name, because the browser would refuse the prefix.
+COOKIE = "__Host-rp_session" if COOKIE_SECURE else "rp_session"
+# Sign-in checks that run at once. Each one holds about 64 MB while it hashes, so a burst of them is capped here.
+LOGIN_CHECKS = 4
 MAX_MESSAGE = 4000
 MAX_DELETE = 500         # most messages one delete call may remove
 MIN_PASSWORD = 10
+# Sign-in input limits. No account can have a longer name, and no password this long can be a real one: such input is
+# refused before any lookup or hash. Passwords set from now on are capped too; longer ones set earlier still sign in.
+MAX_LOGIN_USERNAME = 64
+MAX_LOGIN_PASSWORD = 1024
+MAX_NEW_PASSWORD = 256
+# Request bodies: sign-in requests are tiny, and the page sends only small JSON. Larger bodies are refused unread.
+LOGIN_BODY_MAX = 16 * 1024
+JSON_BODY_MAX = 2 * 1024 * 1024
+# Failed sign-ins from one address across every account, in a sliding window kept in memory.
+IP_WINDOW_SECONDS = 900
+IP_WINDOW_FAILS = 60
+IP_TABLE_MAX = 10000
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{2,32}$")
 TOKEN_DISPLAY_LIMIT = 1_000_000
 MEMORY_LIMIT = 20_000        # characters allowed in memory.md or pinned.md
@@ -183,11 +200,12 @@ def _bubble_pref(store, uid):
 
 
 def _default_art():
-    # Shared default backgrounds: default-*.jpg/png/webp in static/defaults, picked at random by the pages.
+    # Default backgrounds for characters with none: <look>-N.jpg/png/webp in static/defaults (look = moon, folio, spore, classic).
+    # The pages keep only the set for the look the reader is using, and pick one at random from it.
     d = os.path.join(HERE, "static", "defaults")
     if not os.path.isdir(d):
         return []
-    names = sorted(f for f in os.listdir(d) if re.match(r"^default-[\w-]+\.(jpe?g|png|webp)$", f))
+    names = sorted(f for f in os.listdir(d) if re.match(r"^(moon|folio|spore|classic)-[\w-]+\.(jpe?g|png|webp)$", f))
     return ["/static/defaults/" + f for f in names]
 
 
@@ -610,8 +628,8 @@ def _dream_view(st, uid, folder, row):
     last = _read_json_file(os.path.join(state_dir, "dream.json"))
     def hhmm(m):
         return f"{(m or 0) // 60:02d}:{(m or 0) % 60:02d}"
-    return {"enabled": bool(row.get("enabled")), "start": hhmm(row.get("start_min", 120)),
-            "end": hhmm(row.get("end_min", 360)), "tz": row.get("tz") or "",
+    return {"enabled": bool(row.get("enabled")), "start": hhmm(row.get("start_min", dreams.DEFAULT_START)),
+            "end": hhmm(row.get("end_min", dreams.DEFAULT_END)), "tz": row.get("tz") or "",
             "server_on": st.store.get_setting("dreams_enabled") == "1", "last": last or None,
             "every_days": int(st.store.get_setting("dream_every_days"))}
 
@@ -627,13 +645,25 @@ def _read_json_file(path):
 
 # Whether a stored name is a group: a private group's grp- ID, or a shared group folder.
 def _is_group_name(st, name):
+    return name.startswith(private_groups.PREFIX) or novels.is_novel(name) or name in scan_characters(st.char_root)[1]
+
+
+# Whether a chat is a group chat: a private group or a shared group folder. Novels are not counted.
+def _is_group_chat(st, name):
     return name.startswith(private_groups.PREFIX) or name in scan_characters(st.char_root)[1]
+
+
+# Whether a stored name is a novel. Novels use the nvl- prefix, reserved for the novel chat type.
+def _is_novel_name(name):
+    return novels.is_novel(name)
 
 
 # Runs one dream for an account's character. It holds the chat's lock, so it never overlaps a reply, and it is
 # counted against the server's dream cap, not the user's requests or tokens. Returns True when a dream ran.
+# A novel dreams under its own switch, dreams_in_novels, which does not depend on dreams_enabled.
 def _dream_fire(st, uid, name):
-    if st.store.get_setting("dreams_enabled") != "1":
+    switch = "dreams_in_novels" if _is_novel_name(name) else "dreams_enabled"
+    if st.store.get_setting(switch) != "1":
         return False
     today = datetime.datetime.now(pytz.timezone("US/Pacific")).strftime("%Y-%m-%d")
     key = "dream_calls:" + today
@@ -923,6 +953,9 @@ def _resolve_profile(st, name, user=None):
     if name in solo:
         return name, False
     if user is not None:
+        # A novel is named by its nvl- ID, which is its folder too.
+        if novels.is_novel(name) and novels.get(st.data_dir, user["id"], name) is not None:
+            return name, True
         own = private_groups.find_by_key(st.data_dir, user["id"], name, folder_for)
         if own is not None:
             return own["id"], True
@@ -935,11 +968,43 @@ def _label(st, user, name):
         item = private_groups.get(st.data_dir, user["id"], name)
         if item is not None:
             return item["name"]
+    if novels.is_novel(name):
+        item = novels.get(st.data_dir, user["id"], name)
+        if item is not None:
+            return item["name"]
     return display_for(name)
 
 
+# The card text of one solo character, as a novel's narrator reads it. Empty when the folder has none.
+def _card_text(st, folder):
+    try:
+        with open(os.path.join(st.char_root, folder, "character.md"), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _worlds_path(st, uid):
+    return os.path.join(st.data_dir, "users", str(uid), worlds.FILE)
+
+
+# The world and tension mode a chat uses, applied on every request so a change takes effect on the next message.
+# A novel keeps its world on the novel itself; any other chat uses its own preference, which may be the account default.
+def _apply_chat_settings(st, user, name, engine):
+    uid = user["id"]
+    if novels.is_novel(name):
+        item = novels.get(st.data_dir, uid, name)
+        choice = item["world"] if item else None
+    else:
+        choice = st.store.get_pref(uid, "world:" + name) or None
+    store = worlds.load(_worlds_path(st, uid))
+    engine.set_world(worlds.prompt_block(worlds.world_for(store, choice or None)))
+    mode = st.store.get_pref(uid, "tension:" + name) or tensions.DEFAULT_MODE
+    engine.tension_mode = mode if mode in tensions.MODES else tensions.DEFAULT_MODE
+
+
 SWITCHES = ("memory_enabled", "palace_enabled", "episodes_enabled", "dreams_enabled", "mood_enabled", "attitude_enabled",
-            "event_memory_enabled", "memory_policy_enabled")
+            "event_memory_enabled", "memory_policy_enabled", "dreams_in_novels")
 
 
 def _apply_switches(st, engine):
@@ -959,6 +1024,7 @@ def _slot(st, user, name, is_group):
         slot = st.slots.get(key)
     if slot is not None:
         _apply_switches(st, slot.engine)
+        _apply_chat_settings(st, user, name, slot.engine)
         return slot
     uid = user["id"]
     state_root = os.path.join(st.data_dir, "users", str(uid), name)
@@ -988,7 +1054,12 @@ def _slot(st, user, name, is_group):
     engine.extra_models = [m for m in engine.extra_models if _model_allowed(st, user, m)]
     engine.thinking = thinking
     engine.window_override = _pref_int(st.store.get_pref(uid, "window"))
-    engine.quench_enabled = st.store.get_pref(uid, "quench") == "1"
+    # Solo chats quench only once the account turns it on. Group chats are quenched by default; an account that has
+    # switched it off (stored as "0") keeps it off everywhere.
+    quench_pref = st.store.get_pref(uid, "quench")
+    engine.quench_enabled = quench_pref == "1" or (quench_pref is None and _is_group_chat(st, name))
+    # Clipping is on unless the account has switched it off.
+    engine.clip_enabled = st.store.get_pref(uid, "clip") != "0"
     engine.temperature_override = _pref_float(st.store.get_pref(uid, "temp:" + name))
     engine.reply_length_override = _reply_target(st, uid)
     chosen = st.store.get_pref(user["id"], "model") or ""
@@ -1000,6 +1071,12 @@ def _slot(st, user, name, is_group):
         if cfg is None:
             raise HTTPException(404, "Unknown group.")
         engine.apply_private_group(cfg["name"], cfg["members"], private_groups.get_notes(st.data_dir, uid, name))
+    if novels.is_novel(name):
+        cfg = novels.get(st.data_dir, uid, name)
+        if cfg is None:
+            raise HTTPException(404, "Unknown novel.")
+        engine.apply_novel(cfg["name"], [(display_for(m), _card_text(st, m)) for m in cfg["members"]])
+    _apply_chat_settings(st, user, name, engine)
     slot = Slot(engine, threading.Lock())
     with st.slots_lock:
         return st.slots.setdefault(key, slot)
@@ -1129,6 +1206,46 @@ def _read_body(body):
     if not isinstance(body, dict):
         raise HTTPException(400, "Expected a JSON object.")
     return body
+
+
+def _flag(value, default):
+    # A yes/no value from the page: a real boolean, or the words "true", "1", "yes" and "on". Anything else is the default.
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return default
+
+
+_ip_fails = collections.OrderedDict()   # address -> the times of its recent failed sign-ins
+_ip_fails_lock = threading.Lock()
+
+
+def _ip_limited(ip):
+    # True when this address has failed too often in the window. Old entries are dropped as they are read.
+    now = time.time()
+    with _ip_fails_lock:
+        times = [t for t in _ip_fails.get(ip, []) if t > now - IP_WINDOW_SECONDS]
+        if times:
+            _ip_fails[ip] = times
+        else:
+            _ip_fails.pop(ip, None)
+        return len(times) >= IP_WINDOW_FAILS
+
+
+def _ip_note_fail(ip):
+    now = time.time()
+    with _ip_fails_lock:
+        times = [t for t in _ip_fails.get(ip, []) if t > now - IP_WINDOW_SECONDS]
+        times.append(now)
+        _ip_fails[ip] = times
+        _ip_fails.move_to_end(ip)
+        while len(_ip_fails) > IP_TABLE_MAX:
+            _ip_fails.popitem(last=False)
+
+
+def _password_too_long(password):
+    return len(password) > MAX_NEW_PASSWORD
 
 
 SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
@@ -1525,6 +1642,60 @@ def _backfill_character_messages(st):
     st.store.set_setting(key, "1")
 
 
+# Request bodies are read up to a limit before the app sees them. This is a plain ASGI wrapper rather than an http
+# middleware, so a body sent without a length (chunked) is counted as it arrives, not only when it declares a size.
+class BodyLimit:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}
+        if scope["path"].startswith("/api/login"):
+            limit = LOGIN_BODY_MAX
+        elif headers.get("content-type", "").lower().startswith("application/json"):
+            limit = JSON_BODY_MAX
+        else:
+            return await self.app(scope, receive, send)
+        try:
+            declared = int(headers.get("content-length") or 0)
+        except ValueError:
+            return await _plain_reply(send, 400, "Bad content length.")
+        if declared > limit:
+            return await _plain_reply(send, 413, "The request is too large.")
+        # Read the body up to the limit, then give the app the same body back.
+        parts, total = [], 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                break
+            chunk = message.get("body", b"")
+            total += len(chunk)
+            if total > limit:
+                return await _plain_reply(send, 413, "The request is too large.")
+            parts.append(chunk)
+            if not message.get("more_body", False):
+                break
+        replay = [{"type": "http.request", "body": b"".join(parts), "more_body": False}]
+
+        async def again():
+            if replay:
+                return replay.pop()
+            return await receive()
+
+        return await self.app(scope, again, send)
+
+
+async def _plain_reply(send, status, text):
+    body = json.dumps({"detail": text}).encode("utf-8")
+    await send({"type": "http.response.start", "status": status, "headers": [
+        (b"content-type", b"application/json"), (b"content-length", str(len(body)).encode("ascii")),
+        (b"cache-control", b"no-store"), (b"content-security-policy", CSP.encode("ascii")),
+        (b"x-content-type-options", b"nosniff")]})
+    await send({"type": "http.response.body", "body": body})
+
+
 def make_app(client=None, data_dir=None, char_root=None):
     char_root = char_root or CHAR_ROOT
     data_dir = data_dir or DATA_DIR
@@ -1548,12 +1719,29 @@ def make_app(client=None, data_dir=None, char_root=None):
     app.state.rp = st
     app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
 
+    # A body that is not valid JSON is the client's mistake, not a server error.
+    @app.exception_handler(json.JSONDecodeError)
+    async def _bad_json(request: Request, exc: json.JSONDecodeError):
+        return JSONResponse({"detail": "The request was not valid JSON."}, status_code=400)
+
+    @app.exception_handler(UnicodeDecodeError)
+    async def _bad_text(request: Request, exc: UnicodeDecodeError):
+        return JSONResponse({"detail": "The request text is not valid UTF-8."}, status_code=400)
+
+    # Sign-in bodies and the page's JSON are small, so larger ones are refused. Uploads keep their own limits.
+    app.add_middleware(BodyLimit)
+
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         resp = await call_next(request)
         resp.headers["Content-Security-Policy"] = CSP
         resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
+        resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+        if COOKIE_SECURE:
+            # Only over https: the browser then refuses plain http for this site. Set only when the site is served over https.
+            resp.headers["Strict-Transport-Security"] = "max-age=31536000"
         if request.url.path.startswith("/api/"):
             resp.headers["Cache-Control"] = "no-store"
         elif request.url.path == "/" or request.url.path.startswith(("/static/", "/login", "/admin", "/2fa-setup", "/u/")):
@@ -1595,6 +1783,15 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.get("/admin/sandboxes")
     def admin_sandboxes_page():
         return page("sandboxes.html")
+
+    # The maker page for a novel or a group chat. The kind comes from the address; ?id= edits an existing one.
+    @app.get("/create/novel")
+    def create_novel_page():
+        return page("maker.html")
+
+    @app.get("/create/group")
+    def create_group_page():
+        return page("maker.html")
 
     @app.get("/api/admin/sandboxes/{name}")
     def admin_sandbox_accounts(name: str, request: Request):
@@ -1686,23 +1883,35 @@ def make_app(client=None, data_dir=None, char_root=None):
 
     # ---- session
 
+    login_slots = asyncio.Semaphore(LOGIN_CHECKS)
+
     @app.post("/api/login")
     async def login(request: Request):
         _csrf(request)
         body = _read_body(await request.json())
-        username = str(body.get("username", "")).strip()
-        password = str(body.get("password", ""))
-        remember = bool(body.get("remember", True))
+        username = body.get("username")
+        username = username.strip() if isinstance(username, str) else ""
+        password = body.get("password")
+        password = password if isinstance(password, str) else ""
+        # Off unless the box is ticked: a sign-in that says nothing gets a session cookie, not a 30-day one.
+        remember = _flag(body.get("remember"), False)
+        ip = client_ip(request)
+        # Input no account could match is refused before any lookup or hash, with the wrong-password answer.
+        if not username or len(username) > MAX_LOGIN_USERNAME or len(password) > MAX_LOGIN_PASSWORD:
+            raise HTTPException(401, "Wrong username or password.")
+        if _ip_limited(ip):
+            raise HTTPException(429, "Too many failed sign-ins from this address. Wait 15 minutes and try again.")
         # A locked name is refused before its password is checked, so the lock can't be guessed through.
         blocked = store.login_block(username)
         if blocked:
             raise _lock_error(blocked)
-        ip = client_ip(request)
         if store.ip_blocked(username, ip):
             raise _ip_error()
-        user = await run_in_threadpool(store.authenticate, username, password)
+        async with login_slots:
+            user = await run_in_threadpool(store.authenticate, username, password)
         if user is None:
             # Both counters move on every wrong guess, even for names that don't exist.
+            _ip_note_fail(ip)
             ip_locked = store.record_failed_ip(username, ip)
             lock = store.record_failed_login(username)
             if lock:
@@ -1762,11 +1971,15 @@ def make_app(client=None, data_dir=None, char_root=None):
             stage, user = "setup", store.pending_user(token, "setup")
         if user is None:
             raise HTTPException(401, "Sign in again.")
+        ip = client_ip(request)
+        if _ip_limited(ip):
+            raise HTTPException(429, "Too many failed sign-ins from this address. Wait 15 minutes and try again.")
         blocked = store.login_block(user["username"])
         if blocked:
             raise _lock_error(blocked)
         ok, step = secure.check_code(_open_secret(user), str(body.get("code", "")), last_step=user["totp_step"])
         if not ok:
+            _ip_note_fail(ip)
             lock = store.record_failed_login(user["username"])
             if lock:
                 if lock[0] == "permanent":
@@ -1789,7 +2002,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         _csrf(request)
         store.end_session(request.cookies.get(COOKIE))
         resp = JSONResponse({"ok": True})
-        resp.delete_cookie(COOKIE, path="/")
+        # The deleting cookie must carry the same attributes as the one it removes, or the browser keeps the old one.
+        resp.delete_cookie(COOKIE, path="/", secure=COOKIE_SECURE, httponly=True, samesite="lax")
         return resp
 
     @app.get("/api/me")
@@ -1811,6 +2025,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             info["bg_shade"] = _shade_pref(store, user["id"])
             info["bubble_opacity"] = _bubble_pref(store, user["id"])
             info["quench"] = store.get_pref(user["id"], "quench") == "1"
+            info["clip"] = store.get_pref(user["id"], "clip") != "0"
             info["models"] = {"gemini": "auto", "extra": [m for m in _extra_models(st) if _model_allowed(st, user, m)]}
             info["model"] = store.get_pref(user["id"], "model") or ""   # the saved choice, so the picker reloads it
             info["personas"] = _persona_list(st, user)
@@ -1828,12 +2043,28 @@ def make_app(client=None, data_dir=None, char_root=None):
         user = require(request, allow_change=True)
         body = _read_body(await request.json())
         old, new = str(body.get("old", "")), str(body.get("new", ""))
-        if not verify_password(old, user["pw_hash"]):
+        # Guessing the current password here shares the sign-in lock, so it cannot be tried without limit.
+        blocked = store.login_block(user["username"])
+        if blocked:
+            raise _lock_error(blocked)
+        # The check hashes, so it runs off the event loop and under the same cap as sign-in.
+        async with login_slots:
+            right = len(old) <= MAX_LOGIN_PASSWORD and await run_in_threadpool(verify_password, old, user["pw_hash"])
+        if not right:
+            lock = store.record_failed_login(user["username"])
+            if lock:
+                raise _lock_error(lock)
             raise HTTPException(400, "The current password is wrong.")
+        store.clear_login_lock(user["username"])
         if len(new) < MIN_PASSWORD:
             raise HTTPException(400, f"New password must be at least {MIN_PASSWORD} characters.")
+        if _password_too_long(new):
+            raise HTTPException(400, f"New password must be at most {MAX_NEW_PASSWORD} characters.")
         if new == old:
             raise HTTPException(400, "Pick a different password.")
+        weak = passwords.refusal(new, user["username"])
+        if weak:
+            raise HTTPException(400, weak)
         store.set_password(user["id"], new, must_change=False)
         remember = store.session_remembered(request.cookies.get(COOKIE))
         store.end_all_sessions(user["id"])
@@ -1959,6 +2190,10 @@ def make_app(client=None, data_dir=None, char_root=None):
                 "popular": sorted(pop),
                 "stars": stars,
                  "sidebar": [display_for(s) for s in ranked if s in chatted or display_for(s) in favs],
+                "novels": [{"id": n["id"], "name": n["name"], "members": [display_for(m) for m in n["members"]],
+                            "world": n["world"]} for n in novels.list_for(st.data_dir, user["id"])],
+                "worlds": [{"id": w["id"], "name": w["name"]} for w in _world_store(st, user)["items"]],
+                "world_default": _world_store(st, user)["default"],
                 "personas": _persona_list(st, user), "colors": _colour_map(st.char_root),
                 "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))] + private_icons,
                 "backgrounds": list(bg_ids), "default_backgrounds": _default_art(), "bg_ids": bg_ids,
@@ -2092,6 +2327,220 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(400, str(err))
         _drop_slot(st, user, gid)
         return {"ok": True}
+
+    # ---- worlds: an account's own settings for stories. Private to the account.
+    def _world_store(st_, user):
+        return worlds.load(_worlds_path(st_, user["id"]))
+
+    def _world_save(user, store):
+        worlds.save(_worlds_path(st, user["id"]), store)
+
+    def _world_ids(store):
+        return {w["id"] for w in store["items"]}
+
+    @app.get("/api/worlds")
+    def worlds_list(request: Request):
+        user = require(request)
+        store = _world_store(st, user)
+        return {"worlds": store["items"], "default": store["default"], "max": worlds.MAX_WORLDS,
+                "name_max": worlds.NAME_MAX, "entry_tokens": worlds.ENTRY_TOKENS, "section_tokens": worlds.SECTION_TOKENS,
+                "summary_tokens": worlds.SUMMARY_TOKENS,
+                "entries_max": worlds.ENTRIES_MAX,
+                "sections": [{"key": k, "title": worlds.SECTION_TITLES[k]} for k in worlds.SECTIONS]}
+
+    @app.post("/api/worlds")
+    async def world_create(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        store = _world_store(st, user)
+        try:
+            item = worlds.create(store, body.get("name", ""), body.get("summary", ""), body.get("sections") or {},
+                                 datetime.datetime.now().isoformat(timespec="seconds"))
+        except worlds.WorldError as err:
+            raise HTTPException(400, str(err))
+        _world_save(user, store)
+        return item
+
+    @app.put("/api/worlds/{wid}")
+    async def world_update(wid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        store = _world_store(st, user)
+        try:
+            item = worlds.update(store, wid, body.get("name", ""), body.get("summary", ""), body.get("sections") or {})
+        except worlds.WorldError as err:
+            raise HTTPException(400, str(err))
+        _world_save(user, store)
+        return item
+
+    @app.delete("/api/worlds/{wid}")
+    def world_delete(wid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        store = _world_store(st, user)
+        try:
+            worlds.delete(store, wid)
+        except worlds.WorldError as err:
+            raise HTTPException(400, str(err))
+        _world_save(user, store)
+        novels.forget_world(st.data_dir, user["id"], wid)
+        return {"ok": True}
+
+    # The account's default world: used by every chat and novel that has no world of its own. None clears it.
+    @app.post("/api/worlds/default")
+    async def world_default(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        wid = body.get("world") or None
+        store = _world_store(st, user)
+        try:
+            worlds.set_default(store, wid)
+        except worlds.WorldError as err:
+            raise HTTPException(400, str(err))
+        _world_save(user, store)
+        return {"default": store["default"]}
+
+    # The world one solo or group chat or a novel uses. A chat with no choice uses the account default; NO_WORLD means none.
+    @app.post("/api/chat-world")
+    async def chat_world(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, body.get("character", ""), user)
+        choice = str(body.get("world") or "")
+        store = _world_store(st, user)
+        if choice and choice != worlds.NO_WORLD and worlds.get(store, choice) is None:
+            raise HTTPException(400, "That world no longer exists.")
+        if novels.is_novel(name):
+            try:
+                novels.set_world(st.data_dir, user["id"], name, choice or None, _world_ids(store) | {worlds.NO_WORLD})
+            except novels.NovelError as err:
+                raise HTTPException(400, str(err))
+        else:
+            st.store.set_pref(user["id"], "world:" + name, choice)
+        return {"world": choice or None}
+
+    # ---- novels: a narrator writes prose for a cast of characters, in a world. Only the owner sees them.
+    def _novel_body(body):
+        members = body.get("members")
+        if not isinstance(members, list):
+            raise HTTPException(400, "Pick the characters for the novel.")
+        return str(body.get("name", "")), [folder_for(str(m)) for m in members]
+
+    def _novel_world(body):
+        world = body.get("world")
+        return None if world in (None, "") else str(world)
+
+    @app.get("/api/novels")
+    def novels_list(request: Request):
+        user = require(request)
+        out = [{"id": n["id"], "name": n["name"], "members": [{"key": m, "name": display_for(m)} for m in n["members"]],
+                "world": n["world"]} for n in novels.list_for(st.data_dir, user["id"])]
+        return {"novels": out, "max": novels.MAX_NOVELS, "min_cast": novels.MIN_CAST, "max_cast": novels.MAX_CAST}
+
+    @app.post("/api/novels")
+    async def novel_create(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, members = _novel_body(body)
+        solo, _shared = scan_characters(st.char_root)
+        store = _world_store(st, user)
+        try:
+            item = novels.create(st.data_dir, user["id"], name, members, _novel_world(body), solo,
+                                 _world_ids(store) | {worlds.NO_WORLD})
+        except novels.NovelError as err:
+            raise HTTPException(400, str(err))
+        # A novel dreams by default: its own dream row is switched on here. The server's dreams_in_novels switch still
+        # decides whether any novel dreams at all.
+        st.store.dream_update(user["id"], item["id"], enabled=1)
+        return {"id": item["id"], "name": item["name"]}
+
+    @app.put("/api/novels/{nid}")
+    async def novel_update(nid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, members = _novel_body(body)
+        solo, _shared = scan_characters(st.char_root)
+        store = _world_store(st, user)
+        try:
+            item = novels.update(st.data_dir, user["id"], nid, name, members, _novel_world(body), solo,
+                                 _world_ids(store) | {worlds.NO_WORLD})
+        except novels.NovelError as err:
+            raise HTTPException(400, str(err))
+        _drop_slot(st, user, nid)
+        return {"id": nid, "name": item["name"]}
+
+    @app.delete("/api/novels/{nid}")
+    def novel_delete(nid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        try:
+            novels.delete(st.data_dir, user["id"], nid)
+        except novels.NovelError as err:
+            raise HTTPException(400, str(err))
+        _drop_slot(st, user, nid)
+        return {"ok": True}
+
+    # ---- tensions: the open threads of one chat, and when they are read (off, on the nightly dream, or on each memory
+    # bank save). The record is held by the chat's engine, so each edit goes through the chat's slot.
+    def _tension_chat(user, character):
+        name, is_group = _resolve_profile(st, character, user)
+        return name, _slot(st, user, name, is_group)
+
+    @app.get("/api/tensions")
+    def tensions_get(request: Request, character: str):
+        user = require(request)
+        name, slot = _tension_chat(user, character)
+        # The world this chat is set to: a novel keeps its own, any other chat keeps a preference. "" is the default.
+        if novels.is_novel(name):
+            item = novels.get(st.data_dir, user["id"], name)
+            world = (item["world"] or "") if item else ""
+        else:
+            world = st.store.get_pref(user["id"], "world:" + name) or ""
+        with slot.lock:
+            eng = slot.engine
+            return {"mode": eng.tension_mode, "modes": list(tensions.MODES), "items": eng.tensions["items"],
+                    "covered": eng.tensions["covered"], "history": len(eng.full_history), "world": world}
+
+    @app.post("/api/tensions/mode")
+    async def tensions_mode(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        mode = str(body.get("mode", ""))
+        if mode not in tensions.MODES:
+            raise HTTPException(400, "The tension mode must be off, dream or save.")
+        name, is_group = _resolve_profile(st, body.get("character", ""), user)
+        st.store.set_pref(user["id"], "tension:" + name, mode)
+        slot = _slot(st, user, name, is_group)
+        with slot.lock:
+            slot.engine.tension_mode = mode
+        return {"mode": mode}
+
+    @app.post("/api/tensions/resolve")
+    async def tensions_resolve(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        _name, slot = _tension_chat(user, body.get("character", ""))
+        with slot.lock:
+            slot.engine.resolve_tension(str(body.get("id", "")), str(body.get("how", "")).strip()[:tensions.FIELD_MAX])
+            return {"items": slot.engine.tensions["items"]}
+
+    @app.post("/api/tensions/drop")
+    async def tensions_drop(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        _name, slot = _tension_chat(user, body.get("character", ""))
+        with slot.lock:
+            slot.engine.drop_tension(str(body.get("id", "")))
+            return {"items": slot.engine.tensions["items"]}
 
     @app.get("/api/history")
     def history(request: Request, character: str):
@@ -2408,6 +2857,8 @@ def make_app(client=None, data_dir=None, char_root=None):
             store.set_pref(user["id"], "bubble_opacity", str(opacity))
         if "quench" in body:
             store.set_pref(user["id"], "quench", "1" if body["quench"] else "0")
+        if "clip" in body:
+            store.set_pref(user["id"], "clip", "1" if body["clip"] else "0")
         # cached engines hold the old settings; drop them so the next turn picks up the new ones
         with st.slots_lock:
             for k in [k for k in st.slots if k[0] == user["id"]]:
@@ -2417,7 +2868,8 @@ def make_app(client=None, data_dir=None, char_root=None):
                 "reply_length": _reply_target(st, user["id"]),
                 "avatar_shape": _avatar_shape(store, user["id"]),
                 "bg_shade": _shade_pref(store, user["id"]), "bubble_opacity": _bubble_pref(store, user["id"]),
-                "quench": store.get_pref(user["id"], "quench") == "1"}
+                "quench": store.get_pref(user["id"], "quench") == "1",
+                "clip": store.get_pref(user["id"], "clip") != "0"}
 
     @app.get("/api/character-settings")
     async def character_settings_get(request: Request, character: str):
@@ -2581,6 +3033,11 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(400, "Usernames are 2-32 letters, digits, _ or -.")
         if len(password) < MIN_PASSWORD:
             raise HTTPException(400, f"Initial password must be at least {MIN_PASSWORD} characters.")
+        if _password_too_long(password):
+            raise HTTPException(400, f"Initial password must be at most {MAX_NEW_PASSWORD} characters.")
+        weak = passwords.refusal(password, username)
+        if weak:
+            raise HTTPException(400, weak)
         cap = body.get("daily_cap")
         if cap is not None and (not isinstance(cap, int) or cap < 0):
             raise HTTPException(400, "daily_cap must be a whole number or null.")
@@ -2631,6 +3088,11 @@ def make_app(client=None, data_dir=None, char_root=None):
             new = str(body["reset_password"])
             if len(new) < MIN_PASSWORD:
                 raise HTTPException(400, f"Password must be at least {MIN_PASSWORD} characters.")
+            if _password_too_long(new):
+                raise HTTPException(400, f"Password must be at most {MAX_NEW_PASSWORD} characters.")
+            weak = passwords.refusal(new, target["username"])
+            if weak:
+                raise HTTPException(400, weak)
             store.set_password(uid, new, must_change=True)
             store.end_all_sessions(uid)
         if body.get("unlock_sign_in"):
