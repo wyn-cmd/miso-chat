@@ -7,16 +7,16 @@ Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.P
 A feature and visual release. It adds worlds for stories, novels, narrative tension and a second reading look. It keeps long chats cheaper to run without losing the thread, through clipping and quenching that work with the provider's prompt cache. It also hardens sign-in for internet-facing use. The server's endpoints and data layout are the same as 1.4.1, so chats, characters, accounts and the switches from 1.4.1 carry over. Everyone is signed out once, because the login cookie has a new name, and the terminal client must be the 1.5.0 file.
 
 ### Added
-- Worlds, under Settings, Worlds. An account keeps up to 20 worlds, private to it. Each has a name, a summary and seven sections: locations, magic systems, rules, civilisations, factions, technology and other details. A chat or novel uses its own world, the account default, or none.
-- Token counts while you write a world. Each entry shows its own count, and the section totals sit by Save. An entry can be up to 300 estimated tokens, a section up to 1,500 (Other details too), and a summary up to 250. A save over a limit is refused with a message that names the entry or section.
-- Bullets and `[NEW]` tags at the start of a world line are removed when it is saved. Numbers are kept, so a numbered rules list stays citable. The world block in the prompt is capped at 10,000 estimated tokens.
-- Novels. A narrator tells a story for a cast of solo characters, in one world or none. The narrator sets the scene and voices the cast in the third person. A novel has its own chat, memory and tensions, and only its owner can see it. Novels are listed apart from group chats.
-- Narrative tensions. Open threads of a story, such as a secret nobody has revealed, a promise nobody has kept or a contradiction between two accounts, stay in the prompt as constraints until the story resolves them. A chat sets whether they are read on the nightly dream, on each memory save, or not at all.
-- A maker page for creating novels and group chats, with a quick form for a new world.
-- Soft Shadows, a reading look that sets the chat as a written page: the speaker in a margin, the words in Literata, and your own lines in an umber pen. Every control stays where it was.
-- Clipping of older messages, a switch under Settings, Chat history, on by default. Messages older than the newest eight or more are cut to about 550 characters, at a word break where one is near.
-- A next-prompt marker that shows the estimated prompt size, the part the provider can reuse from its cache, the part that is new, and the tokens that quenching and clipping saved.
-- A password check wherever a password is set or changed: a user's own change, an admin creating an account, and an admin resetting one. Common passwords, passwords equal to the username, and runs of one or two characters are refused.
+- **Worlds** (Settings, Worlds): up to 20 per account, each with a summary and seven sections: locations, magic systems, rules, civilisations, factions, technology and other details. A chat or novel uses its own world, the account default, or none.
+- **Token counts for worlds**: each entry and section shows its estimated tokens while you write. A save over a limit is refused with a message that names the entry or section.
+- **World formatting**: bullets and `[NEW]` tags are removed on save, and numbers are kept, so numbered rules stay citable.
+- **Novels**: a narrator tells a story for a cast of solo characters, in one world or none. Each novel has its own chat, memory and tensions, visible only to its owner.
+- **Narrative tensions**: open story threads stay in the prompt until the story resolves them. A chat chooses whether they are read on the nightly dream, on each memory save, or not at all.
+- **Maker page**: creates novels and group chats, with a quick form for a new world.
+- **Soft Shadows look**: a reading view that sets the chat as a written page. Every control stays where it was.
+- **Clipping** (Settings, Chat history, on by default): older messages are cut to about 550 characters, at a word break where one is near.
+- **Next-prompt marker**: shows the estimated prompt size, the part the provider can reuse from its cache, the new part, and the tokens saved by quenching and clipping.
+- **Password checks**: common passwords, passwords equal to the username, and runs of one or two characters are refused wherever a password is set or changed.
 
 ### Changed
 - Moonlit is the default look. Soft Shadows, Spore (1.5.0) and Hyacinth (1.4.1) are the other choices under Settings, Appearance, Theme. The reading look was called Folio while it was in testing; its saved choices still apply.
