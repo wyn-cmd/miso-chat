@@ -9,7 +9,7 @@
   <script src="/static/theme-init.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=rpUi===null?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","folio","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
@@ -30,9 +30,16 @@
     <button id="themeBtn" class="icon-btn" type="button" aria-label="Switch to light theme"></button>
   </header>
   <div class="shell">
+    <div id="pageArtVideo" class="page-art-video" aria-hidden="true" hidden>
+      <video id="pageArtVideoEl" muted loop playsinline preload="metadata" aria-hidden="true"></video>
+      <span class="art-shade" aria-hidden="true"></span>
+    </div>
     <aside id="sidebar" class="sidebar" aria-label="Characters">
-      <h2>Characters</h2>
-      <div class="side-head"><button id="sideBack" class="ghost small" type="button" aria-label="Back">&larr; Back</button></div>
+      <div class="side-top">
+        <h2>Characters</h2>
+        <button id="sideBack" class="ghost small side-back" type="button" aria-label="Back">&larr; Back</button>
+        <a id="sideProfile" class="side-profile" href="#" hidden aria-label="Your profile page" title="Your profile page"></a>
+      </div>
       <div id="charList" class="char-list"></div>
       <div id="groupBox">
         <h2>Group chats</h2>
@@ -53,7 +60,7 @@
           <label>Name <input id="pfName" maxlength="40" required></label>
           <label>Colour <input id="pfColour" type="color" value="#8b9bb4"></label>
           <label>Description <textarea id="pfDesc" rows="5" maxlength="1500" placeholder="Who you are in the story: looks, personality, how you talk."></textarea></label>
-          <label>Picture <input id="pfPic" type="file" accept="image/png,image/jpeg"></label>
+          <label>Picture <input id="pfPic" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label>
           <div class="persona-form-actions">
             <button id="pfSave" class="small" type="submit">Save</button>
             <button id="pfDelete" class="ghost small" type="button" hidden>Delete</button>
@@ -173,8 +180,8 @@
       <div class="icon-box">
         <div id="edIconPreview" class="icon-preview placeholder"></div>
         <div class="stack">
-          <input id="edIconFile" type="file" accept="image/png,image/jpeg,image/webp">
-          <p class="muted">PNG, JPEG or WebP, up to 10 MB. It is cropped to a square and reduced to under 512 KB. Without one, a placeholder initial is shown.</p>
+          <input id="edIconFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+          <p class="muted">PNG, JPEG, WebP or GIF, up to 10 MB. A still picture is cropped to a square and reduced to under 512 KB. An animated GIF keeps its animation, so it is stored as uploaded. Without one, a placeholder initial is shown.</p>
           <button id="edIconSave" class="ghost" type="button" disabled>Upload icon</button>
           <p id="edIconErr" class="error"></p>
         </div>
@@ -182,8 +189,8 @@
       <div id="edBgBox" class="icon-box bg-box">
         <div class="stack">
           <div id="edBgList" class="bg-list"></div>
-          <input id="edBgFile" type="file" accept="image/png,image/jpeg,image/webp" multiple>
-          <p class="muted">Each background is shown behind this character's chat, one picked at random each time it opens, and its home page card cycles through them. Add up to 10. PNG, JPEG or WebP, 10 MB each.</p>
+          <input id="edBgFile" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple>
+          <p class="muted">Each background is shown behind this character's chat, one picked at random each time it opens, and its home page card cycles through them. Add up to 10. A picture can be PNG, JPEG or WebP up to 10 MB. A video can be MP4 or MOV up to 50 MB and at least 720p, up to 60 seconds: it is converted to WebM with the sound removed, loops silently, and shows its first frame when the reader has asked for reduced motion.</p>
           <button id="edBgSave" class="ghost" type="button" disabled>Add background</button>
           <p id="edBgErr" class="error"></p>
           <p id="edBgNote" class="muted"></p>
@@ -243,11 +250,11 @@
         <span class="spacer"></span>
         <select id="branchPick" class="font-select" aria-label="Chat branch" title="Which branch of this chat is open" hidden></select>
         <button id="branchDel" class="ghost small" type="button" title="Delete the open branch" hidden>Delete branch</button>
-      <button id="branchTree" class="ghost small" type="button" title="Show the branches as a tree" hidden>Tree</button>
+      <button id="branchTree" class="ghost chat-action" type="button" title="Show the branches as a tree" hidden>Tree</button>
         <button id="memBtn" class="ghost" type="button" title="See and edit what the character remembers">Memory</button>
-        <button id="rollBtn" class="ghost" type="button" title="Roll: the model adds a random event to the scene">Roll</button>
-        <button id="undoBtn" class="ghost" type="button">Undo</button>
-        <button id="selectBtn" class="ghost" type="button" aria-pressed="false" title="Pick several messages to delete">Select</button>
+        <button id="rollBtn" class="ghost chat-action" type="button" title="Roll: the model adds a random event to the scene">Roll</button>
+        <button id="undoBtn" class="ghost chat-action" type="button">Undo</button>
+        <button id="selectBtn" class="ghost chat-action" type="button" aria-pressed="false" title="Pick several messages to delete">Select</button>
       </div>
       <div id="budgetAlert" class="budget-alert" role="status" hidden>
         <span id="budgetAlertText"></span>
@@ -334,14 +341,14 @@
           <div class="sheet-row"><span>Profile picture</span>
             <span class="profile-upload">
               <img id="profileAvatarPreview" class="profile-thumb" alt="" hidden>
-              <input id="profilePic" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Profile picture">
+              <input id="profilePic" type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Profile picture">
               <button id="profilePicRemove" class="ghost small" type="button" hidden>Remove</button>
             </span>
           </div>
           <div class="sheet-row"><span>Profile background</span>
             <span class="profile-upload">
               <img id="profileBgPreview" class="profile-thumb wide" alt="" hidden>
-              <input id="profileBg" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Profile background">
+              <input id="profileBg" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" aria-label="Profile background">
               <button id="profileBgRemove" class="ghost small" type="button" hidden>Remove</button>
             </span>
           </div>
@@ -365,7 +372,7 @@
           <select id="uiThemePick" aria-label="Theme">
             <option value="moon">Moonlit (default)</option>
             <option value="folio">Soft Shadows (reading view)</option>
-            <option value="spore">Spore (1.5.0)</option>
+            <option value="dusk">Dusk</option>
             <option value="classic">Hyacinth (1.4.1)</option>
           </select>
         </div>
@@ -390,6 +397,7 @@
       </section>
       <section class="set-panel" data-panel="character" hidden>
         <div class="sheet-row"><span>Memory</span><span data-slot="memory"></span></div>
+        <div id="charCreatorRow" class="sheet-row" hidden><span>Created by</span><span id="charCreator"></span></div>
         <div data-slot="model"></div>
         <p class="muted needs-char">Open a character to set its creativity.</p>
         <div class="sheet-row slider-row char-only"><label for="tempSlider">Creativity (temperature) <span id="tempVal" class="muted"></span></label>

@@ -2,6 +2,36 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.5.1 - 2026-10-27
+
+A look, icon and speed release, built on 1.5.0. It adds a fourth look, Dusk, a new app icon, video and animated pictures for accounts and characters, and background circles for characters without pictures. It retires the Spore look and lightens the page on weaker devices. The server's endpoints and data layout are the same as 1.5.0, so chats, characters, accounts and settings carry over. The terminal client is 1.5.1 with the same code as 1.5.0.
+
+### Added
+- **Dusk look** (Settings, Appearance, Theme): a slate ground with warm bone text and a periwinkle accent, with a light variant for the day.
+- **Video backgrounds**: an MP4 or MOV background for a character or account is converted to WebM with no audio, and a poster frame is kept for the first paint and for reduced motion. The blur and dimming are applied once, on the server. This needs ffmpeg and ffprobe on the server; without them a video upload is refused with a message.
+- **Account profile pictures and backgrounds**: each account can set a picture and a background, from its profile page.
+- **Animated GIF pictures** stay animated. They are stored as uploaded and served as image/gif, so a browser shows every frame.
+- **Background circles**: a character with no pictures shows drifting circles behind the chat. Each home card without pictures has its own set. Each circle has its own pace and start point. When mood and attitude are on, the circles warm with affection and turn greener with energy.
+- **App icon**: a panda in the Moonlit colours, used for the browser tab, the home-screen icon and the page header.
+
+### Changed
+- Spore is removed. A browser that had chosen Spore now gets Moonlit, and its three Spore default pictures are removed.
+- Picture backgrounds are saved as PNG. Pictures saved before this release stay JPEG and are still read.
+- The colour look (sepia, saturation and dimming) is applied once, when a picture or video is saved. The page applies only the contrast step.
+- In light mode, card and chat pictures and videos are shown with no shade over them.
+- Background videos play only while they are on screen and the tab is visible. They pause otherwise, and profile videos pause with the tab.
+- The header background is solid, not blurred.
+- The Classic look's background glow is a fixed layer behind the page, so it is not repainted on every scroll.
+- Scripts and styles from `/static/` are sent gzip-compressed. Chat replies are not compressed, so they still stream as they are written.
+- The character list is kept until a character, group or persona file changes, so the pages do not reread every folder on each request.
+- The keyboard-fit check runs only while the message box has focus.
+- Video backgrounds, picture backgrounds and profile backgrounds are not re-processed. A background saved before this release keeps its old file: its colour look and blur are not applied, so it shows as it is. Upload it again to get the new look.
+- The manifest's theme colours match the Moonlit ground.
+
+### Known issues
+- On some phones a video background shows only its poster frame. Not yet resolved; the likely causes are the WebM codec on older iOS or autoplay blocking.
+- A long chat reply re-renders the whole message on each frame while it streams. This is unchanged from 1.5.0.
+
 ## 1.5.0 - 2026-10-26
 
 A feature and visual release. It adds worlds for stories, novels, narrative tension and a second reading look. It keeps long chats cheaper to run without losing the thread, through clipping and quenching that work with the provider's prompt cache. It also hardens sign-in for internet-facing use. The server's endpoints and data layout are the same as 1.4.1, so chats, characters, accounts and the switches from 1.4.1 carry over. Everyone is signed out once, because the login cookie has a new name, and the terminal client must be the 1.5.0 file.

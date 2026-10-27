@@ -6,3 +6,7 @@ uvicorn
 pillow
 pymupdf>=1.28.2
 python-docx>=1.2.0
+
+# Not a pip package: background videos need ffmpeg and ffprobe on the PATH. They are used to convert an
+# MP4 or MOV into WebM with the audio removed, and to read its size, duration and first frame. Everything
+# else works without them; a video upload answers with a clear error when they are missing.

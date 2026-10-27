@@ -1,0 +1,43 @@
+/* Dusk: the fourth look. Drawn from Hallmark's Dusk theme, the calm end of the day: a slate ground, bone wells for
+   light surfaces, one periwinkle signal for what is on or done, and one apricot for what is open or waiting. It loads
+   over redesign.css, like Moonlit, so the layout and behaviour are unchanged and this sheet only changes the surface.
+   The faces are the app's bundled Instrument Sans: Dusk's Wix Madefor is not bundled, and the app does not load
+   fonts from outside. The sheet is applied by the data-look="dusk" attribute that common.js and theme-init.js set. */
+
+:root[data-look="dusk"] {
+  --font-display: "Instrument Sans", system-ui, sans-serif;
+  --display-weight: 500;
+  --tracking-display: -0.022em;
+  --grain: 0;
+  --radius-card: 18px;
+  --radius-field: 10px;
+  --shadow-card: 0 1px 0 oklch(100% 0 0 / 0.06) inset, 0 40px 80px -32px oklch(8% 0.02 268 / 0.7);
+  --color-error: #f08a8a;
+  color-scheme: dark;
+  /* dark, the dusk: slate paper with cards a lightness step above it, ink in warm bone */
+  --color-paper: oklch(17.5% 0.014 268); --color-paper-2: oklch(21% 0.016 268); --color-paper-3: oklch(25% 0.017 268);
+  --color-ink: oklch(96% 0.006 75); --color-ink-2: oklch(85% 0.010 262); --color-muted: oklch(70% 0.016 262);
+  --color-rule: oklch(30% 0.016 266);
+  --color-accent: oklch(77% 0.10 274); --color-accent-2: oklch(84% 0.085 274); --color-accent-ink: oklch(19% 0.035 274);
+  --color-focus: oklch(80% 0.10 274);
+  --color-jade: oklch(83% 0.095 62); --color-jade-ink: oklch(19% 0.035 268);
+  --meta-theme: oklch(17.5% 0.014 268);
+}
+
+/* light, the day: bone wells on fog, with the periwinkle deepened to hold contrast on a light ground */
+:root[data-look="dusk"][data-theme="light"] {
+  color-scheme: light;
+  --color-paper: oklch(94% 0.012 70); --color-paper-2: oklch(95.5% 0.008 75); --color-paper-3: oklch(92% 0.010 75);
+  --color-ink: oklch(22% 0.022 268); --color-ink-2: oklch(32% 0.020 266); --color-muted: oklch(38% 0.022 266);
+  --color-rule: oklch(87.5% 0.009 75);
+  --color-accent: oklch(44% 0.13 274); --color-accent-2: oklch(38% 0.12 274); --color-accent-ink: oklch(98% 0.005 75);
+  --color-focus: oklch(44% 0.13 274);
+  --color-jade: oklch(55% 0.13 55); --color-jade-ink: oklch(98% 0.005 75);
+  --meta-theme: oklch(94% 0.012 70);
+  --color-error: #b3262e;
+}
+
+/* The reader's own lines carry the periwinkle edge, the signal for what is done and on. */
+:root[data-look="dusk"] .line.mine, :root[data-look="dusk"] .line.mine:not(.note) {
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
