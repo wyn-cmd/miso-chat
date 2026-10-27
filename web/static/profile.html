@@ -7,6 +7,8 @@
   <meta name="apple-mobile-web-app-title" content="Miso Chat">
   <title>Profile - Miso Chat</title>
   <script src="/static/theme-init.js"></script>
+  <script src="/static/locales/en.js"></script>
+  <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
   <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","folio","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
@@ -32,6 +34,9 @@
     <aside id="sidebar" class="sidebar" aria-label="Characters">
       <div class="side-top">
         <h2>Characters</h2>
+        <button id="sideSearch" class="ghost small side-search" type="button" aria-label="Search" title="Search">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+        </button>
         <a id="sideProfile" class="side-profile" href="#" hidden aria-label="Your profile page" title="Your profile page"></a>
       </div>
       <div id="charList" class="char-list"></div>
@@ -46,7 +51,7 @@
       <p id="profileErr" class="error" role="alert"></p>
       <section id="profileCard" class="profile-hero" hidden aria-labelledby="profileName">
         <span id="profileArt" class="profile-art" aria-hidden="true"></span>
-        <video id="profileArtVideo" class="profile-art-video" muted loop playsinline preload="metadata" aria-hidden="true" hidden></video>
+        <video id="profileArtVideo" class="profile-art-video" muted loop playsinline webkit-playsinline preload="metadata" aria-hidden="true" hidden></video>
         <span class="profile-shade" aria-hidden="true"></span>
         <div class="profile-hero-body">
           <span id="profileAvatar" class="profile-avatar" aria-hidden="true"></span>
@@ -55,25 +60,67 @@
             <p id="profileMeta" class="muted"></p>
             <p id="profileBio" class="profile-bio"></p>
             <div class="row">
-              <a id="profileEdit" class="button-link" href="/chat?settings=account" hidden>Edit profile</a>
+              <button id="profileEdit" class="ghost small" type="button" hidden>Edit profile</button>
             </div>
           </div>
         </div>
       </section>
       <section id="charactersSection" class="profile-section" hidden>
         <h2 id="charactersTitle">Characters</h2>
-        <div id="characterGrid" class="profile-grid"></div>
+        <div id="characterGrid" class="home-grid"></div>
         <p id="charactersEmpty" class="muted" hidden></p>
       </section>
       <section id="likesSection" class="profile-section" hidden>
         <h2>Liked characters</h2>
         <p id="likesNote" class="muted"></p>
-        <div id="likesGrid" class="profile-grid"></div>
+        <div id="likesGrid" class="home-grid"></div>
       </section>
       <p class="profile-back"><a href="/">Back to all characters</a></p>
     </main>
   </div>
+  <dialog id="infoDialog" class="home-dialog" aria-labelledby="infoTitle">
+    <div class="sheet-head">
+      <h2 id="infoTitle"></h2>
+      <button id="infoClose" class="ghost small" type="button">Close</button>
+    </div>
+    <p id="infoHeadline" class="home-headline"></p>
+    <p id="infoCreator" class="muted"></p>
+    <div id="infoTags" class="home-tags"></div>
+    <p id="infoBody" class="home-info-body"></p>
+    <div class="row">
+      <span class="spacer"></span>
+      <button id="infoStart" type="button">Start chatting</button>
+    </div>
+  </dialog>
+  <dialog id="profileEditDialog" class="home-dialog profile-edit-dialog" aria-labelledby="peTitle">
+    <div class="sheet-head">
+      <h2 id="peTitle">Edit profile</h2>
+      <button id="peClose" class="ghost small" type="button">Close</button>
+    </div>
+    <label class="profile-field">About you
+      <textarea id="peBio" rows="4" maxlength="1000" placeholder="A sentence or two about you."></textarea>
+    </label>
+    <div class="row"><span id="peCount" class="muted"></span><span class="spacer"></span><button id="peSave" class="ghost small" type="button">Save description</button></div>
+    <div class="sheet-row"><span>Profile picture</span>
+      <span class="profile-upload">
+        <img id="peAvatar" class="profile-thumb" alt="" hidden>
+        <input id="pePic" type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Profile picture">
+        <button id="pePicRemove" class="ghost small" type="button" hidden>Remove</button>
+      </span>
+    </div>
+    <div class="sheet-row"><span>Profile background</span>
+      <span class="profile-upload">
+        <img id="peBg" class="profile-thumb wide" alt="" hidden>
+        <input id="peBgPick" type="file" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime" aria-label="Profile background">
+        <button id="peBgRemove" class="ghost small" type="button" hidden>Remove</button>
+      </span>
+    </div>
+    <label class="inline"><input id="peLikes" type="checkbox"> Let other accounts see the characters I've liked</label>
+    <p id="peMsg" class="muted" aria-live="polite"></p>
+  </dialog>
   <script src="/static/common.js"></script>
+  <script src="/static/cards.js"></script>
+  <script src="/static/search.js"></script>
   <script src="/static/profile.js"></script>
 </body>
 </html>

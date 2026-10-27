@@ -15,7 +15,7 @@
     try { data = await r.json(); } catch (e) { /* not JSON */ }
     if (!r.ok) {
       const detail = data.detail;
-      const err = new Error(typeof detail === "string" ? detail : (detail && detail.message) || "Something went wrong.");
+      const err = new Error(typeof detail === "string" ? detail : (detail && detail.message) || window.tr("Something went wrong."));
       err.status = r.status;
       throw err;
     }

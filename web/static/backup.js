@@ -15,12 +15,12 @@
     setForm.hidden = true;
     makeForm.hidden = true;
     if (!s.two_factor_on) {
-      status.textContent = "Turn on two-factor sign-in for your admin account (Settings on the chat page) before making backups.";
+      status.textContent = window.tr("Turn on two-factor sign-in for your admin account (Settings on the chat page) before making backups.");
     } else if (!s.password_set) {
-      status.textContent = "No backup password yet. Set one now; it can't be changed later, so keep it somewhere safe.";
+      status.textContent = window.tr("No backup password yet. Set one now; it can't be changed later, so keep it somewhere safe.");
       setForm.hidden = false;
     } else {
-      status.textContent = "Backup password set. Each backup asks for it, along with your two-factor code.";
+      status.textContent = window.tr("Backup password set. Each backup asks for it, along with your two-factor code.");
       makeForm.hidden = false;
     }
   }
@@ -35,7 +35,7 @@
       });
       byId("bkNewPw").value = "";
       byId("bkSetCode").value = "";
-      say("Backup password set.");
+      say(window.tr("Backup password set."));
       await loadStatus();
     } catch (e) {
       say(e.message);
@@ -44,7 +44,7 @@
 
   byId("bkMakeForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    say("Making the backup. This can take a minute for a large server.");
+    say(window.tr("Making the backup. This can take a minute for a large server."));
     const body = {
       kind: byId("bkKind").value,
       password: byId("bkPw").value,
@@ -58,9 +58,9 @@
         body: JSON.stringify(body),
       });
       if (!r.ok) {
-        let detail = "The backup failed.";
+        let detail = window.tr("The backup failed.");
         try { detail = (await r.json()).detail || detail; } catch (e) { /* not JSON */ }
-        throw new Error(typeof detail === "string" ? detail : detail.message || "The backup failed.");
+        throw new Error(typeof detail === "string" ? detail : detail.message || window.tr("The backup failed."));
       }
       const name = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") || "")?.[1] || "miso-backup.mbk";
       const url = URL.createObjectURL(await r.blob());
@@ -73,7 +73,7 @@
       setTimeout(() => URL.revokeObjectURL(url), 10000);
       byId("bkPw").value = "";
       byId("bkCode").value = "";
-      say("Backup downloaded: " + name + ". Keep the backup password apart from the file.");
+      say(window.tr("Backup downloaded: {name}. Keep the backup password apart from the file.", { name: name }));
     } catch (e) {
       say(e.message);
     }

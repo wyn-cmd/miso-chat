@@ -18,7 +18,7 @@
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.className = "ghost";
-    cancel.textContent = "Cancel";
+    cancel.textContent = window.tr("Cancel");
     // Remove explicitly: some browsers do not fire the close event, and a stale dialog would stack up.
     cancel.addEventListener("click", () => { d.close(); d.remove(); });
     d.append(cancel);
@@ -43,24 +43,24 @@
 
   function turnOn(onDone) {
     api("POST", "/api/2fa/start", {}).then((data) => {
-      openDialog("Set up two-factor sign-in", (d, msg) => {
+      openDialog(window.tr("Set up two-factor sign-in"), (d, msg) => {
         const img = document.createElement("img");
-        img.alt = "QR code for your authenticator app";
+        img.alt = window.tr("QR code for your authenticator app");
         img.width = 220;
         img.height = 220;
         img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(data.qr)));
         const hint = document.createElement("p");
         hint.className = "muted";
-        hint.textContent = "Scan the code in your authenticator app, or type the key in. Then enter the 6-digit code it shows.";
+        hint.textContent = window.tr("Scan the code in your authenticator app, or type the key in. Then enter the 6-digit code it shows.");
         const key = document.createElement("code");
         key.className = "secret";
         key.textContent = data.secret;
         const form = document.createElement("form");
         form.className = "stack narrow";
-        const field = codeField("Code from the app");
+        const field = codeField(window.tr("Code from the app"));
         const go = document.createElement("button");
         go.type = "submit";
-        go.textContent = "Turn on";
+        go.textContent = window.tr("Turn on");
         form.append(field.label, go);
         form.addEventListener("submit", async (ev) => {
           ev.preventDefault();
@@ -80,20 +80,20 @@
   }
 
   function turnOff() {
-    openDialog("Turn off two-factor sign-in", (d, msg) => {
+    openDialog(window.tr("Turn off two-factor sign-in"), (d, msg) => {
       const form = document.createElement("form");
       form.className = "stack narrow";
       const pwLabel = document.createElement("label");
-      pwLabel.textContent = "Password ";
+      pwLabel.textContent = window.tr("Password") + " ";
       const pw = document.createElement("input");
       pw.type = "password";
       pw.autocomplete = "current-password";
       pw.required = true;
       pwLabel.append(pw);
-      const field = codeField("Code from the app");
+      const field = codeField(window.tr("Code from the app"));
       const go = document.createElement("button");
       go.type = "submit";
-      go.textContent = "Turn off";
+      go.textContent = window.tr("Turn off");
       form.append(pwLabel, field.label, go);
       form.addEventListener("submit", async (ev) => {
         ev.preventDefault();
@@ -112,16 +112,16 @@
 
   function paint(btn, note) {
     if (state === "on") {
-      note.textContent = required ? "On, required by an admin" : "On";
-      btn.textContent = "Turn off";
+      note.textContent = required ? window.tr("On, required by an admin") : window.tr("On");
+      btn.textContent = window.tr("Turn off");
       btn.disabled = required;
     } else if (state === "setup") {
-      note.textContent = "Not finished";
-      btn.textContent = "Finish set-up";
+      note.textContent = window.tr("Not finished");
+      btn.textContent = window.tr("Finish set-up");
       btn.disabled = false;
     } else {
-      note.textContent = required ? "Required by an admin, not yet set up" : "Off";
-      btn.textContent = "Turn on";
+      note.textContent = required ? window.tr("Required by an admin, not yet set up") : window.tr("Off");
+      btn.textContent = window.tr("Turn on");
       btn.disabled = false;
     }
     btn.hidden = false;

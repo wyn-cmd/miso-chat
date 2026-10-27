@@ -45,7 +45,7 @@ async function openEditor(name) {
   $("edBgNote").textContent = "";
   $("edExportErr").textContent = "";
   if (name) {
-    $("editorTitle").textContent = "Edit " + name;
+    $("editorTitle").textContent = tr("Edit {name}", { name: name });
     const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(name));
     $("edName").value = data.name;
     $("edName").readOnly = true;
@@ -60,7 +60,7 @@ async function openEditor(name) {
     setIconPreview(name, data.has_icon);
     setBgPreview(name, data.backgrounds || []);
   } else {
-    $("editorTitle").textContent = "New character";
+    $("editorTitle").textContent = tr("New character");
     $("edName").value = "";
     $("edName").readOnly = false;
     $("edCard").value = "";
@@ -85,13 +85,13 @@ const EXAMPLE_LIMIT = 12;
 function addExampleRow(pair) {
   const list = $("edExamplesList");
   if (list.children.length >= EXAMPLE_LIMIT) {
-    $("edExamplesErr").textContent = `Up to ${EXAMPLE_LIMIT} exchanges. Remove one to add another.`;
+    $("edExamplesErr").textContent = tr("Up to {n} exchanges. Remove one to add another.", { n: EXAMPLE_LIMIT });
     return null;
   }
   const row = el("div", null, "example-row");
   const head = el("div", null, "example-row-head");
-  const label = el("span", "Exchange " + (list.children.length + 1), "example-row-title");
-  const remove = el("button", "Remove", "ghost small");
+  const label = el("span", tr("Exchange {n}", { n: list.children.length + 1 }), "example-row-title");
+  const remove = el("button", tr("Remove"), "ghost small");
   remove.type = "button";
   remove.addEventListener("click", () => {
     row.remove();
@@ -101,18 +101,18 @@ function addExampleRow(pair) {
   const you = el("textarea", null, "example-user");
   you.rows = 2;
   you.maxLength = 1000;
-  you.placeholder = "What you say to the character";
-  you.setAttribute("aria-label", "Your message in this example");
+  you.placeholder = tr("What you say to the character");
+  you.setAttribute("aria-label", tr("Your message in this example"));
   const them = el("textarea", null, "example-reply");
   them.rows = 3;
   them.maxLength = 2000;
-  them.placeholder = "How the character answers";
-  them.setAttribute("aria-label", "The character's reply in this example");
+  them.placeholder = tr("How the character answers");
+  them.setAttribute("aria-label", tr("The character's reply in this example"));
   if (pair) {
     you.value = pair.user || "";
     them.value = pair.character || "";
   }
-  row.append(head, el("span", "You", "example-label"), you, el("span", "Character", "example-label"), them);
+  row.append(head, el("span", tr("You"), "example-label"), you, el("span", tr("Character"), "example-label"), them);
   list.appendChild(row);
   return row;
 }
@@ -121,14 +121,14 @@ function renumberExamples() {
   const rows = $("edExamplesList").children;
   [...rows].forEach((row, i) => {
     const title = row.querySelector(".example-row-title");
-    if (title) title.textContent = "Exchange " + (i + 1);
+    if (title) title.textContent = tr("Exchange {n}", { n: i + 1 });
   });
   updateExampleCount();
 }
 
 function updateExampleCount() {
   const rows = $("edExamplesList").children.length;
-  $("edExamplesCount").textContent = rows ? `${rows} of ${EXAMPLE_LIMIT}` : "None yet";
+  $("edExamplesCount").textContent = rows ? tr("{n} of {max}", { n: rows, max: EXAMPLE_LIMIT }) : tr("None yet");
   $("edExamplesAdd").disabled = rows >= EXAMPLE_LIMIT;
 }
 
@@ -207,7 +207,7 @@ async function saveCharacter(ev) {
   $("edOk").textContent = "";
   const typed = $("edColourText").value.trim();
   if (editing && typed !== loadedColour && !/^#[0-9a-fA-F]{6}$/.test(typed)) {
-    $("edErr").textContent = "Colour must be a hex code such as #c0392b.";
+    $("edErr").textContent = tr("Colour must be a hex code such as #c0392b.");
     return;
   }
   const body = {
@@ -237,7 +237,7 @@ async function saveCharacter(ev) {
           });
           if (!r.ok) throw new Error("the picture was not saved");
         } catch (err) {
-          $("edErr").textContent = "Created " + saved.name + ", but " + err.message + ".";
+          $("edErr").textContent = tr("Created {name}, but {error}.", { name: saved.name, error: err.message });
         }
         pendingIcon = null;
         $("edImportFile").value = "";
@@ -249,7 +249,7 @@ async function saveCharacter(ev) {
         try {
           await savePalace();
         } catch (err) {
-          $("edErr").textContent = "Created " + saved.name + ", but the lorebook was not saved: " + err.message;
+          $("edErr").textContent = tr("Created {name}, but the lorebook was not saved: {error}", { name: saved.name, error: err.message });
         }
       }
       if (pendingBgs.length) {
@@ -263,7 +263,7 @@ async function saveCharacter(ev) {
             break;
           }
         }
-        if (failed) $("edErr").textContent = "Created " + saved.name + ", but a background did not upload: " + failed;
+        if (failed) $("edErr").textContent = tr("Created {name}, but a background did not upload: {error}", { name: saved.name, error: failed });
         pendingBgs = [];
         $("edBgFile").value = "";
         try {
@@ -277,7 +277,7 @@ async function saveCharacter(ev) {
     $("edName").readOnly = true;
     setProfileFields(saved.profile);
     renderExamples(saved.examples);   // the saved list, so half-typed rows do not linger
-    $("edOk").textContent = "Saved " + saved.name + ". Chats pick up the change on their next message.";
+    $("edOk").textContent = tr("Saved {name}. Chats pick up the change on their next message.", { name: saved.name });
     $("edColourText").value = saved.colour || $("edColourText").value;
     await loadCharacters();
   } catch (err) {
@@ -305,7 +305,7 @@ function renderTags() {
     chip.appendChild(el("span", tag));
     const x = el("button", "\u00d7", "tag-x");
     x.type = "button";
-    x.setAttribute("aria-label", "Remove tag " + tag);
+    x.setAttribute("aria-label", tr("Remove tag {tag}", { tag: tag }));
     x.addEventListener("click", () => {
       edTags = edTags.filter((t) => t !== tag);
       renderTags();
@@ -336,12 +336,12 @@ function addTag(raw) {
   const tag = foldAccents(String(raw || "").trim().replace(/\s+/g, " ").toLowerCase());
   if (!tag) { $("edTagText").value = ""; return true; }
   if (tag.length > TAG_MAX_LEN) {
-    $("edProfileErr").textContent = "Tags are " + TAG_MAX_LEN + " characters or fewer.";
+    $("edProfileErr").textContent = tr("Tags are {n} characters or fewer.", { n: TAG_MAX_LEN });
     return false;
   }
   if (!edTags.includes(tag)) {
     if (edTags.length >= TAGS_MAX_COUNT) {
-      $("edProfileErr").textContent = "Use up to " + TAGS_MAX_COUNT + " tags.";
+      $("edProfileErr").textContent = tr("Use up to {n} tags.", { n: TAGS_MAX_COUNT });
       return false;
     }
     edTags.push(tag);
@@ -393,7 +393,7 @@ function setProfileFields(profile) {
   $("edHeadline").value = profile ? profile.headline : "";
   $("edInfo").value = profile ? profile.info : "";
   setTags(profile ? profile.tags : []);
-  $("edProfileNote").textContent = profile && profile.auto ? "Written by the AI. Edit it and save to make it yours." : "";
+  $("edProfileNote").textContent = profile && profile.auto ? tr("Written by the AI. Edit it and save to make it yours.") : "";
   $("edProfileErr").textContent = "";
 }
 
@@ -406,17 +406,17 @@ function profileFromForm() {
 async function autoFillProfile() {
   $("edProfileErr").textContent = "";
   const card = $("edCard").value;
-  if (!card.trim()) { $("edProfileErr").textContent = "Write the character card first."; return; }
+  if (!card.trim()) { $("edProfileErr").textContent = tr("Write the character card first."); return; }
   const filled = $("edHeadline").value.trim() || $("edInfo").value.trim() || edTags.length;
-  if (filled && !window.confirm("Replace the headline, summary and tags with new ones from the AI?")) return;
+  if (filled && !window.confirm(tr("Replace the headline, summary and tags with new ones from the AI?"))) return;
   $("edProfileAuto").disabled = true;
-  $("edProfileNote").textContent = "Writing...";
+  $("edProfileNote").textContent = tr("Writing...");
   try {
     const data = await api("POST", "/api/admin/characters/draft", { card });
     $("edHeadline").value = data.headline;
     $("edInfo").value = data.info;
     setTags(data.tags || []);
-    $("edProfileNote").textContent = "Drafted by the AI. Check it, then save the character.";
+    $("edProfileNote").textContent = tr("Drafted by the AI. Check it, then save the character.");
   } catch (err) {
     $("edProfileErr").textContent = err.message;
     $("edProfileNote").textContent = "";
@@ -469,7 +469,7 @@ function renderBgList() {
   const box = $("edBgList");
   box.textContent = "";
   const items = [...bgItems, ...pendingBgs.map((file) => ({ file }))];
-  if (!items.length) box.appendChild(el("p", "No backgrounds yet.", "muted"));
+  if (!items.length) box.appendChild(el("p", tr("No backgrounds yet."), "muted"));
   for (const item of items) {
     const thumb = el("div", "", "bg-thumb");
     const src = item.file ? URL.createObjectURL(item.file) : "/api/background/" + encodeURIComponent(editing) + "?b=" + encodeURIComponent(item.id);
@@ -485,22 +485,23 @@ function renderBgList() {
       media.preload = "metadata";
       media.setAttribute("muted", "");
       media.setAttribute("playsinline", "");
+      media.setAttribute("webkit-playsinline", "");
       media.setAttribute("aria-hidden", "true");
       if (!item.file) media.poster = "/api/background/" + encodeURIComponent(editing) + "?b=" + encodeURIComponent(posterFor(item.id));
-      media.src = src;
+      setArtSources(media, src, item.file ? null : artFallbackUrl(editing, item.id));
     } else {
       media = document.createElement("img");
       media.alt = "";
       media.src = src;
     }
-    const rm = el("button", "Remove", "ghost small");
+    const rm = el("button", tr("Remove"), "ghost small");
     rm.type = "button";
-    rm.setAttribute("aria-label", "Remove this background");
+    rm.setAttribute("aria-label", tr("Remove this background"));
     rm.addEventListener("click", () => removeBackground(item));
     thumb.append(media, rm);
     box.appendChild(thumb);
   }
-  $("edBgNote").textContent = items.length + " of " + BG_MAX + " backgrounds.";
+  $("edBgNote").textContent = tr("{n} of {max} backgrounds.", { n: items.length, max: BG_MAX });
 }
 
 async function removeBackground(item) {
@@ -527,10 +528,10 @@ let pendingPalace = [];    // the imported lorebook, saved as Mind Palace entrie
 async function importCard() {
   const file = $("edImportFile").files[0];
   if (!file) {
-    $("edImportMsg").textContent = "Choose a .json or .png card first.";
+    $("edImportMsg").textContent = tr("Choose a .json or .png card first.");
     return;
   }
-  $("edImportMsg").textContent = "Reading the card.";
+  $("edImportMsg").textContent = tr("Reading the card.");
   $("edImportBtn").disabled = true;
   try {
     const r = await fetch("/api/admin/character-import", {
@@ -544,10 +545,10 @@ async function importCard() {
       body: file,
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.detail || "The card could not be imported.");
+    if (!r.ok) throw new Error(data.detail || tr("The card could not be imported."));
     const hasText = $("edCard").value.trim() || $("edHeadline").value.trim() || $("edInfo").value.trim();
-    if (hasText && !confirm("Replace the card, context, headline, summary and tags with the imported card? A name you typed is kept.")) {
-      $("edImportMsg").textContent = "Kept your text. Nothing was changed.";
+    if (hasText && !confirm(tr("Replace the card, context, headline, summary and tags with the imported card? A name you typed is kept."))) {
+      $("edImportMsg").textContent = tr("Kept your text. Nothing was changed.");
       return;
     }
     if (data.name && !$("edName").value.trim()) $("edName").value = data.name;
@@ -559,9 +560,9 @@ async function importCard() {
     setTags(data.tags);
     pendingIcon = data.icon ? file : null;
     pendingPalace = data.palace || [];
-    const parts = ["Card imported. Check it, then Create."];
-    if (pendingIcon) parts.push("The PNG will be the picture.");
-    if (pendingPalace.length) parts.push(`${pendingPalace.length} lorebook entries will be saved to the Mind Palace.`);
+    const parts = [tr("Card imported. Check it, then Create.")];
+    if (pendingIcon) parts.push(tr("The PNG will be the picture."));
+    if (pendingPalace.length) parts.push(tr("{n} lorebook entries will be saved to the Mind Palace.", { n: pendingPalace.length }));
     $("edImportMsg").textContent = parts.concat(data.notes || []).join(" ");
   } catch (err) {
     $("edImportMsg").textContent = err.message;
@@ -576,10 +577,10 @@ $("edImportBtn").addEventListener("click", importCard);
 async function draftFromFile() {
   const file = $("edDraftFile").files[0];
   if (!file) {
-    $("edDraftMsg").textContent = "Choose a file first.";
+    $("edDraftMsg").textContent = tr("Choose a file first.");
     return;
   }
-  $("edDraftMsg").textContent = "Reading the file and drafting. This can take a minute.";
+  $("edDraftMsg").textContent = tr("Reading the file and drafting. This can take a minute.");
   $("edDraftBtn").disabled = true;
   try {
     const r = await fetch("/api/admin/character-draft", {
@@ -593,10 +594,10 @@ async function draftFromFile() {
       body: file,
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.detail || "The draft failed.");
+    if (!r.ok) throw new Error(data.detail || tr("The draft failed."));
     const hasText = $("edCard").value.trim() || $("edHeadline").value.trim() || $("edInfo").value.trim();
-    if (hasText && !confirm("Replace the card, headline, summary and tags with the draft? A name you typed is kept.")) {
-      $("edDraftMsg").textContent = "Kept your text. Nothing was changed.";
+    if (hasText && !confirm(tr("Replace the card, headline, summary and tags with the draft? A name you typed is kept."))) {
+      $("edDraftMsg").textContent = tr("Kept your text. Nothing was changed.");
       return;
     }
     if (data.name && !$("edName").value.trim()) $("edName").value = data.name;
@@ -605,7 +606,7 @@ async function draftFromFile() {
     $("edHeadline").value = data.headline;
     $("edInfo").value = data.info;
     setTags(data.tags);
-    $("edDraftMsg").textContent = ["Draft ready. Check it, then Create."].concat(data.notes || []).join(" ");
+    $("edDraftMsg").textContent = [tr("Draft ready. Check it, then Create.")].concat(data.notes || []).join(" ");
   } catch (err) {
     $("edDraftMsg").textContent = err.message;
   } finally {
@@ -644,16 +645,16 @@ function renderPalaceList(list, entries, readOnly) {
     // The id and the automatic flag are not shown as fields, but they must survive an edit.
     wrap.dataset.id = entry.id || "";
     wrap.dataset.auto = entry.auto ? "1" : "";
-    if (entry.auto) wrap.appendChild(palaceField("p", { class: "muted palace-auto", text: "Added automatically" }));
-    const title = palaceField("input", { placeholder: "Title (optional)", "aria-label": "Entry title", "data-field": "title" });
+    if (entry.auto) wrap.appendChild(palaceField("p", { class: "muted palace-auto", text: tr("Added automatically") }));
+    const title = palaceField("input", { placeholder: tr("Title (optional)"), "aria-label": tr("Entry title"), "data-field": "title" });
     title.value = entry.title;
-    const keys = palaceField("input", { placeholder: "Keys, comma separated", "aria-label": "Keys that trigger this entry", "data-field": "keys" });
+    const keys = palaceField("input", { placeholder: tr("Keys, comma separated"), "aria-label": tr("Keys that trigger this entry"), "data-field": "keys" });
     keys.value = entry.keys.join(", ");
-    const secondary = palaceField("input", { placeholder: "Secondary keys (optional)", "aria-label": "Secondary keys", "data-field": "secondary" });
+    const secondary = palaceField("input", { placeholder: tr("Secondary keys (optional)"), "aria-label": tr("Secondary keys"), "data-field": "secondary" });
     secondary.value = entry.secondary.join(", ");
-    const logic = palaceField("select", { "aria-label": "Secondary key logic", "data-field": "logic" });
+    const logic = palaceField("select", { "aria-label": tr("Secondary key logic"), "data-field": "logic" });
     PALACE_LOGIC.forEach(([value, text]) => {
-      const opt = palaceField("option", { value, text });
+      const opt = palaceField("option", { value, text: tr(text) });
       logic.append(opt);
     });
     logic.value = entry.logic;
@@ -663,13 +664,13 @@ function renderPalaceList(list, entries, readOnly) {
     enabled.checked = entry.enabled;
     const whole = palaceField("input", { type: "checkbox", "data-field": "whole" });
     whole.checked = entry.whole;
-    const depth = palaceField("input", { type: "number", min: "1", max: "30", step: "1", "aria-label": "Scan depth", "data-field": "depth" });
+    const depth = palaceField("input", { type: "number", min: "1", max: "30", step: "1", "aria-label": tr("Scan depth"), "data-field": "depth" });
     depth.value = entry.depth;
-    const order = palaceField("input", { type: "number", min: "0", max: "1000", step: "1", "aria-label": "Insertion order", "data-field": "order" });
+    const order = palaceField("input", { type: "number", min: "0", max: "1000", step: "1", "aria-label": tr("Insertion order"), "data-field": "order" });
     order.value = entry.order;
-    const content = palaceField("textarea", { rows: "3", "aria-label": "Entry content", "data-field": "content" });
+    const content = palaceField("textarea", { rows: "3", "aria-label": tr("Entry content"), "data-field": "content" });
     content.value = entry.content;
-    const remove = palaceField("button", { type: "button", class: "ghost", text: "Remove" });
+    const remove = palaceField("button", { type: "button", class: "ghost", text: tr("Remove") });
     remove.addEventListener("click", () => {
       const live = readPalaceList(list);
       live.splice(index, 1);
@@ -677,13 +678,13 @@ function renderPalaceList(list, entries, readOnly) {
     });
     const options = palaceField("div", { class: "palace-options" });
     options.append(
-      palaceLabel("Secondary keys", secondary),
-      palaceLabel("Logic", logic),
-      palaceLabel("Scan depth (messages)", depth),
-      palaceLabel("Order (higher = kept first)", order),
-      palaceLabel("Always on", constant),
-      palaceLabel("Enabled", enabled),
-      palaceLabel("Whole words only", whole),
+      palaceLabel(tr("Secondary keys"), secondary),
+      palaceLabel(tr("Logic"), logic),
+      palaceLabel(tr("Scan depth (messages)"), depth),
+      palaceLabel(tr("Order (higher = kept first)"), order),
+      palaceLabel(tr("Always on"), constant),
+      palaceLabel(tr("Enabled"), enabled),
+      palaceLabel(tr("Whole words only"), whole),
     );
     if (readOnly) {
       wrap.querySelectorAll("input, select, textarea").forEach((f) => { f.disabled = true; });
@@ -749,12 +750,12 @@ async function fillPalaceWho() {
   // Admins can look at a non-admin account's palace for this character. The select lists those accounts.
   const sel = $("edPalaceWho");
   $("edPalaceWhoRow").hidden = !(me && me.is_admin);
-  sel.replaceChildren(palaceField("option", { value: "", text: "Starting palace (editable)" }));
+  sel.replaceChildren(palaceField("option", { value: "", text: tr("Starting palace (editable)") }));
   if (!me || !me.is_admin) return;
   try {
     const data = await api("GET", "/api/admin/users");
     for (const u of data.users) {
-      if (!u.is_admin) sel.append(palaceField("option", { value: String(u.id), text: "Account " + u.username + " (read-only)" }));
+      if (!u.is_admin) sel.append(palaceField("option", { value: String(u.id), text: tr("Account {name} (read-only)", { name: u.username }) }));
     }
   } catch (err) {
     $("edPalaceMsg").textContent = err.message;
@@ -779,7 +780,7 @@ async function savePalace() {
     $("edPalaceRecursive").checked = !!data.recursive;
     $("edPalaceBudget").value = data.budget;
     renderPalace();
-    $("edPalaceMsg").textContent = "Saved.";
+    $("edPalaceMsg").textContent = tr("Saved.");
   } catch (err) {
     $("edPalaceMsg").textContent = err.message;
   }
@@ -835,7 +836,7 @@ function queueNewBackground(files) {
   const tooBig = files.some((f) => f.size > NEW_BG_MAX);
   const room = BG_MAX - pendingBgs.length;
   pendingBgs = pendingBgs.concat(tooBig ? [] : files.slice(0, Math.max(0, room)));
-  $("edBgErr").textContent = tooBig ? "Background uploads can be up to 50 MB." : files.length > room ? "Only " + Math.max(0, room) + " more fit (up to 10)." : "";
+  $("edBgErr").textContent = tooBig ? tr("Background uploads can be up to 50 MB.") : files.length > room ? tr("Only {n} more fit (up to 10).", { n: Math.max(0, room) }) : "";
   $("edBgFile").value = "";
   renderBgList();
 }
@@ -849,7 +850,7 @@ function onBgFilesChosen() {
   }
   const tooBig = files.some((f) => f.size > NEW_BG_MAX);
   const over = bgItems.length + files.length > BG_MAX;
-  $("edBgErr").textContent = tooBig ? "Background uploads can be up to 50 MB." : over ? "A character can have up to 10 backgrounds. Remove one first." : "";
+  $("edBgErr").textContent = tooBig ? tr("Background uploads can be up to 50 MB.") : over ? tr("A character can have up to 10 backgrounds. Remove one first.") : "";
   $("edBgSave").disabled = tooBig || over;
 }
 
@@ -881,7 +882,7 @@ async function exportCharacter() {
 async function importCharacter() {
   const file = $("impFile").files[0];
   if (!file) return;
-  $("impMsg").textContent = "Importing...";
+  $("impMsg").textContent = tr("Importing...");
   try {
     const r = await fetch("/api/admin/characters/import", {
       method: "POST",
@@ -890,14 +891,16 @@ async function importCharacter() {
       body: file,
     });
     if (!r.ok) {
-      let detail = "Import failed.";
+      let detail = tr("Import failed.");
       try { detail = (await r.json()).detail || detail; } catch (e) { /* not json */ }
-      throw new Error(typeof detail === "string" ? detail : "Import failed.");
+      throw new Error(typeof detail === "string" ? detail : tr("Import failed."));
     }
     const out = await r.json();
     $("impFile").value = "";
     $("impBtn").disabled = true;
-    $("impMsg").textContent = "Imported " + out.name + (out.history_restored ? ", with your history." : ".");
+    $("impMsg").textContent = out.history_restored
+      ? tr("Imported {name}, with your history.", { name: out.name })
+      : tr("Imported {name}.", { name: out.name });
     await loadCharacters();
   } catch (err) {
     $("impMsg").textContent = err.message;
@@ -912,7 +915,7 @@ $("edColour").addEventListener("input", () => syncColour("picker"));
 $("edIconFile").addEventListener("change", () => {
   const f = $("edIconFile").files[0];
   const tooBig = !!f && f.size > 10 * 1024 * 1024;
-  $("edIconErr").textContent = tooBig ? "Icon uploads can be up to 10 MB." : "";
+  $("edIconErr").textContent = tooBig ? tr("Icon uploads can be up to 10 MB.") : "";
   $("edIconSave").disabled = !f || !editing || tooBig;
 });
 $("edIconSave").addEventListener("click", uploadIcon);
@@ -965,7 +968,7 @@ async function saveMyPalace() {
     });
     setAutoFields(data.auto);
     renderPalaceList($("palList"), data.entries, false);
-    $("palMsg").textContent = "Saved. Applies from your next message.";
+    $("palMsg").textContent = tr("Saved. Applies from your next message.");
   } catch (err) {
     $("palMsg").textContent = err.message;
   }
@@ -986,7 +989,7 @@ $("edExport").addEventListener("click", exportCharacter);
 $("impFile").addEventListener("change", () => {
   const f = $("impFile").files[0];
   const tooBig = !!f && f.size > 60 * 1024 * 1024;
-  $("impMsg").textContent = tooBig ? "Archives can be up to 60 MB." : "";
+  $("impMsg").textContent = tooBig ? tr("Archives can be up to 60 MB.") : "";
   $("impBtn").disabled = !f || tooBig;
 });
 $("impBtn").addEventListener("click", importCharacter);

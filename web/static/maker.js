@@ -65,7 +65,7 @@ function drawCast(solo, selected, notes) {
   knownNotes = notes;
   const pick = $("castPick");
   pick.replaceChildren();
-  $("castLegend").textContent = `Characters (${LIMITS[KIND].min} to ${LIMITS[KIND].max})`;
+  $("castLegend").textContent = tr("Characters ({min} to {max})", { min: LIMITS[KIND].min, max: LIMITS[KIND].max });
   for (const name of solo) {
     const card = el("label", "", "cast-card");
     const box = document.createElement("input");
@@ -92,8 +92,8 @@ function drawCast(solo, selected, notes) {
 function drawWorld(list, selected) {
   const sel = $("makerWorld");
   sel.replaceChildren();
-  sel.appendChild(new Option("Account default", ""));
-  sel.appendChild(new Option("No world", "none"));
+  sel.appendChild(new Option(tr("Account default"), ""));
+  sel.appendChild(new Option(tr("No world"), "none"));
   for (const w of list) sel.appendChild(new Option(w.name, w.id));
   sel.value = selected || "";
   if (sel.value !== (selected || "")) sel.value = "";
@@ -141,7 +141,7 @@ async function changeArt(kind, method, file) {
   const msg = $(icon ? "iconMsg" : "bgMsg");
   const remove = $(icon ? "iconRemove" : "bgRemove");
   const input = $(icon ? "iconFile" : "bgFile");
-  msg.textContent = method === "DELETE" ? "Removing…" : "Uploading…";
+  msg.textContent = method === "DELETE" ? tr("Removing...") : tr("Uploading...");
   try {
     const r = await fetch("/api/groups/" + encodeURIComponent(EDIT_ID) + "/" + kind, {
       method,
@@ -157,7 +157,7 @@ async function changeArt(kind, method, file) {
     const data = await r.json();
     const has = icon ? data.has_icon : data.has_background;
     remove.hidden = !has;
-    msg.textContent = has ? (icon ? "Picture saved." : "Background saved.") : (icon ? "Picture removed." : "Background removed.");
+    msg.textContent = has ? (icon ? tr("Picture saved.") : tr("Background saved.")) : (icon ? tr("Picture removed.") : tr("Background removed."));
     input.value = "";
   } catch (err) {
     msg.textContent = err.message;
@@ -195,7 +195,7 @@ async function save(event) {
 
 async function remove() {
   if (!EDIT_ID) return;
-  if (!confirm(`Delete this ${NOUN[KIND]}? Its messages, memory and notes are removed. The characters and worlds are kept.`)) return;
+  if (!confirm(tr("Delete this {noun}? Its messages, memory and notes are removed. The characters and worlds are kept.", { noun: tr(NOUN[KIND]) }))) return;
   const path = KIND === "novel" ? "/api/novels/" : "/api/groups/";
   try {
     await api("DELETE", path + encodeURIComponent(EDIT_ID));
@@ -228,14 +228,14 @@ async function init() {
   if (KIND === "novel") {
     const data = await api("GET", "/api/novels");
     item = EDIT_ID ? data.novels.find((n) => n.id === EDIT_ID) : null;
-    if (EDIT_ID && !item) return fail("That novel no longer exists.");
+    if (EDIT_ID && !item) return fail(tr("That novel no longer exists."));
     drawWorld(worlds, item ? (item.world || "") : "");
     $("worldBox").hidden = false;
   } else {
     const data = await api("GET", "/api/groups");
     noteMax = data.note_max;
     item = EDIT_ID ? data.groups.find((g) => g.id === EDIT_ID) : null;
-    if (EDIT_ID && !item) return fail("That group no longer exists.");
+    if (EDIT_ID && !item) return fail(tr("That group no longer exists."));
     // A group's picture and background are kept on the group, so they can be set only once it exists.
     $("artBox").hidden = !item;
     if (item) {
@@ -246,12 +246,12 @@ async function init() {
 
   const selected = item ? item.members.map((m) => m.name) : [];
   const notes = item && item.notes ? item.notes : {};
-  const title = item ? "Edit " + NOUN[KIND] : "New " + NOUN[KIND];
+  const title = item ? tr("Edit {noun}", { noun: tr(NOUN[KIND]) }) : tr("New {noun}", { noun: tr(NOUN[KIND]) });
   document.title = title + " - Miso Chat";
   $("makerTitle").textContent = title;
   $("makerIntro").textContent = KIND === "novel"
-    ? "A narrator tells the story with the characters you pick, in the world you choose. The novel has its own chat, memory and dreams."
-    : "A group chat is a set of characters that answer you together. Each one can have a note only you see.";
+    ? tr("A narrator tells the story with the characters you pick, in the world you choose. The novel has its own chat, memory and dreams.")
+    : tr("A group chat is a set of characters that answer you together. Each one can have a note only you see.");
   $("makerName").value = item ? item.name : "";
   drawCast(solo, selected, notes);
   $("makerDelete").hidden = !item;
