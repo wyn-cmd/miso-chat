@@ -144,10 +144,10 @@ function renderUsage() {
   usage.textContent = "";
   const long = document.createElement("span");
   long.className = "u-long";
-  long.textContent = `Requests today ${u.requests_today}/${u.request_cap} · tokens ${u.tokens_today.toLocaleString()}`;
+  long.textContent = tr("Requests today {used}/{cap} · tokens {tokens}", { used: u.requests_today, cap: u.request_cap, tokens: u.tokens_today.toLocaleString() });
   const short = document.createElement("span");
   short.className = "u-short";
-  short.textContent = `${u.requests_today}/${u.request_cap} req · ${fmt.format(u.tokens_today)} tok`;
+  short.textContent = tr("{used}/{cap} req · {tokens} tok", { used: u.requests_today, cap: u.request_cap, tokens: fmt.format(u.tokens_today) });
   usage.append(long, short);
   // token bar shows the window closest to its limit, the one that will block first; hidden for admins with no limits
   const meter = $("tokenBar");
@@ -165,8 +165,8 @@ function renderUsage() {
     const left = Math.max(0, w.limit - w.used);
     const pct = Math.max(0, Math.min(100, 100 - windowShare(w) * 100));
     $("tokenFill").style.width = pct.toFixed(1) + "%";
-    $("tokenText").textContent = `${fmt.format(left)} left`;
-    meter.title = `${title} token budget: ${left.toLocaleString()} of ${w.limit.toLocaleString()} tokens left, ${w.reset}`;
+    $("tokenText").textContent = tr("{left} left", { left: fmt.format(left) });
+    meter.title = tr("{window} token budget: {left} of {limit} tokens left, {reset}", { window: tr(title), left: left.toLocaleString(), limit: w.limit.toLocaleString(), reset: w.reset });
   }
   renderBudgetAlert(tight);
 }
@@ -186,8 +186,8 @@ function renderBudgetAlert(tight) {
   const used = windowShare(w) >= 1;
   const left = Math.max(0, w.limit - w.used);
   $("budgetAlertText").textContent = used
-    ? `The ${title.toLowerCase()} token budget is used up. New messages are blocked until it resets: ${w.reset}.`
-    : `You have ${Math.round(100 - windowShare(w) * 100)}% of your ${title.toLowerCase()} token budget left (${left.toLocaleString("en")} tokens), ${w.reset}.`;
+    ? tr("The {window} token budget is used up. New messages are blocked until it resets: {reset}.", { window: tr(title).toLowerCase(), reset: w.reset })
+    : tr("You have {percent}% of your {window} token budget left ({left} tokens), {reset}.", { percent: Math.round(100 - windowShare(w) * 100), window: tr(title).toLowerCase(), left: left.toLocaleString(), reset: w.reset });
   box.classList.toggle("over", used);
   box.dataset.kind = kind;
   box.hidden = false;
@@ -204,10 +204,10 @@ function usageWindow(title, w) {
   const left = Math.max(0, w.limit - w.used);
   const box = el("div", null, "usage-window");
   const head = el("div", null, "usage-window-head");
-  head.append(el("span", title, "muted"), el("span", `${shown.toFixed(1)}% used`, "usage-window-pct"));
+  head.append(el("span", tr(title), "muted"), el("span", tr("{percent}% used", { percent: shown.toFixed(1) }), "usage-window-pct"));
   const track = el("div", null, "bar-track");
   track.setAttribute("role", "progressbar");
-  track.setAttribute("aria-label", `${title} token usage`);
+  track.setAttribute("aria-label", tr("{window} token usage", { window: tr(title) }));
   track.setAttribute("aria-valuemin", "0");
   track.setAttribute("aria-valuemax", "100");
   track.setAttribute("aria-valuenow", String(Math.round(shown)));
@@ -215,23 +215,45 @@ function usageWindow(title, w) {
   fill.style.width = shown.toFixed(1) + "%";
   track.append(fill);
   box.append(head, track,
-    el("p", `${fmtN(w.used)} of ${fmtN(w.limit)} tokens used`),
-    el("p", `${fmtN(left)} tokens left · ${w.reset}.`, "muted"));
-  if (w.used >= w.limit) box.append(el("p", `The ${title.toLowerCase()} budget is used up. New messages are blocked until it resets.`, "error-msg"));
+    el("p", tr("{used} of {limit} tokens used", { used: fmtN(w.used), limit: fmtN(w.limit) })),
+    el("p", tr("{left} tokens left · {reset}.", { left: fmtN(left), reset: w.reset }), "muted"));
+  if (w.used >= w.limit) box.append(el("p", tr("The {window} budget is used up. New messages are blocked until it resets.", { window: tr(title).toLowerCase() }), "error-msg"));
   return box;
+}
+
+// On a phone the next prompt's estimate is shown here, not in the chat, where it crowds the messages (style.css hides
+// it at the same width). The chat has to be open for there to be an estimate.
+const PHONE_QUERY = "(max-width: 760px)";
+function renderNextPrompt(body) {
+  if (!window.matchMedia(PHONE_QUERY).matches) return;
+  const box = el("div", null, "usage-next");
+  box.append(el("p", tr("Next prompt"), "usage-window-head"));
+  const n = nextPromptTokens();
+  if (n === null) {
+    box.append(el("p", tr("Open a chat to see the estimate for its next prompt."), "muted"));
+  } else {
+    const fresh = n.total - n.cached;
+    box.append(el("p", tr("≈ {n} tokens", { n: n.total.toLocaleString() })));
+    box.append(el("p", tr("≈ {cached} cached · ≈ {fresh} new", { cached: n.cached.toLocaleString(), fresh: fresh.toLocaleString() }), "muted"));
+    const saved = promptSaved();
+    if (saved) box.append(el("p", tr("≈ {saved} saved by quenching or clipping", { saved: saved.toLocaleString() }), "muted"));
+  }
+  box.append(el("p", tr("Estimates, about 4 characters a token."), "muted"));
+  body.append(box);
 }
 
 function renderTokenUsage(usage) {
   const body = $("tokenUsageBody");
   body.textContent = "";
+  renderNextPrompt(body);
   if (!usage) {
-    body.append(el("p", "Usage is not available right now.", "muted"));
+    body.append(el("p", tr("Usage is not available right now."), "muted"));
     return;
   }
   const tv = usage.token_budgets || {};
   const windows = TOKEN_WINDOWS.filter(([kind]) => tv[kind]);
   if (!windows.length) {
-    body.append(el("p", "This account has no token limits.", "muted"));
+    body.append(el("p", tr("This account has no token limits."), "muted"));
     return;
   }
   body.append(el("p", tv.tier ? tv.tier[0].toUpperCase() + tv.tier.slice(1) + " tier" : "Custom limits", "muted"));
@@ -241,6 +263,9 @@ function renderTokenUsage(usage) {
 async function openTokenUsage() {
   renderTokenUsage(me && me.usage);
   $("tokenUsageDlg").showModal();
+  if (current && window.matchMedia(PHONE_QUERY).matches) {
+    refreshContext().then(() => renderTokenUsage(me && me.usage)).catch(() => {});
+  }
   try {
     me = await api("GET", "/api/me");
     renderUsage();
@@ -260,6 +285,10 @@ function addLine(speaker, text, cls, time) {
   const body = el("div", null, "text");
   renderMarkdown(text, body);
   box.appendChild(body);
+  if (speaker && cls && cls.includes("theirs") && window.ttsMessageButton) {
+    const speak = window.ttsMessageButton(box, speaker);
+    if (speak) box.appendChild(speak);
+  }
   if (time) addStamp(box, time);
   $("log").appendChild(box);
   $("log").scrollTop = $("log").scrollHeight;
@@ -273,7 +302,7 @@ function thinkingPanel(box) {
   if (panel) return panel;
   panel = el("details", null, "think");
   panel.open = false;
-  const summary = el("summary", "Thinking", "think-summary");
+  const summary = el("summary", tr("Thinking"), "think-summary");
   const preview = el("span", "", "think-preview");
   summary.appendChild(preview);
   const body = el("div", "", "think-body");
@@ -331,12 +360,12 @@ function renderHistory(messages) {
   $("log").textContent = "";
   picked.clear();   // positions change with every render, so a pick list never carries over
   if (!messages.length) {
-    addLine("", "No messages yet. Say hello!", "note");
+    loadScenarioDraft(current);   // an opening for a new chat, if the account asked for one
   } else {
     messages.forEach((m, i) => {
       const isEvent = m.speaker === "Narrator";   // random events are saved as user-side entries, shown as notes
       const box = addLine(m.speaker, m.text, isEvent ? "note event" : (m.role === "user" ? "mine" : "theirs"), m.time);
-      if (m.scheduled) box.prepend(el("div", "Check-in", "checkin-tag"));   // sent on the character's schedule
+      if (m.scheduled) box.prepend(el("div", tr("Check-in"), "checkin-tag"));   // sent on the character's schedule
       box.dataset.idx = String(i);   // position in the saved chat, used to place the context marker
       addEditButton(box, i, m);
       addBranchButton(box, i);
@@ -350,18 +379,60 @@ function renderHistory(messages) {
   refreshContext();
 }
 
-// Branching: copy the chat up to this message into a new branch and open it. The chat being branched from is left as it was.
+// A new chat can offer one of the account's scenarios as its opening. It is shown in the window with a Start button
+// and is never sent on its own. Pressing Start sends the text as the reader's first message; Not now hides it.
+let scenarioDraftToken = 0;
+async function loadScenarioDraft(name) {
+  const token = ++scenarioDraftToken;
+  if (!name) return;
+  let data;
+  try {
+    data = await api("GET", "/api/scenario-draft?character=" + encodeURIComponent(name));
+  } catch (err) {
+    data = {};
+  }
+  const log = $("log");
+  // The reader switched chats, a newer load started, or the chat got its first message while this was in flight.
+  if (token !== scenarioDraftToken || name !== current || log.children.length) return;
+  if (!data.scenario) {
+    addLine("", "No messages yet. Say hello!", "note");
+    return;
+  }
+  const box = el("div", null, "line scenario");
+  box.appendChild(el("div", tr("Starting scene: {name}", { name: data.scenario.name }), "speaker"));
+  const body = el("div", null, "text");
+  renderMarkdown(data.scenario.text, body);
+  box.appendChild(body);
+  const bar = el("div", null, "scenario-actions");
+  const start = el("button", tr("Start"), "small");
+  start.type = "button";
+  start.title = tr("Send this opening message");
+  const skip = el("button", tr("Not now"), "ghost small");
+  skip.type = "button";
+  skip.title = tr("Hide this opening and write your own message");
+  bar.append(start, skip);
+  box.appendChild(bar);
+  log.appendChild(box);
+  log.scrollTop = log.scrollHeight;
+  start.addEventListener("click", () => {
+    if (busy || name !== current) return;
+    box.remove();
+    sendMessage(data.scenario.text);
+  });
+  skip.addEventListener("click", () => { box.remove(); $("msg").focus(); });
+}
+
 function addBranchButton(box, i) {
-  const btn = el("button", "Branch", "ghost small branch-btn");
+  const btn = el("button", tr("Branch"), "ghost small branch-btn");
   btn.type = "button";
-  btn.title = "Start a new branch from this message. The current chat stays as it is.";
-  btn.setAttribute("aria-label", "Branch from this message");
+  btn.title = tr("Start a new branch from this message. The current chat stays as it is.");
+  btn.setAttribute("aria-label", tr("Branch from this message"));
   btn.addEventListener("click", () => branchFrom(i));
   box.appendChild(btn);
 }
 
 async function branchFrom(index) {
-  const name = prompt("Name for the new branch (optional)", "");
+  const name = prompt(tr("Name for the new branch (optional)"), "");
   if (name === null) return;
   const chat = current;
   $("chatErr").textContent = "";
@@ -381,7 +452,7 @@ function applyBranchState(name, data) {
 
 function renderBranches(data) {
   const pick = $("branchPick");
-  pick.replaceChildren(new Option("Main chat", "main"));
+  pick.replaceChildren(new Option(tr("Main chat"), "main"));
   for (const item of data.items) pick.append(new Option(item.name, item.id));
   pick.value = data.active;
   pick.hidden = data.items.length === 0;   // the picker appears once a branch exists
@@ -392,9 +463,9 @@ function renderBranches(data) {
 
 // Editing a saved message: the text opens in a box with Save and Cancel. Saving changes the saved chat only; no model call.
 function addEditButton(box, i, m) {
-  const btn = el("button", "Edit", "ghost small edit-btn");
+  const btn = el("button", tr("Edit"), "ghost small edit-btn");
   btn.type = "button";
-  btn.setAttribute("aria-label", "Edit this message");
+  btn.setAttribute("aria-label", tr("Edit this message"));
   btn.addEventListener("click", () => startEdit(box, i, m));
   box.appendChild(btn);
 }
@@ -408,9 +479,9 @@ function startEdit(box, i, m) {
   area.rows = 4;
   area.maxLength = 4000;
   const bar = el("div", null, "edit-bar");
-  const save = el("button", "Save", null);
+  const save = el("button", tr("Save"), null);
   save.type = "button";
-  const cancel = el("button", "Cancel", "ghost small");
+  const cancel = el("button", tr("Cancel"), "ghost small");
   cancel.type = "button";
   bar.append(save, cancel);
   body.hidden = true;
@@ -448,7 +519,7 @@ function renderCreatorRow() {
   }
   const link = el("a", "@" + name, "creator-link");
   link.href = "/u/" + encodeURIComponent(name);
-  link.title = "View " + name + "'s profile";
+  link.title = tr("View {name}'s profile", { name: name });
   box.appendChild(link);
 }
 
@@ -469,20 +540,20 @@ function loadCharSettings() {
 function applyCharSettings(d) {
   const t = d.temperature == null ? d.temperature_default : d.temperature;
   $("tempSlider").value = t;
-  $("tempVal").textContent = Number(t).toFixed(2) + (d.temperature == null ? " (default)" : "");
+  $("tempVal").textContent = Number(t).toFixed(2) + (d.temperature == null ? " " + tr("(default)") : "");
   $("tempReset").disabled = d.temperature == null;
   const w = d.window == null ? d.window_default : d.window;
   $("winSlider").value = w;
-  $("winVal").textContent = w + (d.window == null ? " (default)" : "");
+  $("winVal").textContent = w + (d.window == null ? " " + tr("(default)") : "");
   $("winReset").disabled = d.window == null;
-  $("winNote").textContent = `Messages from the chat sent to the model with each reply, at least this many: the window moves in steps of 10, so it can run up to 9 messages over. Default: ${d.window_defaults.solo} for 1:1 chats, ${d.window_defaults.group} for group chats.`;
+  $("winNote").textContent = tr("Messages from the chat sent to the model with each reply, at least this many: the window moves in steps of 10, so it can run up to 9 messages over. Default: {solo} for 1:1 chats, {group} for group chats.", { solo: d.window_defaults.solo, group: d.window_defaults.group });
 }
 
 async function saveCharSettings(patch) {
   if (!current) return;
   try {
     applyCharSettings(await api("POST", "/api/character-settings", { character: current, ...patch }));
-    $("charMsg").textContent = "Saved. Applies from your next message.";
+    $("charMsg").textContent = tr("Saved. Applies from your next message.");
   } catch (err) {
     $("charMsg").textContent = err.message;
     loadCharSettings();
@@ -493,7 +564,7 @@ async function saveWindow(value) {
   try {
     await api("POST", "/api/settings", { window: value });
     loadCharSettings();
-    $("charMsg").textContent = "Saved. Applies from your next message.";
+    $("charMsg").textContent = tr("Saved. Applies from your next message.");
   } catch (err) {
     $("charMsg").textContent = err.message;
   }
@@ -525,7 +596,7 @@ $("tempReset").addEventListener("click", () => saveCharSettings({ temperature: n
 $("winSlider").addEventListener("input", () => { $("winVal").textContent = $("winSlider").value; });
 $("winSlider").addEventListener("change", () => saveWindow(Number($("winSlider").value)));
 $("winReset").addEventListener("click", () => saveWindow(null));
-$("replySlider").addEventListener("input", () => { $("replyVal").textContent = `${$("replySlider").value} tokens`; });
+$("replySlider").addEventListener("input", () => { $("replyVal").textContent = tr("{n} tokens", { n: $("replySlider").value }); });
 $("replySlider").addEventListener("change", () => saveReplyLength(Number($("replySlider").value)));
 $("replyReset").addEventListener("click", () => saveReplyLength(null));
 $("exportMd").addEventListener("click", () => exportChat("md"));
@@ -548,27 +619,27 @@ function placeTurnTools(messages) {
   const bar = el("div", null, "turn-tools");
   const prev = el("button", "\u25C0", "ghost small");
   prev.type = "button";
-  prev.setAttribute("aria-label", "Previous reply");
+  prev.setAttribute("aria-label", tr("Previous reply"));
   prev.disabled = busy || v.index <= 1;
   prev.addEventListener("click", () => swipe(-1));
   const count = el("span", `${v.index} / ${v.count}`, "muted turn-count");
   const next = el("button", "\u25B6", "ghost small");
   next.type = "button";
-  next.setAttribute("aria-label", "Next reply");
+  next.setAttribute("aria-label", tr("Next reply"));
   next.disabled = busy || v.index >= v.count;
   next.addEventListener("click", () => swipe(1));
   const regen = el("button", "\u21BB Regenerate", "ghost small");
   regen.type = "button";
   const atLimit = v.count - 1 >= v.limit;
-  regen.title = atLimit ? "This message has reached its regeneration limit."
-    : "Write a new reply to your last message. The current reply is kept; swipe back to it any time.";
+  regen.title = atLimit ? tr("This message has reached its regeneration limit.")
+    : tr("Write a new reply to your last message. The current reply is kept; swipe back to it any time.");
   regen.disabled = busy || atLimit;
   regen.addEventListener("click", regenerate);
   // Delete the last message, drawn as a trash can. Undo is the button that takes the whole turn away.
   const del = el("button", null, "ghost small del-btn");
   del.type = "button";
-  del.title = "Delete the last message. Undo removes the whole last turn instead.";
-  del.setAttribute("aria-label", "Delete the last message");
+  del.title = tr("Delete the last message. Undo removes the whole last turn instead.");
+  del.setAttribute("aria-label", tr("Delete the last message"));
   del.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" '
     + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
     + '<path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
@@ -604,6 +675,12 @@ function nextPromptTokens() {
   return { total, cached: Math.min(ctxInfo.cached_tokens || 0, total) };
 }
 
+// Quenching and clipping savings for the next prompt, when either is on.
+function promptSaved() {
+  if (!ctxInfo) return 0;
+  return (ctxInfo.quench ? (ctxInfo.quench_saved || 0) : 0) + (ctxInfo.clip ? (ctxInfo.clip_saved || 0) : 0);
+}
+
 function updateEstimate() {
   const label = document.querySelector("#log .ctx-est");
   if (!label) return;
@@ -617,12 +694,10 @@ function updateEstimate() {
   const lines = ["prompt \u2248 " + n.total.toLocaleString() + " tokens",
                  "\u2248 " + n.cached.toLocaleString() + " cached",
                  "\u2248 " + fresh.toLocaleString() + " new"];
-  // Quenching and clipping savings for this prompt, when either is on.
-  const saved = (ctxInfo.quench ? (ctxInfo.quench_saved || 0) : 0) + (ctxInfo.clip ? (ctxInfo.clip_saved || 0) : 0);
+  const saved = promptSaved();
   if (saved) lines.push(saved.toLocaleString() + " saved");
   label.textContent = lines.join("\n");
-  label.title = "Estimates, about 4 characters a token. Reused from cache: the part of this prompt the provider can "
-    + "reuse, which holds only while the system text and the older messages stay the same as the last reply's.";
+  label.title = tr("Estimates, about 4 characters a token. Reused from cache: the part of this prompt the provider can reuse, which holds only while the system text and the older messages stay the same as the last reply's.");
 }
 
 function placeMarker() {
@@ -657,7 +732,7 @@ function iconFor(name) {
 
 function editPencil(name) {
   const edit = el("span", "✎", "char-edit");
-  edit.title = "Edit " + name;
+  edit.title = tr("Edit {name}", { name: name });
   edit.setAttribute("role", "button");
   edit.addEventListener("click", (e) => { e.stopPropagation(); openEditor(name).catch((err) => { $("chatErr").textContent = err.message; }); });
   return edit;
@@ -708,7 +783,7 @@ function ownPersonaIcon(p) {
 
 function ownPersonaEdit(p) {
   const edit = el("span", "✎", "char-edit");
-  edit.title = "Edit " + p.name;
+  edit.title = tr("Edit {name}", { name: p.name });
   edit.setAttribute("role", "button");
   edit.addEventListener("click", (e) => { e.stopPropagation(); openPersonaForm(p); });
   return edit;
@@ -732,7 +807,7 @@ function personaButton(p) {
 function renderPersonas(personas) {
   const list = $("personaList");
   list.textContent = "";
-  const none = el("button", "No persona", "char-item persona-item");
+  const none = el("button", tr("No persona"), "char-item persona-item");
   none.type = "button";
   none.disabled = busy;
   if (!me || !me.persona) none.classList.add("active");
@@ -746,7 +821,7 @@ let personaEditing = null;   // the account's own persona being edited; null whe
 
 function openPersonaForm(p) {
   personaEditing = p || null;
-  $("personaFormTitle").textContent = p ? "Edit persona" : "New persona";
+  $("personaFormTitle").textContent = p ? tr("Edit persona") : tr("New persona");
   $("pfName").value = p ? p.name : "";
   $("pfColour").value = p && p.color ? p.color : "#8b9bb4";
   $("pfDesc").value = p ? (p.description || "") : "";
@@ -807,7 +882,7 @@ $("personaForm").addEventListener("submit", async (e) => {
 
 $("pfDelete").addEventListener("click", async () => {
   if (!personaEditing) return;
-  if (!confirm("Delete this persona? Your chats stay, but it is no longer used.")) return;
+  if (!confirm(tr("Delete this persona? Your chats stay, but it is no longer used."))) return;
   const pid = personaEditing.id;
   const wasActive = me.persona && me.persona.id === pid;
   try {
@@ -825,7 +900,7 @@ $("pfDelete").addEventListener("click", async () => {
 function renderModels() {
   const sel = $("modelSelect");
   sel.textContent = "";
-  sel.appendChild(el("option", "Automatic (Gemini fallback chain)", null));
+  sel.appendChild(el("option", tr("Automatic (Gemini fallback chain)"), null));
   sel.options[0].value = "";
   for (const name of (me && me.models && me.models.extra) || []) {
     const o = el("option", name, null);
@@ -878,7 +953,7 @@ async function saveProfileDescription() {
   try {
     me.profile = await api("POST", "/api/account/profile", { description: $("profileBio").value });
     renderProfileSettings();
-    $("profileMsg").textContent = "Description saved.";
+    $("profileMsg").textContent = tr("Description saved.");
   } catch (err) {
     $("profileMsg").textContent = err.message;
   }
@@ -890,8 +965,8 @@ async function saveLikesVisibility() {
     me.profile = await api("POST", "/api/account/profile", { likes_visible: $("profileLikes").checked });
     renderProfileSettings(false);
     $("profileMsg").textContent = me.profile.likes_visible
-      ? "Liked characters are visible on your profile."
-      : "Liked characters are private.";
+      ? tr("Liked characters are visible on your profile.")
+      : tr("Liked characters are private.");
   } catch (err) {
     $("profileMsg").textContent = err.message;
     renderProfileSettings(false);
@@ -900,7 +975,7 @@ async function saveLikesVisibility() {
 
 async function uploadProfileImage(kind, file) {
   if (!file) return;
-  $("profileMsg").textContent = "Uploading…";
+  $("profileMsg").textContent = tr("Uploading...");
   try {
     const r = await fetch("/api/account/" + kind, {
       method: "POST",
@@ -915,20 +990,20 @@ async function uploadProfileImage(kind, file) {
     }
     me.profile = await r.json();
     renderProfileSettings(false);
-    $("profileMsg").textContent = kind === "avatar" ? "Profile picture saved." : "Profile background saved.";
+    $("profileMsg").textContent = kind === "avatar" ? tr("Profile picture saved.") : tr("Profile background saved.");
   } catch (err) {
     $("profileMsg").textContent = err.message;
   }
 }
 
 async function removeProfileImage(kind) {
-  const label = kind === "avatar" ? "profile picture" : "profile background";
-  if (!confirm("Remove your " + label + "?")) return;
+  const label = kind === "avatar" ? tr("profile picture") : tr("profile background");
+  if (!confirm(tr("Remove your {what}?", { what: label }))) return;
   $("profileMsg").textContent = "";
   try {
     me.profile = await api("DELETE", "/api/account/" + kind);
     renderProfileSettings(false);
-    $("profileMsg").textContent = "Removed.";
+    $("profileMsg").textContent = tr("Removed.");
   } catch (err) {
     $("profileMsg").textContent = err.message;
   }
@@ -950,9 +1025,9 @@ function renderReplyLength() {
   s.min = lo;
   s.max = hi;
   s.value = v == null ? lo : v;
-  $("replyVal").textContent = v == null ? "(no target)" : `${v} tokens`;
+  $("replyVal").textContent = v == null ? tr("(no target)") : tr("{n} tokens", { n: v });
   $("replyReset").disabled = v == null;
-  $("replyNote").textContent = `An aim for how long each reply should be, in tokens, not counting reasoning. The model is guided, not cut off. The server admin sets the range: ${lo} to ${hi} tokens.`;
+  $("replyNote").textContent = tr("An aim for how long each reply should be, in tokens, not counting reasoning. The model is guided, not cut off. The server admin sets the range: {lo} to {hi} tokens.", { lo: lo, hi: hi });
 }
 
 // Background brightness and bubble opacity: dragging previews at once, release saves to the account.
@@ -961,7 +1036,7 @@ function setLook(shade, bubble) {
   const b = Math.max(30, Math.min(100, Math.round(bubble) || 72));
   applyLook(s, b);
   $("shadeSlider").value = s;
-  $("shadeVal").textContent = s === 0 ? "Default" : s < 0 ? "Darker " + -s : "Lighter " + s;
+  $("shadeVal").textContent = s === 0 ? tr("Default") : s < 0 ? tr("Darker {n}", { n: -s }) : tr("Lighter {n}", { n: s });
   $("bubbleSlider").value = b;
   $("bubbleVal").textContent = b + "%";
 }
@@ -970,7 +1045,7 @@ async function saveLook(key, value) {
   try {
     const data = await api("POST", "/api/settings", { [key]: value });
     me[key] = data[key];
-    $("settingsMsg").textContent = "Saved.";
+    $("settingsMsg").textContent = tr("Saved.");
   } catch (err) {
     $("settingsMsg").textContent = err.message;
   }
@@ -981,7 +1056,7 @@ async function saveAvatarShape(shape) {
     const data = await api("POST", "/api/settings", { avatar_shape: shape });
     me.avatar_shape = data.avatar_shape;
     applyAvatarShape(me.avatar_shape);
-    $("settingsMsg").textContent = "Saved.";
+    $("settingsMsg").textContent = tr("Saved.");
   } catch (err) {
     $("settingsMsg").textContent = err.message;
     $("avatarShape").value = me.avatar_shape || "squircle";
@@ -994,13 +1069,13 @@ function renderAccountPrefs() {
   const on = !!(me && me.quench);
   $("quenchToggle").checked = on;
   $("quenchNote").textContent = on
-    ? "On. Older messages are trimmed for each reply, within the fidelity floor."
-    : "Off. Nothing is trimmed from the messages the model gets.";
+    ? tr("On. Older messages are trimmed for each reply, within the fidelity floor.")
+    : tr("Off. Nothing is trimmed from the messages the model gets.");
   const clip = !!(me && me.clip);
   $("clipToggle").checked = clip;
   $("clipNote").textContent = clip
-    ? "On. Messages older than the newest 8 or more are cut to about 550 characters; the summary keeps what is cut."
-    : "Off. Older messages are sent in full.";
+    ? tr("On. Messages older than the newest 8 or more are cut to about 550 characters; the summary keeps what is cut.")
+    : tr("Off. Older messages are sent in full.");
 }
 
 async function saveClip(on) {
@@ -1021,7 +1096,7 @@ async function saveQuench(on) {
     const data = await api("POST", "/api/settings", { quench: on });
     if (me) me.quench = !!data.quench;
     renderAccountPrefs();
-    if (on) $("quenchNote").textContent = "On. Applies from your next reply.";
+    if (on) $("quenchNote").textContent = tr("On. Applies from your next reply.");
     refreshContext();
   } catch (err) {
     $("quenchNote").textContent = err.message;
@@ -1035,7 +1110,7 @@ async function saveReplyLength(value) {
     const data = await api("POST", "/api/settings", { reply_length: value });
     me.reply_length = data.reply_length;
     renderReplyLength();
-    $("settingsMsg").textContent = "Saved. Applies from your next message.";
+    $("settingsMsg").textContent = tr("Saved. Applies from your next message.");
   } catch (err) {
     $("settingsMsg").textContent = err.message;
     renderReplyLength();
@@ -1048,7 +1123,7 @@ async function saveSettings(patch) {
     me.thinking = data.thinking;
     me.model = data.model;
     renderModels();
-    $("settingsMsg").textContent = "Saved. Applies from your next message.";
+    $("settingsMsg").textContent = tr("Saved. Applies from your next message.");
   } catch (err) {
     $("settingsMsg").textContent = err.message;
     renderModels();
@@ -1103,7 +1178,7 @@ async function loadCharacters(choose = true) {
   // Only characters this account has chatted with. Every character still counts for links and groups below.
   for (const name of data.sidebar || []) solo.appendChild(charButton(name));
   if (!(data.sidebar || []).length) {
-    solo.appendChild(el("p", "Characters you chat with appear here. Pick one from the home page to start.", "muted"));
+    solo.appendChild(el("p", tr("Characters you chat with appear here. Pick one from the home page to start."), "muted"));
   }
   for (const g of data.groups) groups.appendChild(g.private ? privateGroupRow(g) : charButton(g.name));
   $("groupBox").hidden = false;   // always shown, so any account can start its own group
@@ -1118,7 +1193,40 @@ async function loadCharacters(choose = true) {
   const start = all.includes(asked) ? asked : (all.includes(saved) ? saved : ((data.sidebar || [])[0] || null));
   if (!choose) { markActive(); return; }   // refresh only: keep the open chat
   if (start) await pickCharacter(start);
-  else { current = null; markActive(); $("chatSection").hidden = true; }   // nothing to open yet: no empty chat window
+  else { current = null; if (window.ttsSetCharacter) window.ttsSetCharacter("", true); markActive(); $("chatSection").hidden = true; }   // nothing to open yet: no empty chat window
+  if (start) await applySearchJump(start);
+}
+
+// A search result opens /chat with the branch and message that matched. The chat is already drawn
+// from its active branch, so switch first when the hit lives on another one, then scroll to the line.
+async function applySearchJump(name) {
+  const params = new URLSearchParams(location.search);
+  const branch = params.get("branch");
+  const msg = params.get("msg");
+  if (!branch && msg === null) return;
+  if (branch) {
+    try {
+      const list = await api("GET", "/api/branches?character=" + encodeURIComponent(name));
+      if (list.active !== branch) {
+        const data = await api("POST", "/api/branch/switch", { character: name, id: branch });
+        if (name === current) applyBranchState(name, data);
+      }
+    } catch (err) {
+      $("chatErr").textContent = err.message;
+    }
+  }
+  if (msg !== null && /^\d+$/.test(msg)) {
+    const line = document.querySelector('#log .line[data-idx="' + msg + '"]');
+    if (line) {
+      line.scrollIntoView({ block: "center", behavior: "smooth" });
+      line.classList.add("search-hit");
+      setTimeout(() => line.classList.remove("search-hit"), 4000);
+    }
+  }
+  params.delete("branch");
+  params.delete("msg");
+  const clean = location.pathname + (params.toString() ? "?" + params.toString() : "");
+  history.replaceState(null, "", clean);
 }
 
 // A character's background sits behind its chat, and the whole page takes it. A picture goes through the
@@ -1128,8 +1236,8 @@ function applyChatArt(name) {
   const section = $("chatSection");
   if (!section) return;
   const ids = name ? (bgIds[name] || []) : [];
-  // A solo character with no backgrounds of its own shows the animated circles, tinted by its mood and affection.
-  if (name && !ids.length && soloNames.includes(name)) {
+  // A chat with no backgrounds of its own (solo, group or novel) shows the animated circles, tinted by its mood and affection.
+  if (name && !ids.length) {
     clearChatArt(section);
     applyAmbientMood(name);
     return;
@@ -1150,7 +1258,8 @@ function applyChatArt(name) {
     if (host && video) {
       if (still) video.poster = artUrl(name, still);
       else video.removeAttribute("poster");
-      video.src = chosen;
+      // The WebM first, the H.264 MP4 second, so a phone that cannot play VP9 still gets the video.
+      setArtSources(video, chosen, artFallbackUrl(name, chosenId));
       host.hidden = false;
       setArtPlaying(host, true);
       return;
@@ -1191,6 +1300,7 @@ function clearChatArt(section) {
   const video = $("pageArtVideoEl");
   if (video) {
     video.pause();
+    for (const s of [...video.querySelectorAll("source")]) s.remove();
     video.removeAttribute("src");
     video.removeAttribute("poster");
     video.load();
@@ -1201,6 +1311,7 @@ function clearChatArt(section) {
 async function pickCharacter(name) {
   if (busy) return;
   current = name;
+  if (window.ttsSetCharacter) window.ttsSetCharacter(name, soloNames.includes(name));
   if (picking) setPicking(false);   // a pick list belongs to the chat it was made in
   markRead(name);   // opening the chat marks its missed check-ins as read
   localStorage.setItem("rp_character", name);
@@ -1300,10 +1411,17 @@ async function send(ev) {
   if (busy || !current) return;
   const text = $("msg").value.trim();
   if (!text) return;
+  $("msg").value = "";
+  await sendMessage(text);
+}
+
+// Send one message as the reader. Shared by the composer and by a scenario's Start button.
+async function sendMessage(text) {
+  text = String(text || "").trim();
+  if (busy || !current || !text) return;
   const who = current;
   setBusy(true);
   $("chatErr").textContent = "";
-  $("msg").value = "";
   const mine = me && me.persona ? me.persona.name : "You";
   const mineBox = addLine(mine, text, "mine", new Date().toISOString());
   if (me && me.persona) colourLine(mineBox, me.persona.name);
@@ -1344,6 +1462,8 @@ async function streamTurn(path, body, who) {
   };
 
   let flushing = Promise.resolve();
+  let commandNotice = null;
+  let commandReload = null;
   try {
     await streamChat(body, {
       delta(p) { if (who === current) show(p.speaker, p.text); },
@@ -1361,6 +1481,7 @@ async function streamTurn(path, body, who) {
           for (const r of data.replies) {
             const box = addLine(r.speaker, r.text, "theirs", new Date().toISOString());
             if (r.thinking) setThinking(box, r.thinking);
+            if (window.ttsAutoSpeak) window.ttsAutoSpeak(box, r.speaker);
           }
           if (data.selector_note) addLine("", data.selector_note, "note");
           refreshStateCards();   // energy and the relationship change with each reply
@@ -1369,8 +1490,9 @@ async function streamTurn(path, body, who) {
       command(c) {
         clearBubbles();
         if (who !== current) return;
-        if (c.notice) addLine("", c.notice, "note");
-        if (c.reload) loadHistory().catch(() => {});
+        commandNotice = c.notice || "";
+        if (c.reload) commandReload = loadHistory().catch(() => {});
+        else if (commandNotice) addLine("", commandNotice, "note");
       },
       usage(u) { me.usage = u; renderUsage(); },
       error(err) {
@@ -1385,7 +1507,14 @@ async function streamTurn(path, body, who) {
     if (err.code === "password_change_required") showPassword(err.message);
   } finally {
     await flushing.catch(() => {});
-    if (who === current) await loadHistory().catch(() => {});   // reload so positions and the marker match the saved chat
+    if (who === current) {
+      if (commandReload) {
+        await commandReload.catch(() => {});
+        if (commandNotice) addLine("", commandNotice, "note");
+      } else if (commandNotice === null) {
+        await loadHistory().catch(() => {});   // reload so positions and the marker match the saved chat
+      }
+    }
     setBusy(false);
     $("msg").focus();
   }
@@ -1396,7 +1525,7 @@ async function regenerate() {
   if (busy || !current) return;
   let anchor = null;
   for (const n of $("log").children) if (n.classList.contains("mine")) anchor = n;
-  if (!anchor) { $("chatErr").textContent = "Nothing to regenerate yet."; return; }
+  if (!anchor) { $("chatErr").textContent = tr("Nothing to regenerate yet."); return; }
   while (anchor.nextSibling) anchor.nextSibling.remove();
   await streamTurn("/api/regenerate", { character: current }, current);
 }
@@ -1439,7 +1568,7 @@ async function deleteMessages(indexes) {
     const data = await api("POST", "/api/delete", { character: who, indexes });
     if (who !== current) return;
     renderHistory(data.messages);
-    $("chatErr").textContent = data.removed === 1 ? "Message deleted." : `${data.removed} messages deleted.`;
+    $("chatErr").textContent = trn("{n} message deleted.", "{n} messages deleted.", data.removed);
   } catch (err) {
     if (who === current) $("chatErr").textContent = err.message;
   } finally {
@@ -1451,7 +1580,7 @@ async function deleteMessages(indexes) {
 // the whole last turn.
 async function deleteLastMessage(index) {
   if (busy || !current || index < 0) return;
-  if (!confirm("Delete the last message? This cannot be undone.")) return;
+  if (!confirm(tr("Delete the last message? This cannot be undone."))) return;
   await deleteMessages([index]);
 }
 
@@ -1479,7 +1608,7 @@ function applyPickBoxes() {
     if (!box) {
       box = el("input", null, "pick-box");
       box.type = "checkbox";
-      box.setAttribute("aria-label", "Pick this message");
+      box.setAttribute("aria-label", tr("Pick this message"));
       box.addEventListener("change", () => setPicked(line.dataset.idx, box.checked));
       line.prepend(box);
     }
@@ -1498,9 +1627,9 @@ function setPicked(idx, on) {
 
 function updatePickBar() {
   const n = picked.size;
-  $("pickCount").textContent = n ? `${n} picked` : "Pick messages to delete";
+  $("pickCount").textContent = n ? tr("{n} picked", { n: n }) : tr("Pick messages to delete");
   $("pickDelete").disabled = busy || n === 0;
-  $("pickDelete").textContent = n ? `Delete ${n}` : "Delete picked";
+  $("pickDelete").textContent = n ? tr("Delete {n}", { n: n }) : tr("Delete picked");
 }
 
 // Clicking anywhere on a line picks it, except on a button, a link or the box itself (which fires change).
@@ -1526,8 +1655,8 @@ $("pickAll").addEventListener("click", () => {
 $("pickDelete").addEventListener("click", () => {
   const indexes = [...picked].map(Number).filter(Number.isInteger);
   if (!indexes.length) return;
-  const what = indexes.length === 1 ? "this message" : `these ${indexes.length} messages`;
-  if (!confirm(`Delete ${what} from this chat? This cannot be undone.`)) return;
+  const what = indexes.length === 1 ? tr("this message") : tr("these {n} messages", { n: indexes.length });
+  if (!confirm(tr("Delete {what} from this chat? This cannot be undone.", { what: what }))) return;
   setPicking(false);
   deleteMessages(indexes);
 });
@@ -1587,7 +1716,7 @@ async function refreshMe() {
 async function autoFill() {
   if (busy || !current) return;
   const who = current;
-  if ($("msg").value.trim()) { $("chatErr").textContent = "Clear the message box first, then Auto-fill."; return; }
+  if ($("msg").value.trim()) { $("chatErr").textContent = tr("Clear the message box first, then Auto-fill."); return; }
   setBusy(true);
   $("chatErr").textContent = "";
   try {
@@ -1743,7 +1872,7 @@ $("branchPick").addEventListener("change", async () => {
 });
 $("branchDel").addEventListener("click", async () => {
   const chat = current;
-  if (!confirm("Delete this branch? Its messages and memory are removed. The main chat is kept.")) return;
+  if (!confirm(tr("Delete this branch? Its messages and memory are removed. The main chat is kept."))) return;
   $("chatErr").textContent = "";
   try {
     applyBranchState(chat, await api("POST", "/api/branch/delete", { character: chat, id: $("branchPick").value }));
@@ -1794,7 +1923,7 @@ $("pinSave").addEventListener("click", async () => {
     // Only the pinned part changes; the memory bank and summary are sent back as they were read.
     const data = await api("POST", "/api/memory", { character: pinFor, memory: pinLoaded.memory, pinned: $("pinSettingText").value });
     pinLoaded = data;
-    $("pinMsg").textContent = "Saved. The next reply includes these facts.";
+    $("pinMsg").textContent = tr("Saved. The next reply includes these facts.");
   } catch (err) {
     $("pinMsg").textContent = err.message;
   }
@@ -1811,7 +1940,7 @@ async function openMemory() {
     $("memText").value = data.memory;
     $("sumText").value = data.summary || "";
     $("pinText").value = data.pinned;
-    $("memTitle").textContent = "Memory: " + who;
+    $("memTitle").textContent = tr("Memory: {name}", { name: who });
     $("memErr").textContent = "";
     $("memOk").textContent = "";
     showMemory(true);
@@ -1829,7 +1958,7 @@ async function saveMemory() {
       character: memFor, memory: $("memText").value, pinned: $("pinText").value, summary: $("sumText").value,
     });
     memLoaded = { memory: data.memory, pinned: data.pinned, summary: data.summary };
-    $("memOk").textContent = "Saved. The next reply uses this.";
+    $("memOk").textContent = tr("Saved. The next reply uses this.");
   } catch (err) {
     $("memErr").textContent = err.message;
   }
@@ -1838,18 +1967,18 @@ async function saveMemory() {
 async function refreshMemory() {
   if (!memFor || busy) return;
   if ($("memText").value !== memLoaded.memory || $("pinText").value !== memLoaded.pinned || $("sumText").value !== memLoaded.summary) {
-    $("memErr").textContent = "Save your edits first, then refresh.";
+    $("memErr").textContent = tr("Save your edits first, then refresh.");
     return;
   }
   $("memErr").textContent = "";
-  $("memOk").textContent = "Refreshing from the chat…";
+  $("memOk").textContent = tr("Refreshing from the chat...");
   try {
     const data = await api("POST", "/api/chat", { character: memFor, message: "/save" });
     const r = await api("GET", "/api/memory?character=" + encodeURIComponent(memFor));
     memLoaded = { memory: r.memory, pinned: r.pinned, summary: r.summary };
     $("memText").value = r.memory;
     $("sumText").value = r.summary || "";
-    $("memOk").textContent = (data.command && data.command.notice) || "Refreshed.";
+    $("memOk").textContent = (data.command && data.command.notice) || tr("Refreshed.");
   } catch (err) {
     $("memErr").textContent = err.message;
     $("memOk").textContent = "";
@@ -1886,11 +2015,11 @@ async function openCheckin() {
 function showCheckinNote(data) {
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (!data.enabled) {
-    $("ciNote").textContent = `Off. ${ciFor || "This character"} will not message you on its own.`;
+    $("ciNote").textContent = tr("Off. {name} will not message you on its own.", { name: ciFor || tr("This character") });
   } else if (data.next) {
-    $("ciNote").textContent = `Today's check-in is set for ${data.next} (${zone}). It is skipped if the server is not running then.`;
+    $("ciNote").textContent = tr("Today's check-in is set for {next} ({zone}). It is skipped if the server is not running then.", { next: data.next, zone: zone });
   } else {
-    $("ciNote").textContent = `On. Once a day, in ${zone}. It is skipped if the server is not running at the chosen time.`;
+    $("ciNote").textContent = tr("On. Once a day, in {zone}. It is skipped if the server is not running at the chosen time.", { zone: zone });
   }
 }
 
@@ -1901,15 +2030,23 @@ let dreamFor = null;
 
 function showDreamLast(data) {
   $("dreamServerNote").hidden = data.server_on;
-  $("dreamEvery").textContent = data.every_days === 1 ? "A dream can run each night." : `A dream runs at most once every ${data.every_days} days.`;
+  $("dreamEvery").textContent = data.every_days === 1 ? tr("A dream can run each night.") : tr("A dream runs at most once every {n} days.", { n: data.every_days });
   const last = data.last;
   if (!last) {
-    $("dreamLast").textContent = "No dream yet.";
+    $("dreamLast").textContent = tr("No dream yet.");
     return;
   }
-  const when = last.when ? new Date(last.when).toLocaleDateString() : "";
-  const events = last.events ? `, ${last.events} events recorded, ${last.evolved || 0} changes noted` : "";
-  $("dreamLast").textContent = `Last dream ${when}: ${last.note || "nothing needed tidying"} (${last.added} added, ${last.updated} updated, ${last.removed} removed, ${last.dropped} palace entries dropped${events}).`;
+  const when = last.when ? MISO_I18N.date(last.when) : "";
+  const events = last.events ? tr(", {events} events recorded, {evolved} changes noted", { events: last.events, evolved: last.evolved || 0 }) : "";
+  $("dreamLast").textContent = tr("Last dream {when}: {note} ({added} added, {updated} updated, {removed} removed, {dropped} palace entries dropped{events}).", {
+    when: when,
+    note: last.note || tr("nothing needed tidying"),
+    added: last.added,
+    updated: last.updated,
+    removed: last.removed,
+    dropped: last.dropped,
+    events: events,
+  });
 }
 
 async function openDreams() {
@@ -1927,8 +2064,6 @@ async function openDreams() {
     $("dreamMsg").textContent = err.message;
   }
 }
-
-$("dreamCard").addEventListener("click", openDreams);
 
 // One bar built on the fly, for the lists that have no fixed ids: a label, a note, and a fill from 0 to 1.
 function metricRow(label, share, note) {
@@ -1958,8 +2093,8 @@ async function refreshRetention() {
     box.hidden = !data.enabled;
     if (!data.enabled) return;
     $("retentionNote").textContent = data.items.length
-      ? `${data.kept} held, ${data.at_risk} fading, turn ${data.turn}`
-      : `Nothing scored yet (turn ${data.turn})`;
+      ? tr("{kept} held, {atRisk} fading, turn {turn}", { kept: data.kept, atRisk: data.at_risk, turn: data.turn })
+      : tr("Nothing scored yet (turn {turn})", { turn: data.turn });
     const list = $("retentionList");
     list.textContent = "";
     for (const item of data.items.slice(0, 10)) {
@@ -1978,7 +2113,7 @@ function setMetric(name, value, band, warn) {
   const pct = Math.max(0, Math.min(100, Number(value) || 0));
   const fill = $(name + "Fill");
   fill.style.width = pct + "%";
-  $(name + "Val").textContent = `${value} of 100` + (band ? ` (${band})` : "");
+  $(name + "Val").textContent = tr("{value} of 100", { value: value }) + (band ? " (" + tr(band) + ")" : "");
   const box = fill.closest(".metric");
   if (box) box.classList.toggle("low", !!warn);
 }
@@ -2006,8 +2141,8 @@ function showMood(m) {
 
 function showAttitude(a) {
   $("attitudeServerNote").hidden = a.enabled;
-  $("attitudeLine").textContent = `Level: ${a.level}.`;
-  $("attitudeNote").textContent = `${a.level}, affection ${a.affection}, trust ${a.trust}`;
+  $("attitudeLine").textContent = tr("Level: {level}.", { level: tr(a.level) });
+  $("attitudeNote").textContent = tr("{level}, affection {affection}, trust {trust}", { level: tr(a.level), affection: a.affection, trust: a.trust });
   setMetric("attAffection", a.affection, null, false);
   setMetric("attTrust", a.trust, null, a.trust < 25);
   $("attitudeTone").textContent = a.tone;
@@ -2043,7 +2178,7 @@ async function refreshStateCards() {
   try {
     const a = await api("GET", "/api/character-attitude?character=" + encodeURIComponent(who));
     if (current !== who) return;
-    $("attitudeNote").textContent = `${a.level}, affection ${a.affection}, trust ${a.trust}`;
+    $("attitudeNote").textContent = tr("{level}, affection {affection}, trust {trust}", { level: tr(a.level), affection: a.affection, trust: a.trust });
     $("attitudeCard").hidden = !a.enabled;
   } catch (err) {
     // On a failed load the card stays hidden.
@@ -2073,7 +2208,7 @@ async function saveAttitudeAdmin() {
       trust: Number($("attTrustInput").value),
     });
     showAttitude(a);
-    $("attMsg").textContent = "Saved.";
+    $("attMsg").textContent = tr("Saved.");
   } catch (err) {
     $("attMsg").textContent = err.message;
   }
@@ -2092,7 +2227,7 @@ async function saveMoodAdmin() {
     });
     showMood(m);
     $("moodEmotion").value = "";
-    $("moodMsg").textContent = "Saved.";
+    $("moodMsg").textContent = tr("Saved.");
   } catch (err) {
     $("moodMsg").textContent = err.message;
   }
@@ -2116,7 +2251,7 @@ $("dreamSave").addEventListener("click", async () => {
       tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
     showDreamLast(data);
-    $("dreamMsg").textContent = "Saved.";
+    $("dreamMsg").textContent = tr("Saved.");
   } catch (err) {
     $("dreamMsg").textContent = err.message;
   }
@@ -2136,7 +2271,7 @@ $("ciSave").addEventListener("click", async () => {
       tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
     showCheckinNote(data);
-    $("ciMsg").textContent = "Saved.";
+    $("ciMsg").textContent = tr("Saved.");
   } catch (err) {
     $("ciMsg").textContent = err.message;
   }
@@ -2172,7 +2307,7 @@ setInterval(refreshUnread, 60000);
   });
 })();
 
-// Settings sheet. Ten cards (nine categories and Admin) open one category at a time. On phones the chat bar's font, name
+// Settings sheet. Category cards open one category at a time. On phones the chat bar's font, name
 // badge and size controls, and the sidebar's model, persona, character tools and memory move into the sheet. On desktop
 // they move in only while the sheet is open and go back to their places when it closes.
 (function settingsSheet() {
@@ -2196,13 +2331,22 @@ setInterval(refreshUnread, 60000);
     return { node, home, slot };
   });
 
-  // Show one category, or the grid of cards when name is null.
-  function show(name) {
+  // Show one category, or the grid of cards when name is null. back is the category the Back button returns to.
+  let backTo = null;
+  function show(name, back) {
+    backTo = name ? (back || null) : null;
     grid.hidden = !!name;
     for (const p of panels) p.hidden = p.dataset.panel !== name;
     backBtn.hidden = !name;
     const card = name && sheet.querySelector('.set-card[data-panel="' + name + '"] .set-name');
-    title.textContent = card ? card.textContent : "Settings";
+    const panel = name && panels.find((p) => p.dataset.panel === name);
+    title.textContent = card ? tr(card.textContent) : tr((panel && panel.dataset.title) || "Settings");
+  }
+  function openPanel(name, back) {
+    show(name, back);
+    if (name === "worlds") return refreshWorldCache().catch(() => {});
+    if (name === "dreams") openDreams();
+    if (name === "voice" && window.ttsInitPanel) window.ttsInitPanel();
   }
   function place() {
     const inSheet = phone.matches || !sheet.hidden;
@@ -2223,6 +2367,7 @@ setInterval(refreshUnread, 60000);
     loadCharSettings();
     renderProfileSettings();
     renderAccountPrefs();
+    if (window.ttsInitPanel) window.ttsInitPanel();
     closeBtn.focus();
   }
   function close(refocus) {
@@ -2235,24 +2380,34 @@ setInterval(refreshUnread, 60000);
 
   btn.addEventListener("click", open);
   closeBtn.addEventListener("click", () => close(true));
-  backBtn.addEventListener("click", () => { show(null); });
+  backBtn.addEventListener("click", () => { if (backTo) show(backTo); else show(null); });
   grid.addEventListener("click", (e) => {
     const card = e.target.closest(".set-card");
-    if (card) { show(card.dataset.panel); backBtn.focus(); }
+    if (card) { openPanel(card.dataset.panel); backBtn.focus(); }
+  });
+  sheet.addEventListener("click", (e) => {
+    const story = e.target.closest("[data-story]");
+    if (story) { openPanel(story.dataset.story, "story"); backBtn.focus(); }
   });
   sheet.addEventListener("click", (e) => { if (e.target === sheet) close(true); });
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || sheet.hidden) return;
-    if (grid.hidden) show(null); else close(true);   // Escape steps back from a category before closing
+    if (grid.hidden) { if (backTo) show(backTo); else show(null); } else close(true);   // Escape steps back from a category before closing
   });
   document.getElementById("editNewBtn").addEventListener("click", () => close(false));
   if (phone.addEventListener) phone.addEventListener("change", place); else phone.addListener(place);
   place();
   // /chat?settings=account opens the Account panel directly (used by the profile page's Edit link).
   const wanted = new URLSearchParams(location.search).get("settings");
-  if (wanted && /^[a-z]+$/.test(wanted) && sheet.querySelector('.set-card[data-panel="' + wanted + '"]')) {
+  if (wanted && /^[a-z]+$/.test(wanted) && sheet.querySelector('.set-panel[data-panel="' + wanted + '"]')) {
     open();
-    show(wanted);
+    const ready = openPanel(wanted);
+    if (wanted === "worlds") {
+      const worldId = new URLSearchParams(location.search).get("world");
+      Promise.resolve(ready).then(() => {
+        if (worldId && worldCache.worlds.some((w) => w.id === worldId)) openWorld(worldId);
+      }).catch(() => {});
+    }
   }
 })();
 
@@ -2370,7 +2525,7 @@ async function openTree() {
   if (admin) {
     const sel = $("treeAccount");
     const users = await api("GET", "/api/admin/users");
-    sel.replaceChildren(new Option("My own chats", ""));
+    sel.replaceChildren(new Option(tr("My own chats"), ""));
     for (const u of users.users) sel.append(new Option(u.username, String(u.id)));
     sel.value = "";
   }
@@ -2384,7 +2539,7 @@ async function loadTree() {
   $("treeBody").replaceChildren();
   $("treeNote").textContent = "";
   if (!current) {
-    $("treeNote").textContent = "Open a chat first.";
+    $("treeNote").textContent = tr("Open a chat first.");
     return;
   }
   try {
@@ -2392,8 +2547,8 @@ async function loadTree() {
       ? await api("GET", "/api/admin/branches/tree?uid=" + encodeURIComponent(sel.value) + "&character=" + encodeURIComponent(current))
       : await api("GET", "/api/branches/tree?character=" + encodeURIComponent(current));
     $("treeNote").textContent = other
-      ? `Read-only: ${data.account}'s branches for this chat. Nothing here can be changed.`
-      : "Choose a branch to open it. The one you are in is marked open.";
+      ? tr("Read-only: {name}'s branches for this chat. Nothing here can be changed.", { name: data.account })
+      : tr("Choose a branch to open it. The one you are in is marked open.");
     renderTree(data, other);
   } catch (err) {
     $("treeNote").textContent = err.message;
@@ -2471,10 +2626,10 @@ function novelButton(n) {
 function privateGroupRow(g) {
   const row = el("div", "", "group-row");
   row.appendChild(charButton(g.name));
-  const edit = el("button", "Edit", "ghost small group-edit");
+  const edit = el("button", tr("Edit"), "ghost small group-edit");
   edit.type = "button";
-  edit.title = "Change this group's characters and notes";
-  edit.setAttribute("aria-label", "Edit group " + g.name);
+  edit.title = tr("Change this group's characters and notes");
+  edit.setAttribute("aria-label", tr("Edit group {name}", { name: g.name }));
   edit.addEventListener("click", () => { location.href = "/create/group?id=" + encodeURIComponent(g.id); });
   row.appendChild(edit);
   return row;
@@ -2483,10 +2638,10 @@ function privateGroupRow(g) {
 function novelRow(n) {
   const row = el("div", "", "group-row");
   row.appendChild(novelButton(n));
-  const edit = el("button", "Edit", "ghost small group-edit");
+  const edit = el("button", tr("Edit"), "ghost small group-edit");
   edit.type = "button";
-  edit.title = "Change this novel's name, cast or world";
-  edit.setAttribute("aria-label", "Edit novel " + n.name);
+  edit.title = tr("Change this novel's name, cast or world");
+  edit.setAttribute("aria-label", tr("Edit novel {name}", { name: n.name }));
   edit.addEventListener("click", () => { location.href = "/create/novel?id=" + encodeURIComponent(n.id); });
   row.appendChild(edit);
   return row;
@@ -2499,7 +2654,7 @@ function renderNovels(list) {
   const box = $("novelList");
   box.textContent = "";
   for (const n of list) box.appendChild(novelRow(n));
-  if (!list.length) box.appendChild(el("p", "No novels yet. A narrator tells a novel with the characters you pick.", "muted"));
+  if (!list.length) box.appendChild(el("p", tr("No novels yet. A narrator tells a novel with the characters you pick."), "muted"));
 }
 
 // The world choices for a novel or chat: the account default (""), no world ("none"), or one of the account's worlds.
@@ -2524,7 +2679,7 @@ let worldEditing = null;   // the world ID being edited; null while a new one is
 function renderWorldEditor() {
   const pick = $("worldPick");
   pick.textContent = "";
-  pick.appendChild(new Option("New world", ""));
+  pick.appendChild(new Option(tr("New world"), ""));
   for (const w of worldCache.worlds) pick.appendChild(new Option(w.name, w.id));
   pick.value = worldEditing || "";
   const def = $("worldDefault");
@@ -2577,7 +2732,7 @@ function updateSummaryCounter() {
   const li = document.createElement("li");
   li.classList.toggle("over", cost > WORLD_SUMMARY_TOKENS);
   const label = document.createElement("span");
-  label.textContent = "Summary";
+  label.textContent = tr("Summary");
   const count = document.createElement("span");
   count.textContent = `${cost} / ${WORLD_SUMMARY_TOKENS}`;
   li.append(label, count);
@@ -2611,7 +2766,7 @@ function updateWorldCounters() {
     const limit = WORLD_SECTION_TOKENS[key];
     const part = document.createElement("span");
     part.classList.toggle("over", total > limit);
-    part.textContent = `${WORLD_TITLES[key]} ${total} / ${limit}`;
+    part.textContent = tr("{section} {total} / {limit}", { section: tr(WORLD_TITLES[key]), total: total, limit: limit });
     totals.appendChild(part);
   }
 }
@@ -2632,7 +2787,7 @@ async function saveWorld() {
       : await api("POST", "/api/worlds", body);
     await refreshWorldCache();
     openWorld(saved.id);
-    $("worldMsg").textContent = "Saved.";
+    $("worldMsg").textContent = tr("Saved.");
     if (current) await refreshStory();
   } catch (err) {
     $("worldMsg").textContent = err.message;
@@ -2641,7 +2796,7 @@ async function saveWorld() {
 
 async function deleteWorld() {
   if (!worldEditing) return;
-  if (!confirm("Delete this world? Novels that used it fall back to the account default.")) return;
+  if (!confirm(tr("Delete this world? Novels that used it fall back to the account default."))) return;
   try {
     await api("DELETE", "/api/worlds/" + encodeURIComponent(worldEditing));
     worldEditing = null;
@@ -2657,10 +2812,91 @@ async function saveDefaultWorld() {
   try {
     const data = await api("POST", "/api/worlds/default", { world: $("worldDefault").value || null });
     worldCache.default = data.default;
-    $("worldDefaultMsg").textContent = "Saved.";
+    $("worldDefaultMsg").textContent = tr("Saved.");
     if (current) await refreshStory();
   } catch (err) {
     $("worldDefaultMsg").textContent = err.message;
+  }
+}
+
+// ---- Scenarios (settings panel): the account's opening messages, and how a new chat gets one.
+let scenarioCache = { scenarios: [], mode: "off", fixed: null };
+let scenarioEditing = null;   // the scenario ID being edited; null while a new one is made
+
+async function refreshScenarioCache() {
+  scenarioCache = await api("GET", "/api/scenarios");
+  renderScenarioEditor();
+}
+
+function renderScenarioEditor() {
+  const pick = $("scenarioPick");
+  pick.replaceChildren(new Option(tr("New scenario"), ""));
+  for (const s of scenarioCache.scenarios) pick.appendChild(new Option(s.name, s.id));
+  pick.value = scenarioEditing || "";
+  $("scenarioDelete").hidden = !scenarioEditing;
+
+  $("scenarioMode").value = scenarioCache.mode;
+  const fixed = $("scenarioFixed");
+  fixed.replaceChildren();
+  for (const s of scenarioCache.scenarios) fixed.appendChild(new Option(s.name, s.id));
+  if (scenarioCache.fixed) fixed.value = scenarioCache.fixed;
+  $("scenarioFixedRow").hidden = scenarioCache.mode !== "fixed";
+}
+
+function openScenario(id) {
+  scenarioEditing = id || null;
+  const item = id ? scenarioCache.scenarios.find((s) => s.id === id) : null;
+  $("scenarioName").value = item ? item.name : "";
+  $("scenarioText").value = item ? item.text : "";
+  $("scenarioEditor").hidden = false;
+  $("scenarioMsg").textContent = "";
+  renderScenarioEditor();
+}
+
+async function saveScenario() {
+  $("scenarioMsg").textContent = "";
+  const body = { name: $("scenarioName").value, text: $("scenarioText").value };
+  try {
+    const saved = scenarioEditing
+      ? await api("PUT", "/api/scenarios/" + encodeURIComponent(scenarioEditing), body)
+      : await api("POST", "/api/scenarios", body);
+    await refreshScenarioCache();
+    openScenario(saved.id);
+    $("scenarioMsg").textContent = tr("Saved.");
+  } catch (err) {
+    $("scenarioMsg").textContent = err.message;
+  }
+}
+
+async function deleteScenario() {
+  if (!scenarioEditing) return;
+  if (!confirm(tr("Delete this scenario? A new chat that used it will stop offering an opening."))) return;
+  try {
+    await api("DELETE", "/api/scenarios/" + encodeURIComponent(scenarioEditing));
+    scenarioEditing = null;
+    $("scenarioEditor").hidden = true;
+    await refreshScenarioCache();
+  } catch (err) {
+    $("scenarioMsg").textContent = err.message;
+  }
+}
+
+async function saveScenarioMode() {
+  $("scenarioModeMsg").textContent = "";
+  const mode = $("scenarioMode").value;
+  const fixed = mode === "fixed" ? ($("scenarioFixed").value || null) : null;
+  if (mode === "fixed" && !fixed) {
+    $("scenarioModeMsg").textContent = tr("Pick a scenario for new chats.");
+    return;
+  }
+  try {
+    const data = await api("POST", "/api/scenarios/mode", { mode, fixed });
+    scenarioCache.mode = data.mode;
+    scenarioCache.fixed = data.fixed;
+    renderScenarioEditor();
+    $("scenarioModeMsg").textContent = tr("Saved.");
+  } catch (err) {
+    $("scenarioModeMsg").textContent = err.message;
   }
 }
 
@@ -2682,10 +2918,10 @@ function renderTensions(items) {
   box.textContent = "";
   const open = items.filter((t) => t.status === "open");
   const done = items.filter((t) => t.status === "resolved").slice(-5).reverse();
-  if (!open.length) box.appendChild(el("p", "No open threads right now.", "muted"));
+  if (!open.length) box.appendChild(el("p", tr("No open threads right now."), "muted"));
   for (const t of open) box.appendChild(tensionRow(t));
   if (done.length) {
-    box.appendChild(el("p", "Recently resolved", "muted"));
+    box.appendChild(el("p", tr("Recently resolved"), "muted"));
     for (const t of done) {
       const text = t.how ? t.text + " Resolved: " + t.how : t.text;
       box.appendChild(el("p", text, "tension-done muted"));
@@ -2700,12 +2936,12 @@ function tensionRow(t) {
   const how = document.createElement("input");
   how.type = "text";
   how.maxLength = 240;
-  how.placeholder = "How it resolved (optional)";
-  how.setAttribute("aria-label", "How it resolved");
-  const close = el("button", "Resolve", "ghost small");
+  how.placeholder = tr("How it resolved (optional)");
+  how.setAttribute("aria-label", tr("How it resolved"));
+  const close = el("button", tr("Resolve"), "ghost small");
   close.type = "button";
   close.addEventListener("click", () => tensionAction("/api/tensions/resolve", { id: t.id, how: how.value }));
-  const drop = el("button", "Remove", "ghost small");
+  const drop = el("button", tr("Remove"), "ghost small");
   drop.type = "button";
   drop.addEventListener("click", () => tensionAction("/api/tensions/drop", { id: t.id }));
   row.append(how, close, drop);
@@ -2721,9 +2957,15 @@ async function tensionAction(url, extra) {
   }
 }
 
-document.querySelector('.set-card[data-panel="worlds"]').addEventListener("click", () => {
-  refreshWorldCache().catch(() => {});   // the Worlds panel always shows the account's current worlds
+document.querySelector('.set-card[data-panel="scenarios"]').addEventListener("click", () => {
+  refreshScenarioCache().catch(() => {});   // the Scenarios panel always shows the account's current library
 });
+$("newScenarioBtn").addEventListener("click", () => openScenario(null));
+$("scenarioPick").addEventListener("change", (e) => openScenario(e.target.value || null));
+$("scenarioSave").addEventListener("click", saveScenario);
+$("scenarioDelete").addEventListener("click", deleteScenario);
+$("scenarioMode").addEventListener("change", (e) => { $("scenarioFixedRow").hidden = e.target.value !== "fixed"; });
+$("scenarioModeSave").addEventListener("click", saveScenarioMode);
 $("newWorldBtn").addEventListener("click", () => openWorld(null));
 $("worldPick").addEventListener("change", (e) => openWorld(e.target.value || null));
 $("worldSave").addEventListener("click", saveWorld);

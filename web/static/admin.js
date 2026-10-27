@@ -6,7 +6,7 @@ function capInput(u) {
   input.type = "number";
   input.min = "0";
   input.value = u.daily_cap === null ? "" : String(u.daily_cap);
-  input.placeholder = "default (" + u.effective_cap + ")";
+  input.placeholder = window.tr("default ({n})", { n: u.effective_cap });
   input.className = "cap";
   return input;
 }
@@ -41,7 +41,7 @@ function limitCell(used, limit) {
     return td;
   }
   const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 100;
-  td.textContent = `${used.toLocaleString("en")} / ${limit.toLocaleString("en")} (${pct}%)`;
+  td.textContent = window.tr("{used} / {limit} ({pct}%)", { used: used.toLocaleString(), limit: limit.toLocaleString(), pct: pct });
   return td;
 }
 
@@ -50,19 +50,19 @@ function userRow(u) {
   tr.appendChild(el("td", u.username));
   tr.appendChild(el("td", u.is_admin ? "admin" : "user"));
   const status = [];
-  if (u.disabled) status.push("disabled");
-  if (u.must_change) status.push("must change password");
-  if (u.login_lock === "permanent") status.push("sign-in locked until an admin unlocks it");
-  else if (u.login_lock === "timed") status.push(`sign-in locked until ${new Date(u.locked_until * 1000).toLocaleString()}`);
-  if (u.blocked_ips && u.blocked_ips.length) status.push(`${u.blocked_ips.length} address${u.blocked_ips.length === 1 ? "" : "es"} blocked from signing in`);
-  if (u.twofa === "on") status.push("two-factor sign-in on" + (u.twofa_required ? " (required by admin)" : ""));
-  else if (u.twofa === "setup") status.push("two-factor set-up not finished");
-  tr.appendChild(el("td", status.join(", ") || "active"));
+  if (u.disabled) status.push(window.tr("disabled"));
+  if (u.must_change) status.push(window.tr("must change password"));
+  if (u.login_lock === "permanent") status.push(window.tr("sign-in locked until an admin unlocks it"));
+  else if (u.login_lock === "timed") status.push(window.tr("sign-in locked until {when}", { when: MISO_I18N.date(new Date(u.locked_until * 1000)) }));
+  if (u.blocked_ips && u.blocked_ips.length) status.push(trn("{n} address blocked from signing in", "{n} addresses blocked from signing in", u.blocked_ips.length));
+  if (u.twofa === "on") status.push(window.tr("two-factor sign-in on") + (u.twofa_required ? " " + window.tr("(required by admin)") : ""));
+  else if (u.twofa === "setup") status.push(window.tr("two-factor set-up not finished"));
+  tr.appendChild(el("td", status.join(", ") || window.tr("active")));
   tr.appendChild(el("td", u.requests_today));
   const capCell = el("td");
   const cap = capInput(u);
   capCell.appendChild(cap);
-  capCell.appendChild(button("save", () => act(() => api("POST", `/api/admin/users/${u.id}`,
+  capCell.appendChild(button(window.tr("save"), () => act(() => api("POST", `/api/admin/users/${u.id}`,
     { daily_cap: cap.value === "" ? null : parseInt(cap.value, 10) }))));
   tr.appendChild(capCell);
   tr.appendChild(limitCell(u.tokens_today, u.budget_limits.daily));
@@ -75,13 +75,13 @@ function userRow(u) {
     const sel = el("select");
     const choices = u.is_admin ? ["", "free", "lite", "standard", "pro"] : ["free", "lite", "standard", "pro"];
     for (const t of choices) {
-      const o = el("option", t || "none (no cap)");
+      const o = el("option", t ? window.tr(t) : window.tr("none (no cap)"));
       o.value = t;
       sel.appendChild(o);
     }
     sel.value = u.tier || "";
     if (!u.tier && !u.is_admin) sel.value = "lite";
-    sel.title = u.tier_monthly_limit ? `monthly cap ${u.tier_monthly_limit.toLocaleString()} tokens` : "no cap";
+    sel.title = u.tier_monthly_limit ? window.tr("monthly cap {n} tokens", { n: u.tier_monthly_limit.toLocaleString() }) : window.tr("no cap");
     sel.addEventListener("change", () => act(() => api("POST", `/api/admin/users/${u.id}`, { tier: sel.value || null })));
     tierCell.appendChild(sel);
   }
@@ -96,16 +96,16 @@ function userRow(u) {
     input.step = "1";
     input.className = "budget";
     const effective = u.budget_limits[key];
-    input.placeholder = effective === null || effective === undefined ? label : effective.toLocaleString("en");
+    input.placeholder = effective === null || effective === undefined ? window.tr(label) : effective.toLocaleString();
     input.title = effective === null || effective === undefined
-      ? `${label} token limit (blank = none)`
-      : `${label} token limit (blank = tier default, ${effective.toLocaleString("en")} tokens)`;
+      ? window.tr("{label} token limit (blank = none)", { label: window.tr(label) })
+      : window.tr("{label} token limit (blank = tier default, {n} tokens)", { label: window.tr(label), n: effective.toLocaleString() });
     const v = u.token_budgets[key];
     input.value = v === null || v === undefined ? "" : String(v);
     budgets[key] = input;
     budgetCell.appendChild(input);
   }
-  budgetCell.appendChild(button("save", () => act(() => api("POST", `/api/admin/users/${u.id}`, {
+  budgetCell.appendChild(button(window.tr("save"), () => act(() => api("POST", `/api/admin/users/${u.id}`, {
     token_daily: numOrNull(budgets.daily),
     token_weekly: numOrNull(budgets.weekly),
     token_monthly: numOrNull(budgets.monthly),
@@ -113,21 +113,21 @@ function userRow(u) {
   tr.appendChild(budgetCell);
   const actions = el("td");
   if (u.id === meId && u.twofa !== "on") {
-    actions.appendChild(button("enable 2FA", () => window.misoTwoFactor.setup(loadUsers)));
+    actions.appendChild(button(window.tr("enable 2FA"), () => window.misoTwoFactor.setup(loadUsers)));
   }
-  actions.appendChild(button(u.disabled ? "enable" : "disable",
+  actions.appendChild(button(u.disabled ? window.tr("enable") : window.tr("disable"),
     () => act(() => api("POST", `/api/admin/users/${u.id}`, { disabled: !u.disabled }))));
-  actions.appendChild(button(u.is_admin ? "remove admin" : "make admin",
+  actions.appendChild(button(u.is_admin ? window.tr("remove admin") : window.tr("make admin"),
     () => act(() => api("POST", `/api/admin/users/${u.id}`, { is_admin: !u.is_admin }))));
-  actions.appendChild(button("reset password", () => {
-    const pw = window.prompt(`New starting password for ${u.username} (10+ characters):`);
+  actions.appendChild(button(window.tr("reset password"), () => {
+    const pw = window.prompt(window.tr("New starting password for {name} (10+ characters):", { name: u.username }));
     if (pw) act(() => api("POST", `/api/admin/users/${u.id}`, { reset_password: pw }));
   }));
-  if (u.login_lock || (u.blocked_ips && u.blocked_ips.length)) actions.appendChild(button("unlock sign-in", () => act(() => api("POST", `/api/admin/users/${u.id}`, { unlock_sign_in: true }))));
-  actions.appendChild(button(u.twofa_required ? "lift 2FA requirement" : "require 2FA",
+  if (u.login_lock || (u.blocked_ips && u.blocked_ips.length)) actions.appendChild(button(window.tr("unlock sign-in"), () => act(() => api("POST", `/api/admin/users/${u.id}`, { unlock_sign_in: true }))));
+  actions.appendChild(button(u.twofa_required ? window.tr("lift 2FA requirement") : window.tr("require 2FA"),
     () => act(() => api("POST", `/api/admin/users/${u.id}`, { require_2fa: !u.twofa_required }))));
-  if (u.twofa !== "off") actions.appendChild(button("reset 2FA", () => {
-    if (window.confirm(`Reset two-factor sign-in for ${u.username}? They set up a new code at their next sign-in, and their sessions end.`))
+  if (u.twofa !== "off") actions.appendChild(button(window.tr("reset 2FA"), () => {
+    if (window.confirm(window.tr("Reset two-factor sign-in for {name}? They set up a new code at their next sign-in, and their sessions end.", { name: u.username })))
       act(() => api("POST", `/api/admin/users/${u.id}`, { reset_2fa: true }));
   }));
   tr.appendChild(actions);
@@ -140,7 +140,7 @@ async function loadUsers() {
   body.textContent = "";
   meId = data.me_id;
   for (const u of data.users) body.appendChild(userRow(u));
-  $("globalUse").textContent = `All web users today: ${data.global_requests_today} requests`;
+  $("globalUse").textContent = window.tr("All web users today: {n} requests", { n: data.global_requests_today });
 }
 
 async function loadSettings() {
@@ -175,7 +175,7 @@ $("createForm").addEventListener("submit", async (ev) => {
       is_admin: $("newAdmin").checked,
       daily_cap: cap === "" ? null : parseInt(cap, 10),
     });
-    $("createMsg").textContent = `Created ${r.username}. They'll be asked to change the password on first login.`;
+    $("createMsg").textContent = window.tr("Created {name}. They'll be asked to change the password on first login.", { name: r.username });
     $("createForm").reset();
     await loadUsers();
   } catch (err) {
@@ -206,7 +206,7 @@ $("settingsForm").addEventListener("submit", async (ev) => {
       dream_every_days: parseInt($("s_dream_every_days").value, 10),
       budget_webhook_url: $("s_budget_webhook_url").value.trim(),
     });
-    $("settingsMsg").textContent = "Saved.";
+    $("settingsMsg").textContent = window.tr("Saved.");
     await loadUsers();
   } catch (err) {
     $("settingsMsg").textContent = err.message;
@@ -247,7 +247,7 @@ async function loadTiers() {
         const pct = parseInt(shareInputs[field].value, 10);
         const monthly = parseInt(cap.value, 10);
         shareAmounts[field].textContent = Number.isFinite(pct) && Number.isFinite(monthly)
-          ? `= ${Math.floor((monthly * pct) / 100).toLocaleString("en")} tokens` : "";
+          ? window.tr("= {n} tokens", { n: Math.floor((monthly * pct) / 100).toLocaleString() }) : "";
       }
     };
     cap.addEventListener("input", refreshShares);
@@ -261,7 +261,7 @@ async function loadTiers() {
       input.value = String(cfg[field]);
       input.className = "cap";
       input.dataset.field = field;
-      input.title = `${label} limit, as a percent of the monthly cap`;
+      input.title = window.tr("{label} limit, as a percent of the monthly cap", { label: window.tr(label) });
       input.addEventListener("input", refreshShares);
       shareInputs[field] = input;
       shareAmounts[field] = el("span", "", "muted");
@@ -284,7 +284,7 @@ async function loadTiers() {
     }
     tr.appendChild(provCell);
     const modelCell = el("td");
-    if (!data.models.length) modelCell.appendChild(el("span", "no models set up", "muted"));
+    if (!data.models.length) modelCell.appendChild(el("span", window.tr("no models set up"), "muted"));
     for (const m of data.models) {
       const label = el("label", "");
       label.className = "inline";
@@ -299,7 +299,7 @@ async function loadTiers() {
     }
     tr.appendChild(modelCell);
     const saveCell = el("td");
-    saveCell.appendChild(button("save", () => saveTier(tr)));
+    saveCell.appendChild(button(window.tr("save"), () => saveTier(tr)));
     tr.appendChild(saveCell);
     body.appendChild(tr);
   }
@@ -318,7 +318,7 @@ async function saveTier(tr) {
   };
   try {
     await api("POST", "/api/admin/tiers", { tiers: { [t]: cfg } });
-    msg.textContent = `Saved ${t}. Users on it see the new cap on their next request.`;
+    msg.textContent = window.tr("Saved {tier}. Users on it see the new cap on their next request.", { tier: window.tr(t) });
     await loadTiers();
   } catch (err) {
     msg.textContent = err.message;

@@ -11,6 +11,7 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+import threading
 
 from PIL import Image, ImageOps
 
@@ -178,22 +179,26 @@ def record_creator(path, username):
 
 
 BG_LEGACY = "background.jpg"         # the single background from before several were allowed; still served
-# A picture background is stored as PNG. Pictures saved before that are JPEG and are still read.
+# A picture background is stored as PNG. Pictures saved before that are JPEG and are still read. An animated GIF
+# is kept as uploaded, because re-encoding it would flatten the loop to one frame.
 BG_IMAGE_EXT = ".png"
-BG_IMAGE_EXTS = (".png", ".jpg")
-BG_DIR = "backgrounds"               # one JPEG per background, named by its id
+BG_IMAGE_EXTS = (".png", ".jpg", ".gif")
+BG_DIR = "backgrounds"               # one file per background, named by its id
 BG_MAX_SIDE = 1280                   # chat and card backgrounds are downsized to this
 MAX_BACKGROUNDS = 10                 # per character
 LEGACY_ID = "legacy"
 BG_ID_RE = re.compile(r"^[0-9a-f]{12}$")
-# A background is a JPEG, or a video transcoded to WebM. A video id carries .webm so the page can tell the
-# two apart without another request, and its poster frame sits beside it as <id>.poster.jpg.
+# A background is a picture, or a video. A video id carries .webm so the page can tell the two apart without
+# another request, and its poster frame sits beside it as <id>.poster.jpg. Every video is stored twice: VP9 in
+# WebM, which is small, and H.264 in MP4, which every phone can play. The page offers both and the browser picks.
 VIDEO_STORE_EXT = ".webm"
+VIDEO_FALLBACK_EXT = ".mp4"
 VIDEO_POSTER_SUFFIX = ".poster.jpg"
 VIDEO_MAX_BYTES = 50 * 1024 * 1024   # a background video upload may be up to 50 MB
 VIDEO_MIN_SIDE = 720                 # and at least 720p on its shorter side
 VIDEO_MAX_SECONDS = 60               # a longer clip takes too long to transcode for one request
 VIDEO_CRF = 32                       # VP9 constant quality; a background sits behind text, so 32 is plenty
+VIDEO_FALLBACK_CRF = 26              # H.264 quality for the MP4 copy phones play; closer to the eye than VP9 32
 # The blur and dimming a background sits under are baked in here, once, so the page never filters the video
 # live. The sigma is in video pixels and roughly matches the 5px blur the page used to apply on screen.
 VIDEO_BLUR_SIGMA = 5
@@ -229,13 +234,22 @@ PIL_LOOK = tuple(x for row in LOOK_MATRIX for x in (*row, 0.0))
 # ffmpeg's colorchannelmixer takes the same weights row by row, each row followed by an alpha term (unused).
 FFMPEG_LOOK = "colorchannelmixer=" + ":".join(f"{x:.5f}" for row in LOOK_MATRIX for x in (*row, 0))
 VIDEO_LOOK = f"gblur=sigma={VIDEO_BLUR_SIGMA},format=gbrp,{FFMPEG_LOOK}"
-BG_ANY_ID_RE = re.compile(r"^[0-9a-f]{12}(\.webm)?$")
+BG_ANY_ID_RE = re.compile(r"^[0-9a-f]{12}(\.webm|\.mp4)?$")
 POSTER_ID_RE = re.compile(r"^[0-9a-f]{12}\.poster\.jpg$")   # the still frame of a video background
 
 
 def is_video_id(bid):
     # True when a background id names a video rather than an image.
-    return str(bid or "").lower().endswith(VIDEO_STORE_EXT)
+    return str(bid or "").lower().endswith((VIDEO_STORE_EXT, VIDEO_FALLBACK_EXT))
+
+
+def _video_stem(bid):
+    # The id without its video extension, so .webm and .mp4 copies share one poster.
+    low = str(bid or "").lower()
+    for ext in (VIDEO_STORE_EXT, VIDEO_FALLBACK_EXT):
+        if low.endswith(ext):
+            return str(bid)[:-len(ext)]
+    return str(bid or "")
 
 
 def _video_kind(data):
@@ -312,10 +326,11 @@ def _probe(ffprobe, path):
 
 
 def transcode_video(data):
-    # Checks an MP4 or MOV upload and returns (webm bytes, poster jpeg bytes). The video is re-encoded to
-    # VP9 in WebM so every browser can play it, its audio track is dropped (a background has no sound), and
-    # the first frame becomes a poster so a paused page has a still to show. The blur and dimming are applied
-    # here too, to both the video and the poster, so they cost nothing at playback. Looping is the player's job.
+    # Checks an MP4 or MOV upload and returns (webm bytes, mp4 bytes, poster jpeg bytes). The video is re-encoded
+    # twice: VP9 in WebM, which is small, and H.264 in MP4, which every phone and browser can play. Its audio
+    # track is dropped (a background has no sound), and the first frame becomes a poster so a paused page has a
+    # still to show. The blur and dimming are applied once, to the WebM and the poster; the MP4 is made from the
+    # finished WebM, so the look is never applied twice. Looping is the player's job.
     if not data:
         raise EditorError("Choose a video first.")
     if len(data) > VIDEO_MAX_BYTES:
@@ -358,9 +373,22 @@ def transcode_video(data):
             raise EditorError("That video could not be converted: no first frame to show.")
         with open(out, "rb") as f:
             webm = f.read()
+        # The MP4 copy: H.264 from the finished WebM. Old iPhones cannot play VP9, so without this the page would
+        # only ever show the poster frame on those devices. It is written with faststart so it begins playing
+        # before the whole file has arrived.
+        fallback = os.path.join(work, "out.mp4")
+        proc = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", out,
+                               "-an", "-c:v", "libx264", "-crf", str(VIDEO_FALLBACK_CRF),
+                               "-preset", "veryfast", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                               fallback],
+                              capture_output=True, timeout=600)
+        if proc.returncode != 0 or not os.path.isfile(fallback) or os.path.getsize(fallback) == 0:
+            raise EditorError("That video could not be prepared for phones.")
+        with open(fallback, "rb") as f:
+            mp4 = f.read()
         with open(poster, "rb") as f:
             still = f.read()
-        return webm, still
+        return webm, mp4, still
     except subprocess.TimeoutExpired:
         raise EditorError("That video took too long to convert. Try a shorter clip.") from None
     finally:
@@ -368,15 +396,17 @@ def transcode_video(data):
 
 
 def _encode_background(data):
-    # Checks an upload and returns it downsized as PNG, with the page's colour look already applied.
+    # Checks an upload and returns (bytes, extension). A picture is downsized to PNG with the page's colour look
+    # already applied; an animated GIF is kept exactly as uploaded so it keeps moving.
     if not data:
         raise EditorError("Choose an image first.")
     if len(data) > UPLOAD_MAX:
         raise EditorError("Background uploads can be up to 10 MB.")
     try:
         img = Image.open(io.BytesIO(data))
-        if img.format not in ("PNG", "JPEG", "WEBP"):
-            raise EditorError("Background must be a PNG, JPEG or WebP image.")
+        if img.format not in ("PNG", "JPEG", "WEBP", "GIF"):
+            raise EditorError("Background must be a PNG, JPEG, WebP or GIF image.")
+        fmt = img.format   # exif_transpose returns a copy, and the copy loses this
         if img.width * img.height > MAX_SOURCE_PIXELS:
             raise EditorError("That image is too large. Use one under 40 megapixels.")
         img = ImageOps.exif_transpose(img)
@@ -384,17 +414,22 @@ def _encode_background(data):
     except EditorError:
         raise
     except (OSError, ValueError, Image.DecompressionBombError) as err:
-        raise EditorError("Could not read that image. Use a PNG, JPEG or WebP.") from err
+        raise EditorError("Could not read that image. Use a PNG, JPEG, WebP or GIF.") from err
+    if fmt == "GIF":
+        animated = _animated_gif(data)
+        if animated is not None:
+            return animated, ".gif"   # stored as uploaded: the colour look would flatten the loop
     img = img.convert("RGB")
     img.thumbnail((BG_MAX_SIDE, BG_MAX_SIDE), Image.LANCZOS)   # never enlarges
     img = img.convert("RGB", PIL_LOOK)   # the colour look, baked in once so the page does not filter it live
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
-    return buf.getvalue()
+    return buf.getvalue(), BG_IMAGE_EXT
 
 
 def background_bytes(data):
-    # Checked upload, downsized as JPEG. Also used for account profile backgrounds.
+    # Checked upload, downsized as PNG or kept as an animated GIF. Returns (bytes, extension).
+    # Also used for account profile backgrounds.
     return _encode_background(data)
 
 
@@ -421,6 +456,61 @@ def background_ids(root, name):
     return ids
 
 
+_GIF_LOOP_CACHE = {}
+
+
+def _gif_loop_ms(path):
+    # One loop of an animated GIF in milliseconds, cached by the file's stamp. A delay under 20 ms is
+    # counted as 100 ms, which is what Chrome plays.
+    try:
+        stamp = os.stat(path)
+    except OSError:
+        return 0
+    key = (path, stamp.st_mtime_ns, stamp.st_size)
+    if key in _GIF_LOOP_CACHE:
+        return _GIF_LOOP_CACHE[key]
+    total = 0
+    try:
+        with Image.open(path) as im:
+            for i in range(getattr(im, "n_frames", 1)):
+                im.seek(i)
+                delay = int(im.info.get("duration") or 0)
+                total += 100 if delay < 20 else delay
+    except Exception:
+        total = 0
+    if len(_GIF_LOOP_CACHE) > 512:
+        _GIF_LOOP_CACHE.clear()
+    _GIF_LOOP_CACHE[key] = total
+    return total
+
+
+def background_meta(root, name):
+    # What each background is, for the gallery: a video, an animated GIF with the length of one loop, or a
+    # still. The page waits for moving art to finish before it fades to the next piece.
+    try:
+        folder = folder_of(root, name)
+    except EditorError:
+        return {}
+    out = {}
+    if os.path.isfile(os.path.join(folder, BG_LEGACY)):
+        out[LEGACY_ID] = {"kind": "still"}
+    bdir = os.path.join(folder, BG_DIR)
+    if not os.path.isdir(bdir):
+        return out
+    for f in sorted(os.listdir(bdir)):
+        stem, ext = os.path.splitext(f)
+        path = os.path.join(bdir, f)
+        if not BG_ID_RE.match(stem) or not os.path.isfile(path):
+            continue
+        if ext == VIDEO_STORE_EXT:
+            out[stem + ext] = {"kind": "video"}
+        elif ext == ".gif":
+            out[stem] = {"kind": "gif", "duration_ms": _gif_loop_ms(path)}
+        elif ext in BG_IMAGE_EXTS:
+            out[stem] = {"kind": "still"}
+    return out
+
+
 def poster_path(root, name, bid):
     # The still frame stored beside a video background, used as its poster and as its reduced-motion
     # picture. None when the id is not a video or the frame is missing.
@@ -430,14 +520,51 @@ def poster_path(root, name, bid):
         folder = folder_of(root, name)
     except EditorError:
         return None
-    stem = bid[:-len(VIDEO_STORE_EXT)]
-    p = os.path.join(folder, BG_DIR, stem + VIDEO_POSTER_SUFFIX)
+    p = os.path.join(folder, BG_DIR, _video_stem(bid) + VIDEO_POSTER_SUFFIX)
     return p if os.path.isfile(p) else None
+
+
+# One conversion at a time: two requests for the same new MP4 must not both run ffmpeg over it.
+_FALLBACK_LOCK = threading.Lock()
+
+
+def ensure_video_fallback(source, target):
+    # Writes an H.264 MP4 from an already converted WebM, for browsers that cannot play VP9. The blur and the
+    # colour look are already in the source, so they are not applied again. True when the file is there.
+    if os.path.isfile(target) and os.path.getsize(target) > 0:
+        return True
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg or not os.path.isfile(source):
+        return False
+    with _FALLBACK_LOCK:
+        if os.path.isfile(target) and os.path.getsize(target) > 0:
+            return True   # another request finished it while this one waited
+        tmp = target + ".part.mp4"   # ffmpeg picks the writer from the extension
+        try:
+            proc = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", source,
+                                   "-an", "-c:v", "libx264", "-crf", str(VIDEO_FALLBACK_CRF),
+                                   "-preset", "veryfast", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                                   "-f", "mp4", tmp],
+                                  capture_output=True, timeout=600)
+            if proc.returncode != 0 or not os.path.isfile(tmp) or os.path.getsize(tmp) == 0:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+                return False
+            os.replace(tmp, target)
+            return True
+        except (OSError, subprocess.SubprocessError):
+            if os.path.isfile(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            return False
 
 
 def _bg_file(root, name, bid):
     # The file for one id, or None. Ids are checked before they touch the disk. A poster id is accepted too,
-    # so the page can ask for the still frame with the same route.
+    # so the page can ask for the still frame with the same route. An MP4 that a background from before this
+    # store gained is made from its WebM on the first request.
     if bid != LEGACY_ID and not (BG_ANY_ID_RE.match(bid or "") or POSTER_ID_RE.match(bid or "")):
         return None
     try:
@@ -450,6 +577,9 @@ def _bg_file(root, name, bid):
         p = os.path.join(folder, BG_DIR, bid)
     elif is_video_id(bid):
         p = os.path.join(folder, BG_DIR, bid)
+        if not os.path.isfile(p) and bid.lower().endswith(VIDEO_FALLBACK_EXT):
+            source = os.path.join(folder, BG_DIR, _video_stem(bid) + VIDEO_STORE_EXT)
+            p = p if ensure_video_fallback(source, p) else None
     else:
         p = None
         for ext in BG_IMAGE_EXTS:
@@ -470,13 +600,14 @@ def background_path(root, name, bid=None):
 
 
 def add_background(root, name, data, poster=None, stored=False):
-    # Adds one background and returns its id. Refuses past MAX_BACKGROUNDS. A picture becomes a PNG; an MP4 or
-    # MOV is transcoded to WebM with its audio dropped, and its first frame is stored beside it as a poster.
-    # stored=True means data is already a background this app wrote (an archive made here), so it is saved as it
-    # is rather than encoded again: the colour look and the blur are never applied twice.
+    # Adds one background and returns its id. Refuses past MAX_BACKGROUNDS. A picture becomes a PNG, or stays an
+    # animated GIF. An MP4 or MOV is transcoded to WebM and MP4 with its audio dropped, and its first frame is
+    # stored beside it as a poster. stored=True means data is already a background this app wrote (an archive made
+    # here), so it is saved as it is rather than encoded again: the colour look and the blur are never applied twice.
     path = folder_of(root, name)
     if not os.path.isdir(path):
         raise EditorError("No such character.")
+    fallback = None
     if stored:
         if len(data) > VIDEO_MAX_BYTES:
             raise EditorError(f"A background video can be up to {VIDEO_MAX_BYTES // (1024 * 1024)} MB.")
@@ -486,24 +617,33 @@ def add_background(root, name, data, poster=None, stored=False):
             payload, still, ext = data, None, ".png"
         elif data[:3] == b"\xff\xd8\xff":
             payload, still, ext = data, None, ".jpg"
+        elif data[:6] in (b"GIF87a", b"GIF89a"):
+            payload, still, ext = data, None, ".gif"
         else:
-            raise EditorError("A stored background must be a WebM, PNG or JPEG file.")
+            raise EditorError("A stored background must be a WebM, PNG, JPEG or GIF file.")
     elif _video_kind(data) is not None:
-        payload, still = transcode_video(data)
+        payload, fallback, still = transcode_video(data)
         ext = VIDEO_STORE_EXT
     else:
-        payload, still, ext = _encode_background(data), None, BG_IMAGE_EXT
+        payload, ext = _encode_background(data)
+        still = None
     if len(background_ids(root, name)) >= MAX_BACKGROUNDS:
         raise EditorError(f"A character can have up to {MAX_BACKGROUNDS} backgrounds. Remove one first.")
     bdir = os.path.join(path, BG_DIR)
     os.makedirs(bdir, exist_ok=True)
     bid = secrets.token_hex(6)
-    while any(os.path.exists(os.path.join(bdir, bid + e)) for e in (*BG_IMAGE_EXTS, VIDEO_STORE_EXT)):
+    while any(os.path.exists(os.path.join(bdir, bid + e))
+              for e in (*BG_IMAGE_EXTS, VIDEO_STORE_EXT, VIDEO_FALLBACK_EXT)):
         bid = secrets.token_hex(6)
     tmp = os.path.join(bdir, bid + ".tmp")
     with open(tmp, "wb") as f:
         f.write(payload)
     os.replace(tmp, os.path.join(bdir, bid + ext))
+    if fallback:
+        tmp = os.path.join(bdir, bid + VIDEO_FALLBACK_EXT + ".tmp")
+        with open(tmp, "wb") as f:
+            f.write(fallback)
+        os.replace(tmp, os.path.join(bdir, bid + VIDEO_FALLBACK_EXT))
     if still is not None:
         ptmp = os.path.join(bdir, bid + ".ptmp")
         with open(ptmp, "wb") as f:
@@ -518,8 +658,14 @@ def remove_background(root, name, bid):
         raise EditorError("No such background.")
     poster = poster_path(root, name, bid)
     os.remove(p)
+    if is_video_id(bid):
+        # The MP4 copy and the poster belong to the video and go with it.
+        for extra in (os.path.join(os.path.dirname(p), _video_stem(bid) + VIDEO_FALLBACK_EXT),
+                      os.path.join(os.path.dirname(p), _video_stem(bid) + VIDEO_STORE_EXT)):
+            if os.path.isfile(extra):
+                os.remove(extra)
     if poster:
-        os.remove(poster)   # the poster belongs to the video and goes with it
+        os.remove(poster)
 
 
 def _shrink_icon(data):

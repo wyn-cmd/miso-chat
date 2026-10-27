@@ -1,9 +1,14 @@
 // Account profile page: description, picture, background, the characters the account made, and the
-// characters it has liked when it shares them. Fetched from /api/account/<username>. The sidebar holds
-// the viewer's own characters, the same list as the home page, so a chat is always one click away.
+// characters it has liked when it shares them. Fetched from /api/account/<username>. Character cards use
+// the same renderer as the home gallery. The edit button opens a dialog on this page; it no longer
+// sends the reader to the chat settings.
 const $ = (id) => document.getElementById(id);
+const tr = (key, vars) => window.t(key, vars);
+const trn = (one, other, n, vars) => window.tn(one, other, n, vars);
 let colors = {};
 let iconNames = new Set();
+let me = null;
+let account = null;
 
 function mobileNav() { return window.matchMedia("(max-width: 760px)").matches; }
 
@@ -31,7 +36,7 @@ function sidebarButton(name) {
   const b = el("button", "", "char-item");
   b.type = "button";
   b.dataset.name = name;
-  b.dataset.chatName = name;   // where the missed check-in dot goes
+  b.dataset.chatName = name;
   if (colors[name]) b.style.setProperty("--dot", colors[name]);
   b.appendChild(sidebarIcon(name));
   b.appendChild(el("span", name, "char-name"));
@@ -39,13 +44,12 @@ function sidebarButton(name) {
   return b;
 }
 
-// The viewer's own characters and groups, drawn the way the home page draws them.
 async function loadSidebar() {
   let data;
   try {
     data = await api("GET", "/api/characters");
   } catch (err) {
-    $("sidebar").hidden = true;   // the page still works without the list
+    $("sidebar").hidden = true;
     $("menuBtn").hidden = true;
     return;
   }
@@ -55,7 +59,7 @@ async function loadSidebar() {
   list.textContent = "";
   for (const name of data.sidebar || []) list.appendChild(sidebarButton(name));
   if (!(data.sidebar || []).length) {
-    list.appendChild(el("p", "Characters you chat with appear here.", "muted"));
+    list.appendChild(el("p", tr("Characters you chat with appear here."), "muted"));
   }
   const groups = $("groupList");
   groups.textContent = "";
@@ -74,7 +78,6 @@ function usernameFromPath() {
 }
 
 async function init() {
-  let me;
   try {
     me = await api("GET", "/api/me");
   } catch (err) {
@@ -88,10 +91,26 @@ async function init() {
   if (me.is_admin) $("adminLink").hidden = false;
   if (me.avatar_shape) applyAvatarShape(me.avatar_shape);
   loadSidebar();
+  await loadAccount();
+}
 
+async function loadAccount() {
   const username = usernameFromPath();
   try {
     const data = await api("GET", "/api/account/" + encodeURIComponent(username));
+    account = data;
+    if (data.is_self) {
+      me.profile = Object.assign({}, me.profile, {
+        description: data.description,
+        likes_visible: data.likes_visible,
+        has_avatar: data.has_avatar,
+        has_background: data.has_background,
+        background_video: data.background_video,
+        avatar_version: data.avatar_version,
+        background_version: data.background_version,
+        poster_version: data.poster_version,
+      });
+    }
     render(data);
   } catch (err) {
     $("loading").hidden = true;
@@ -99,26 +118,40 @@ async function init() {
   }
 }
 
+function resetHeroArt(hero) {
+  const video = $("profileArtVideo");
+  if (video) {
+    video.pause();
+    for (const source of [...video.querySelectorAll("source")]) source.remove();
+    video.removeAttribute("src");
+    video.removeAttribute("poster");
+    video.hidden = true;
+    video.load();
+  }
+  $("profileArt").style.backgroundImage = "";
+  hero.classList.remove("has-art", "has-video");
+}
+
 function render(data) {
   $("loading").hidden = true;
+  $("profileErr").textContent = "";
   document.title = "@" + data.username + " - Miso Chat";
 
   const hero = $("profileCard");
   hero.hidden = false;
+  resetHeroArt(hero);
   if (data.has_background) {
     hero.classList.add("has-art");
     const base = "/api/account-background/" + encodeURIComponent(data.username) + "?v=" + data.background_version;
     const poster = "/api/account-background-poster/" + encodeURIComponent(data.username) + "?v=" + data.poster_version;
     const video = $("profileArtVideo");
     if (data.background_video && video && !motionReduced()) {
-      // A video background loops behind the hero. Muted, or the browser refuses to start it.
       video.poster = poster;
-      video.src = base;
+      setArtSources(video, base, base + "&fmt=mp4");
       video.hidden = false;
       setArtPlaying(hero, true);
       hero.classList.add("has-video");
     } else {
-      // A still background, or a video shown as its first frame when reduced motion was asked for.
       $("profileArt").style.backgroundImage =
         'url("' + (data.background_video ? poster : base) + '")';
     }
@@ -126,8 +159,6 @@ function render(data) {
 
   const avatar = $("profileAvatar");
   avatar.textContent = "";
-  // The monogram is a case of its own: with no picture the box needs a tile, or a bright ring around an
-  // empty box reads as a broken image. The class says so, since CSS cannot see whether an <img> arrived.
   hero.classList.toggle("no-avatar", !data.has_avatar);
   if (data.has_avatar) {
     const img = document.createElement("img");
@@ -143,76 +174,153 @@ function render(data) {
   const count = data.characters.length;
   const meta = [];
   if (made && !Number.isNaN(made.getTime())) {
-    meta.push("Member since " + made.toLocaleDateString([], { month: "long", year: "numeric" }));
+    meta.push(tr("Member since {date}", { date: MISO_I18N.date(made, { month: "long", year: "numeric" }) }));
   }
-  meta.push(count + (count === 1 ? " character" : " characters"));
+  meta.push(trn("{n} character", "{n} characters", count));
   $("profileMeta").textContent = meta.join(" \u00b7 ");
-  $("profileBio").textContent = data.description || "No description yet.";
+  $("profileBio").textContent = data.description || tr("No description yet.");
   $("profileBio").classList.toggle("muted", !data.description);
   $("profileEdit").hidden = !data.is_self;
 
   renderCharacters(data.characters, data.is_self);
   renderLiked(data);
+  if ($("profileEditDialog").open) renderEditForm();
 }
 
 function renderCharacters(cards, isSelf) {
   $("charactersSection").hidden = false;
-  $("charactersTitle").textContent = isSelf ? "Your characters" : "Characters";
+  $("charactersTitle").textContent = isSelf ? tr("Your characters") : tr("Characters");
   const grid = $("characterGrid");
+  stopArt(grid);
   grid.textContent = "";
   const empty = $("charactersEmpty");
   empty.hidden = cards.length > 0;
-  empty.textContent = isSelf ? "You have not made any characters yet." : "This account has not made any characters yet.";
-  for (const card of cards) grid.appendChild(characterCard(card));
+  empty.textContent = isSelf ? tr("You have not made any characters yet.") : tr("This account has not made any characters yet.");
+  for (const card of cards) grid.appendChild(renderCard(card, grid, { onFavourite: refreshAccount }));
 }
 
 function renderLiked(data) {
   $("likesSection").hidden = false;
   const grid = $("likesGrid");
+  stopArt(grid);
   grid.textContent = "";
   if (data.liked === null) {
-    $("likesNote").textContent = "This account keeps its liked characters private.";
+    $("likesNote").textContent = tr("This account keeps its liked characters private.");
     return;
   }
   if (!data.liked.length) {
-    $("likesNote").textContent = data.is_self ? "You have not liked any characters yet." : "No liked characters yet.";
+    $("likesNote").textContent = data.is_self ? tr("You have not liked any characters yet.") : tr("No liked characters yet.");
     return;
   }
   $("likesNote").textContent = data.is_self
-    ? "Only you can see these unless you turn on sharing in Settings, Account."
-    : "Characters this account has liked.";
-  for (const card of data.liked) grid.appendChild(characterCard(card));
+    ? (data.likes_visible
+      ? tr("Liked characters are visible on your profile.")
+      : tr("Only you can see these unless you turn on sharing in Settings, Account."))
+    : tr("Characters this account has liked.");
+  for (const card of data.liked) grid.appendChild(renderCard(card, grid, { onFavourite: refreshAccount }));
 }
 
-// A compact character card. Opening it starts or resumes that chat.
-function characterCard(card) {
-  const link = el("a", "", "profile-char");
-  link.href = "/chat?c=" + encodeURIComponent(card.name);
+async function refreshAccount() {
+  try { await loadAccount(); } catch (err) { /* the page keeps what it has */ }
+}
 
-  const avatar = el("span", "", "profile-char-avatar");
-  avatar.style.setProperty("--avatar-ring", card.color || "");
-  if (card.has_icon) {
-    const img = document.createElement("img");
-    img.alt = "";
-    img.src = "/api/icon/" + encodeURIComponent(card.name);
-    img.loading = "lazy";
-    avatar.appendChild(img);
-  } else {
-    avatar.appendChild(faceIcon(card.color));
-  }
-  link.appendChild(avatar);
+// ---- Profile editor. This dialog belongs to the profile page; it does not open the chat settings.
+function openProfileEditor() {
+  if (!me || !me.profile) return;
+  renderEditForm();
+  const dlg = $("profileEditDialog");
+  if (!dlg.open) dlg.showModal();
+  $("peBio").focus();
+}
 
-  const body = el("span", "", "profile-char-body");
-  body.appendChild(el("span", card.name, "profile-char-name"));
-  if (card.has_profile) body.appendChild(el("span", card.headline, "profile-char-line"));
-  else body.appendChild(el("span", card.pending ? "Profile is being written..." : "No profile yet.", "profile-char-line muted"));
-  if ((card.tags || []).length) {
-    const tags = el("span", "", "home-tags");
-    for (const tag of card.tags) tags.appendChild(el("span", tag, "home-tag"));
-    body.appendChild(tags);
+function renderEditForm() {
+  const p = me && me.profile;
+  if (!p) return;
+  const bio = $("peBio");
+  if (document.activeElement !== bio) bio.value = p.description || "";
+  updateEditCount();
+  const avatar = $("peAvatar");
+  avatar.hidden = !p.has_avatar;
+  if (p.has_avatar) avatar.src = "/api/account-avatar/" + encodeURIComponent(me.username) + "?v=" + (p.avatar_version || 0);
+  $("pePicRemove").hidden = !p.has_avatar;
+  const background = $("peBg");
+  background.hidden = !p.has_background;
+  if (p.has_background) {
+    background.src = p.background_video
+      ? "/api/account-background-poster/" + encodeURIComponent(me.username) + "?v=" + (p.poster_version || 0)
+      : "/api/account-background/" + encodeURIComponent(me.username) + "?v=" + (p.background_version || 0);
   }
-  link.appendChild(body);
-  return link;
+  $("peBgRemove").hidden = !p.has_background;
+  $("peLikes").checked = !!p.likes_visible;
+}
+
+function updateEditCount() {
+  $("peCount").textContent = $("peBio").value.length + " / 1000";
+}
+
+async function saveEditDescription() {
+  $("peMsg").textContent = "";
+  try {
+    me.profile = await api("POST", "/api/account/profile", { description: $("peBio").value });
+    renderEditForm();
+    $("peMsg").textContent = tr("Description saved.");
+    await refreshAccount();
+  } catch (err) {
+    $("peMsg").textContent = err.message;
+  }
+}
+
+async function saveEditLikes() {
+  $("peMsg").textContent = "";
+  try {
+    me.profile = await api("POST", "/api/account/profile", { likes_visible: $("peLikes").checked });
+    renderEditForm();
+    $("peMsg").textContent = me.profile.likes_visible
+      ? tr("Liked characters are visible on your profile.")
+      : tr("Liked characters are private.");
+    await refreshAccount();
+  } catch (err) {
+    $("peMsg").textContent = err.message;
+    renderEditForm();
+  }
+}
+
+async function uploadEditImage(kind, file) {
+  if (!file) return;
+  $("peMsg").textContent = tr("Uploading...");
+  try {
+    const r = await fetch("/api/account/" + kind, {
+      method: "POST",
+      headers: { "X-Requested-With": "roleplay", "Content-Type": "application/octet-stream" },
+      credentials: "same-origin",
+      body: await file.arrayBuffer(),
+    });
+    if (!r.ok) {
+      let data = {};
+      try { data = await r.json(); } catch (e) { /* no body */ }
+      throw apiError(r.status, data);
+    }
+    me.profile = await r.json();
+    renderEditForm();
+    $("peMsg").textContent = kind === "avatar" ? tr("Profile picture saved.") : tr("Profile background saved.");
+    await refreshAccount();
+  } catch (err) {
+    $("peMsg").textContent = err.message;
+  }
+}
+
+async function removeEditImage(kind) {
+  const what = kind === "avatar" ? tr("profile picture") : tr("profile background");
+  if (!confirm(tr("Remove your {what}?", { what: what }))) return;
+  $("peMsg").textContent = "";
+  try {
+    me.profile = await api("DELETE", "/api/account/" + kind);
+    renderEditForm();
+    $("peMsg").textContent = tr("Removed.");
+    await refreshAccount();
+  } catch (err) {
+    $("peMsg").textContent = err.message;
+  }
 }
 
 $("menuBtn").addEventListener("click", () => setSidebar(!$("sidebar").classList.contains("open")));
@@ -221,6 +329,16 @@ $("logoutBtn").addEventListener("click", async () => {
   try { await api("POST", "/api/logout"); } catch (err) { /* the session is gone either way */ }
   location.href = "/login";
 });
+
+$("profileEdit").addEventListener("click", openProfileEditor);
+$("peClose").addEventListener("click", () => $("profileEditDialog").close());
+$("peBio").addEventListener("input", updateEditCount);
+$("peSave").addEventListener("click", saveEditDescription);
+$("peLikes").addEventListener("change", saveEditLikes);
+$("pePic").addEventListener("change", (e) => { const file = e.target.files[0]; e.target.value = ""; uploadEditImage("avatar", file); });
+$("peBgPick").addEventListener("change", (e) => { const file = e.target.files[0]; e.target.value = ""; uploadEditImage("background", file); });
+$("pePicRemove").addEventListener("click", () => removeEditImage("avatar"));
+$("peBgRemove").addEventListener("click", () => removeEditImage("background"));
 
 init();
 refreshUnread();

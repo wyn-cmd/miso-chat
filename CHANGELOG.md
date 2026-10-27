@@ -2,13 +2,41 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.5.2-beta-1 - 2026-10-28
+
+A read-aloud, search and settings cleanup release, built on 1.5.1. The server's endpoints and data layout are the same as 1.5.1, and the terminal client is 1.5.2-beta-1 with the same code.
+
+### Added
+- **Read aloud** (chat and Settings, Voice & audio): a speaker button under each character reply reads it with the browser's speech synthesis. The browser remembers a voice, rate, pitch and volume, and a different voice for each character or group. Auto-read is off by default.
+- **Voice & audio settings**: the panel lists the voices installed in the browser, keeps a saved voice when it is unavailable, and shows a status line when speech is unsupported or has no voices. Test and stop buttons are included.
+- **Scenario library** (Settings, Scenarios): each account keeps its own opening messages for chats, with three to start from. A new chat can offer one chosen scenario, one at random, or none; the opening appears in the chat window with a Start button and is only sent when pressed.
+- **Global search** (sidebar): searches characters, worlds, Mind Palace entries and saved chats. A result opens the chat or the settings panel that owns the match.
+
+### Changed
+- **Default creativity** is now 0.95 for both one-to-one chats and groups. Per-character and per-group settings still override it, and the Default button clears them.
+- **Settings** now has one Story & memory card for Worlds, Mind Palace and Dreams, in place of three separate cards. Each subpanel returns to Story & memory.
+- **Command help** now lists the commands that work in the web chat and notes that `/verbose`, `/exit`, `/quit` and `/quit-clear` are terminal-only. `/exit` no longer claims to close the web chat.
+- The settings grid keeps its 12 cards in four rows of three on desktop after the new Voice & audio card and the Story & memory merge.
+
+### Removed
+- The separate Worlds, Mind Palace and Dreams cards from the settings grid. Their panels are still available under Story & memory.
+
+### Fixed
+- `/help` and other command notices no longer disappear when the command reloads the chat history.
+- `/undo` now reloads the chat and then shows its command notice.
+
+### Known issues
+- Read aloud depends on the voices installed in the browser or operating system. The server does not send audio, and a browser with no voices shows a status message instead.
+
 ## 1.5.1 - 2026-10-27
 
 A look, icon and speed release, built on 1.5.0. The server's endpoints and data layout are the same as 1.5.0, and the terminal client is 1.5.1 with the same code.
 
 ### Added
+- **Scenario library** (Settings, Scenarios): each account keeps its own opening messages for chats, with three to start from. A new chat can offer one chosen scenario, one at random, or none; the opening appears in the chat window with a Start button and is only sent when pressed.
 - **Dusk look** (Settings, Appearance, Theme): a slate ground with warm bone text and a periwinkle accent, with a light variant for the day.
-- **Video backgrounds**: an MP4 or MOV background for a character or account is converted to WebM with no audio, and a poster frame is kept for the first paint and for reduced motion. The blur and dimming are applied once, on the server. This needs ffmpeg and ffprobe on the server; without them a video upload is refused with a message.
+- **Video backgrounds**: an MP4 or MOV background for a character or account is converted to WebM and MP4 with no audio, and a poster frame is kept for the first paint and for reduced motion. The page offers both files, so a phone that cannot play VP9 uses the MP4. The blur and dimming are applied once, on the server. This needs ffmpeg and ffprobe on the server; without them a video upload is refused with a message.
+- **GIF backgrounds**: a character, group or account background can be a GIF, up to 10 MB. An animated one is stored as uploaded and keeps moving; a still one is saved as PNG like any other picture.
 - **Account profile pictures and backgrounds**: each account can set a picture and a background, from its profile page.
 - **Animated GIF pictures** stay animated. They are stored as uploaded and served as image/gif, so a browser shows every frame.
 - **Background circles**: a character with no pictures shows drifting circles behind the chat. Each home card without pictures has its own set. Each circle has its own pace and start point. When mood and attitude are on, the circles warm with affection and turn greener with energy.
@@ -18,7 +46,8 @@ A look, icon and speed release, built on 1.5.0. The server's endpoints and data 
 - Picture backgrounds are saved as PNG. Pictures saved before this release stay JPEG and are still read.
 - The colour look (sepia, saturation and dimming) is applied once, when a picture or video is saved. The page applies only the contrast step.
 - In light mode, card and chat pictures and videos are shown with no shade over them.
-- Background videos play only while they are on screen and the tab is visible. They pause otherwise, and profile videos pause with the tab.
+- Background videos play only while they are on screen and the tab is visible. They pause otherwise, and profile videos pause with the tab. A browser that refuses to start one at first, which an iPhone in Low Power Mode does even for a muted video, is asked again on the first touch or click.
+- A background video saved before this release has no MP4 copy yet. Its MP4 is made from the stored WebM the first time a browser asks for it, and kept from then on.
 - The header background is solid, not blurred.
 - The Classic look's background glow is a fixed layer behind the page, so it is not repainted on every scroll.
 - Scripts and styles from `/static/` are sent gzip-compressed. Chat replies are not compressed, so they still stream as they are written.
@@ -33,7 +62,6 @@ A look, icon and speed release, built on 1.5.0. The server's endpoints and data 
 - The Spore screenshots from `docs/screenshots`.
 
 ### Known issues
-- On some phones a video background shows only its poster frame. Not yet resolved; the likely causes are the WebM codec on older iOS or autoplay blocking.
 - A long chat reply re-renders the whole message on each frame while it streams. This is unchanged from 1.5.0.
 
 ## 1.5.0 - 2026-10-26

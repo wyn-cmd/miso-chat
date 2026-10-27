@@ -11,10 +11,12 @@ FOLDER = "account"
 META = "profile.json"
 # A profile picture in the order it is looked for. avatar.gif is an animated GIF, kept as uploaded.
 AVATAR_FILES = ("avatar.webp", "avatar.gif")
-# A profile background is a picture, or a video stored as WebM with its poster beside it.
+# A profile background is a picture, or a video stored as WebM with its MP4 fallback and its poster beside it.
 BACKGROUND = "background.png"
 BACKGROUND_JPEG = "background.jpg"   # a picture saved before backgrounds were stored as PNG; still read
+BACKGROUND_GIF = "background.gif"    # an animated GIF, kept as uploaded
 BACKGROUND_VIDEO = "background.webm"
+BACKGROUND_FALLBACK = "background.mp4"   # H.264 copy, for phones that cannot play VP9
 BACKGROUND_POSTER = "background.poster.jpg"
 DESCRIPTION_MAX = 1000
 
@@ -114,7 +116,7 @@ def remove_avatar(data_dir, uid):
 
 
 def background_path(data_dir, uid):
-    for name in (BACKGROUND, BACKGROUND_JPEG):
+    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF):
         path = os.path.join(root_for(data_dir, uid), name)
         if os.path.isfile(path):
             return path
@@ -126,35 +128,50 @@ def background_video_path(data_dir, uid):
     return path if os.path.isfile(path) else None
 
 
+def background_fallback_path(data_dir, uid):
+    # The MP4 copy of a profile video, for browsers that cannot play VP9. One that was saved before this
+    # exists is made from its WebM now, and kept for the next request. None when there is no video.
+    root = root_for(data_dir, uid)
+    target = os.path.join(root, BACKGROUND_FALLBACK)
+    source = os.path.join(root, BACKGROUND_VIDEO)
+    if not editor.ensure_video_fallback(source, target):
+        return None
+    return target
+
+
 def background_poster_path(data_dir, uid):
     path = os.path.join(root_for(data_dir, uid), BACKGROUND_POSTER)
     return path if os.path.isfile(path) else None
 
 
 def save_background(data_dir, uid, data):
-    # A PNG, JPEG or WebP, downsized as PNG; or an MP4 or MOV, transcoded to WebM with no audio and a poster
-    # frame. The other kind is removed, so an account holds one background at a time either way.
+    # A PNG, JPEG, WebP or GIF, downsized as PNG (an animated GIF kept as it is); or an MP4 or MOV, transcoded
+    # to WebM and MP4 with no audio and a poster frame. The other kind is removed, so an account holds one
+    # background at a time either way.
     root = root_for(data_dir, uid)
     os.makedirs(root, exist_ok=True)
     if editor._video_kind(data) is not None:
-        webm, still = editor.transcode_video(data)
-        for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_POSTER):
+        webm, mp4, still = editor.transcode_video(data)
+        for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_POSTER):
             p = os.path.join(root, name)
             if os.path.isfile(p):
                 os.remove(p)
         _write_bytes(os.path.join(root, BACKGROUND_VIDEO), webm)
+        _write_bytes(os.path.join(root, BACKGROUND_FALLBACK), mp4)
         _write_bytes(os.path.join(root, BACKGROUND_POSTER), still)
         return
-    encoded = editor.background_bytes(data)
-    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_VIDEO, BACKGROUND_POSTER):
+    encoded, ext = editor.background_bytes(data)
+    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_VIDEO, BACKGROUND_FALLBACK,
+                 BACKGROUND_POSTER):
         p = os.path.join(root, name)
         if os.path.isfile(p):
             os.remove(p)
-    _write_bytes(os.path.join(root, BACKGROUND), encoded)
+    _write_bytes(os.path.join(root, "background" + ext), encoded)
 
 
 def remove_background(data_dir, uid):
-    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_VIDEO, BACKGROUND_POSTER):
+    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_VIDEO, BACKGROUND_FALLBACK,
+                 BACKGROUND_POSTER):
         path = os.path.join(root_for(data_dir, uid), name)
         if os.path.isfile(path):
             os.remove(path)

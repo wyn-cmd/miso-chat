@@ -35,7 +35,7 @@ from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_T
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude, novels, worlds, tensions, passwords
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude, novels, worlds, tensions, passwords, scenarios, search
 import pytz
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, TIERS, TIER_MONTHLY_TOKENS, budget_days, recent_days, verify_password, needs_rehash, ADMIN_NAME
 
@@ -839,6 +839,34 @@ def _count_model_call(st, uid, model):
         st.rpm.append(time.time())
 
 
+def _count_system_call(st, model):
+    # A model call the server makes for no one's chat (auto profiles, card drafts, the profile writer). It is recorded
+    # under the system account, so the stats total includes it, but it is billed to no user's quota. It still takes a
+    # slot under the per-minute limit.
+    st.store.add_system_usage(requests=1, provider=provider_of(model), model=model)
+    with st.rpm_lock:
+        st.rpm.append(time.time())
+
+
+def _usage_sink(st, uid):
+    # Records one DeepSeek call for this account: its tokens, the cached and output split, and its seconds.
+    # Only chat engines are wrapped with it (see the Engine call in _slot).
+    def sink(model, figures, seconds):
+        st.store.add_usage(uid, tokens=figures["tokens"], provider="deepseek", model=model,
+                           input_tokens=figures["input_tokens"], cached_tokens=figures["cached_tokens"],
+                           output_tokens=figures["output_tokens"], seconds=seconds)
+    return sink
+
+
+def _system_sink(st):
+    # The same as _usage_sink for calls that belong to no account: recorded under the system account, billed to nobody.
+    def sink(model, figures, seconds):
+        st.store.add_system_usage(tokens=figures["tokens"], provider="deepseek", model=model,
+                                  input_tokens=figures["input_tokens"], cached_tokens=figures["cached_tokens"],
+                                  output_tokens=figures["output_tokens"], seconds=seconds)
+    return sink
+
+
 MEDIA_TYPES = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".mp4": "video/mp4", ".webm": "video/webm"}
 
@@ -872,6 +900,7 @@ def _card_for(st, folder):
             "tags": prof["tags"] if prof else [], "has_profile": prof is not None,
             "pending": folder in st.profiles.pending(), "has_icon": _has_icon(st.char_root, name),
             "has_background": _has_background(st.char_root, name), "backgrounds": editor.background_ids(st.char_root, name), "default_backgrounds": _default_art(),
+            "background_meta": editor.background_meta(st.char_root, name),
             "color": colour_of(st.char_root, folder) or NEUTRAL_HEX,
             "creator": creator, "creator_profile": _creator_linkable(st, creator)}
 
@@ -898,6 +927,9 @@ def _account_profile_meta(st, uid):
 def _created_cards(st, viewer, username):
     solo, _ = scan_characters(st.char_root)
     favs = st.store.favourites_of(viewer["id"])
+    totals = st.store.char_message_totals()
+    stars = st.store.favourite_counts()
+    popular = _popular_set(totals)
     out = []
     for folder in solo:
         creator = editor.creator_of(os.path.join(st.char_root, folder))
@@ -905,6 +937,9 @@ def _created_cards(st, viewer, username):
             continue
         card = _card_for(st, folder)
         card["favourite"] = card["name"] in favs
+        card["stars"] = stars.get(card["name"], 0)
+        card["messages"] = totals.get(card["name"], 0)
+        card["popular"] = card["name"] in popular
         out.append(card)
     return out
 
@@ -913,6 +948,9 @@ def _liked_cards(st, viewer, uid):
     solo, _ = scan_characters(st.char_root)
     by_name = {display_for(folder): folder for folder in solo}
     favs = st.store.favourites_of(viewer["id"])
+    totals = st.store.char_message_totals()
+    stars = st.store.favourite_counts()
+    popular = _popular_set(totals)
     out = []
     for name in sorted(st.store.favourites_of(uid)):
         folder = by_name.get(name)
@@ -920,6 +958,9 @@ def _liked_cards(st, viewer, uid):
             continue   # the character was deleted after it was starred
         card = _card_for(st, folder)
         card["favourite"] = name in favs
+        card["stars"] = stars.get(name, 0)
+        card["messages"] = totals.get(name, 0)
+        card["popular"] = name in popular
         out.append(card)
     return out
 
@@ -1039,6 +1080,10 @@ def _worlds_path(st, uid):
     return os.path.join(st.data_dir, "users", str(uid), worlds.FILE)
 
 
+def _scenarios_path(st, uid):
+    return os.path.join(st.data_dir, "users", str(uid), scenarios.FILE)
+
+
 # The world and tension mode a chat uses, applied on every request so a change takes effect on the next message.
 # A novel keeps its world on the novel itself; any other chat uses its own preference, which may be the account default.
 def _apply_chat_settings(st, user, name, engine):
@@ -1090,10 +1135,13 @@ def _slot(st, user, name, is_group):
 
     def on_tokens(n, model=None, detail=None):
         # detail carries the input/cached/output split and the turn's seconds, when the provider reports them.
-        st.store.add_usage(uid, tokens=n, provider=provider_of(model), model=model, **(detail or {}))
+        # DeepSeek calls are already counted call by call (_usage_sink), so a turn is not added a second time.
+        if provider_of(model) != "deepseek":
+            st.store.add_usage(uid, tokens=n, provider=provider_of(model), model=model, **(detail or {}))
         return (st.store.usage_today(uid)["tokens"], TOKEN_DISPLAY_LIMIT)
 
-    engine = Engine(st.client, name, _persona_dir(st, user, persona), log=lambda m: None, state_dir=state_dir,
+    engine = Engine(llm_backends.with_usage(st.client, _usage_sink(st, uid)), name, _persona_dir(st, user, persona),
+                    log=lambda m: None, state_dir=state_dir,
                     on_request=on_request, on_tokens=on_tokens, allow_root_user=False,
                     member_memory=False, persist_config=False)
     _apply_switches(st, engine)
@@ -1561,7 +1609,7 @@ COMMAND_HELP = (
     "- `/model auto`: go back to the automatic fallback chain\n"
     "- `/save`: refresh this character's memory.md now\n"
     "- `/help`: this list\n\n"
-    "`/verbose` only works in the terminal. Log out to leave; `/exit` and `/quit` do the same thing."
+    "`/verbose` only works in the terminal. `/exit`, `/quit` and `/quit-clear` do not close the web chat; use Log out to leave."
 )
 
 
@@ -1584,7 +1632,7 @@ def _run_command(st, user, name, is_group, word, arg):
     if word == "/help":
         return {"notice": COMMAND_HELP}
     if word in ("/exit", "/quit", "/quit-clear"):
-        return {"notice": "Log out when you're done. Your chat is saved after every reply."}
+        return {"notice": "The web chat stays open. Use Log out to leave. Your chat is saved after every reply."}
     if word == "/verbose":
         return {"notice": "Verbose prompt diagnostics are terminal-only."}
     slot = _slot(st, user, name, is_group)
@@ -1776,8 +1824,9 @@ def make_app(client=None, data_dir=None, char_root=None):
     st = AppState(store, build_client(client, data_dir), data_dir, char_root)
     st.data_dir_ref = data_dir
     st.profile_gate = profiles.RateGate(profiles.PROFILE_RPM, reserve=profiles.PROFILE_RESERVE)   # shared by the background writer and Auto-fill
-    st.profiles = profiles.ProfileWriter(char_root, st.client, gate=st.profile_gate, log=lambda m: print(m, flush=True))
-    st.profiles.on_call = lambda uid, model: _count_model_call(st, uid, model)
+    st.profiles = profiles.ProfileWriter(char_root, llm_backends.with_usage(st.client, _system_sink(st)),
+                                         gate=st.profile_gate, log=lambda m: print(m, flush=True))
+    st.profiles.on_call = lambda uid, model: _count_system_call(st, model)
     st.profiles.tag_source = lambda: _known_tags(st)
 
     app = FastAPI(title="Miso Chat", docs_url=None, redoc_url=None, openapi_url=None)
@@ -2216,11 +2265,15 @@ def make_app(client=None, data_dir=None, char_root=None):
                             headers={"Cache-Control": "private, max-age=300"})
 
     @app.get("/api/account-background/{username}")
-    def account_background_get(username: str, request: Request):
+    def account_background_get(username: str, request: Request, fmt: str = ""):
+        # fmt=mp4 asks for the H.264 copy of a profile video, which phones that cannot play VP9 use.
         require(request)
         target = _account_target(st, username)
-        path = (account_profiles.background_video_path(st.data_dir, target["id"])
-                or account_profiles.background_path(st.data_dir, target["id"]))
+        if fmt == "mp4":
+            path = account_profiles.background_fallback_path(st.data_dir, target["id"])
+        else:
+            path = (account_profiles.background_video_path(st.data_dir, target["id"])
+                    or account_profiles.background_path(st.data_dir, target["id"]))
         if path is None:
             raise HTTPException(404, "No profile background.")
         return FileResponse(path, media_type=_media_for(path),
@@ -2280,8 +2333,69 @@ def make_app(client=None, data_dir=None, char_root=None):
                 "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))] + private_icons,
                 "backgrounds": list(bg_ids), "default_backgrounds": _default_art(), "bg_ids": bg_ids,
                 "editable": [display_for(s) for s in solo if can_edit_card(user, os.path.join(st.char_root, s))],
-                "recommended": [{"name": display_for(r["folder"]), "tags": r["tags"]} for r in
-                                recommend.recommend(st.char_root, st.data_dir, user["id"], solo)]}
+                 "recommended": [{"name": display_for(r["folder"]), "tags": r["tags"]} for r in
+                                 recommend.recommend(st.char_root, st.data_dir, user["id"], solo)]}
+
+    # ---- Search: the gallery cards, the account's worlds, its Mind Palace entries and its saved chats.
+    @app.get("/api/search")
+    def search_all(request: Request, q: str = ""):
+        user = require(request)
+        query = str(q or "")[:search.MAX_QUERY]
+        wanted = search.terms(query)
+        empty = {"query": query, "characters": [], "worlds": [], "palace": [], "chats": []}
+        if not wanted:
+            return empty
+
+        solo, _groups = scan_characters(st.char_root)
+        favs = st.store.favourites_of(user["id"])
+        totals = st.store.char_message_totals()
+        stars = st.store.favourite_counts()
+        popular = _popular_set(totals)
+        character_hits = []
+        for folder in solo:
+            name = display_for(folder)
+            prof = profiles.read_profile(os.path.join(st.char_root, folder))
+            creator = editor.creator_of(os.path.join(st.char_root, folder))
+            parts = [name, creator]
+            if prof:
+                parts += [prof["headline"], prof["info"], " ".join(prof["tags"])]
+            if not search.matches(search.norm("\n".join(parts)), wanted):
+                continue
+            card = dict(_card_for(st, folder), favourite=name in favs, stars=stars.get(name, 0),
+                        messages=totals.get(name, 0), popular=name in popular)
+            character_hits.append(card)
+            if len(character_hits) >= search.MAX_CHARACTERS:
+                break
+        empty["characters"] = character_hits
+
+        store = _world_store(st, user)
+        empty["worlds"] = search.world_results(store["items"], wanted)
+
+        solo_set = set(solo)
+        uid = user["id"]
+
+        def search_label(folder):
+            if folder in solo_set:
+                return {"name": display_for(folder), "chat": display_for(folder), "kind": "solo"}
+            if folder.startswith(private_groups.PREFIX):
+                item = private_groups.get(st.data_dir, uid, folder)
+                if item is not None:
+                    return {"name": item["name"], "chat": item["name"], "kind": "group"}
+            if novels.is_novel(folder):
+                item = novels.get(st.data_dir, uid, folder)
+                if item is not None:
+                    return {"name": item["name"], "chat": item["id"], "kind": "novel"}
+            return None
+
+        user_root = os.path.join(st.data_dir, "users", str(uid))
+        empty["palace"] = search.palace_results(user_root, wanted, search_label)
+        chats = search.chat_results(user_root, wanted, search_label)
+        for hit in chats:
+            who = hit.get("speaker") or ""
+            if who and who.lower() not in ("user", "narrator"):
+                hit["speaker"] = display_for(who)
+        empty["chats"] = chats
+        return empty
 
     def _group_context(user, exclude=None):
         # Names a group must not reuse, and the characters it may hold.
@@ -2484,6 +2598,89 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(400, str(err))
         _world_save(user, store)
         return {"default": store["default"]}
+
+    # ---- scenarios: an account's own opening messages for chats. Private to the account.
+    def _scenario_store(st_, user):
+        path = _scenarios_path(st_, user["id"])
+        fresh = not os.path.exists(path)
+        store = scenarios.load(path)
+        if fresh:
+            scenarios.save(path, store)   # write the three defaults once, so edits have a file to change
+        return store
+
+    def _scenario_save(user, store):
+        scenarios.save(_scenarios_path(st, user["id"]), store)
+
+    @app.get("/api/scenarios")
+    def scenarios_list(request: Request):
+        user = require(request)
+        store = _scenario_store(st, user)
+        return {"scenarios": store["items"], "mode": store["mode"], "fixed": store["fixed"],
+                "max": scenarios.MAX_SCENARIOS, "name_max": scenarios.NAME_MAX, "text_max": scenarios.TEXT_MAX,
+                "modes": [{"key": "off", "label": "Off"},
+                          {"key": "fixed", "label": "One chosen scenario"},
+                          {"key": "random", "label": "Random each new chat"}]}
+
+    @app.post("/api/scenarios")
+    async def scenario_create(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        store = _scenario_store(st, user)
+        try:
+            item = scenarios.create(store, body.get("name", ""), body.get("text", ""),
+                                    datetime.datetime.now().isoformat(timespec="seconds"))
+        except scenarios.ScenarioError as err:
+            raise HTTPException(400, str(err))
+        _scenario_save(user, store)
+        return item
+
+    @app.put("/api/scenarios/{sid}")
+    async def scenario_update(sid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        store = _scenario_store(st, user)
+        try:
+            item = scenarios.update(store, sid, body.get("name", ""), body.get("text", ""))
+        except scenarios.ScenarioError as err:
+            raise HTTPException(400, str(err))
+        _scenario_save(user, store)
+        return item
+
+    @app.delete("/api/scenarios/{sid}")
+    def scenario_delete(sid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        store = _scenario_store(st, user)
+        try:
+            scenarios.delete(store, sid)
+        except scenarios.ScenarioError as err:
+            raise HTTPException(400, str(err))
+        _scenario_save(user, store)
+        return {"ok": True}
+
+    # How a new chat gets its opening: off, one chosen scenario, or one at random.
+    @app.post("/api/scenarios/mode")
+    async def scenario_mode(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        store = _scenario_store(st, user)
+        try:
+            scenarios.set_mode(store, str(body.get("mode") or "off"), body.get("fixed") or None)
+        except scenarios.ScenarioError as err:
+            raise HTTPException(400, str(err))
+        _scenario_save(user, store)
+        return {"mode": store["mode"], "fixed": store["fixed"]}
+
+    # The opening a new chat should offer. Nothing is sent: the page shows it with a Start button.
+    @app.get("/api/scenario-draft")
+    def scenario_draft(request: Request, character: str):
+        user = require(request)
+        _resolve_profile(st, character, user)
+        store = _scenario_store(st, user)
+        return {"scenario": scenarios.choose(store)}
 
     # The world one solo or group chat or a novel uses. A chat with no choice uses the account default; NO_WORLD means none.
     @app.post("/api/chat-world")
@@ -3329,7 +3526,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         _check_caps(st, user)
 
         def work():
-            return profiles.generate(st.client, card, on_call=lambda model: _count_model_call(st, user["id"], model),
+            return profiles.generate(llm_backends.with_usage(st.client, _system_sink(st)), card,
+                                     on_call=lambda model: _count_system_call(st, model),
                                      gate=st.profile_gate, wait_timeout=30, priority=True,
                                      known_tags=_known_tags(st))
         try:
@@ -3732,8 +3930,8 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(400, str(err))
 
         def work():
-            return draft.draft_character(st.client, text,
-                                         on_call=lambda model: _count_model_call(st, user["id"], model),
+            return draft.draft_character(llm_backends.with_usage(st.client, _system_sink(st)), text,
+                                         on_call=lambda model: _count_system_call(st, model),
                                          gate=st.profile_gate, wait_timeout=30, priority=True)
         try:
             result = await run_in_threadpool(work)
