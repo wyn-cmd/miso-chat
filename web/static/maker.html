@@ -9,7 +9,7 @@
   <script src="/static/theme-init.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=rpUi===null?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","folio","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
@@ -64,7 +64,7 @@
           <legend>Pictures</legend>
           <p class="muted">The picture shown beside this group in the sidebar, and the background behind its chat. Only you see them. A new picture replaces the old one.</p>
           <div class="sheet-row"><label for="iconFile">Picture</label>
-            <span class="slider-ctl"><input id="iconFile" type="file" accept="image/png,image/jpeg" aria-label="Group picture"><button id="iconRemove" class="ghost small" type="button" hidden>Remove</button></span>
+            <span class="slider-ctl"><input id="iconFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Group picture"><button id="iconRemove" class="ghost small" type="button" hidden>Remove</button></span>
           </div>
           <p id="iconMsg" class="muted" role="status"></p>
           <div class="sheet-row"><label for="bgFile">Background</label>
