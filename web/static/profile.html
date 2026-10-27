@@ -9,7 +9,7 @@
   <script src="/static/theme-init.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=rpUi===null?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","folio","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
@@ -17,6 +17,9 @@
 </head>
 <body>
   <header>
+    <button id="menuBtn" class="ghost menu-btn" type="button" aria-label="Open character list" aria-controls="sidebar" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+    </button>
     <a class="brand" href="/">Miso Chat</a>
     <span id="who" class="muted"></span>
     <span class="spacer"></span>
@@ -25,36 +28,51 @@
     <button id="logoutBtn" class="ghost" type="button">Log out</button>
     <button id="themeBtn" class="icon-btn" type="button" aria-label="Switch to light theme"></button>
   </header>
-  <main class="profile-main">
-    <p id="loading" class="muted">Loading profile…</p>
-    <p id="profileErr" class="error" role="alert"></p>
-    <section id="profileCard" class="profile-hero" hidden aria-labelledby="profileName">
-      <span id="profileArt" class="profile-art" aria-hidden="true"></span>
-      <span class="profile-shade" aria-hidden="true"></span>
-      <div class="profile-hero-body">
-        <span id="profileAvatar" class="profile-avatar" aria-hidden="true"></span>
-        <div class="profile-headline">
-          <h1 id="profileName"></h1>
-          <p id="profileMeta" class="muted"></p>
-          <p id="profileBio" class="profile-bio"></p>
-          <div class="row">
-            <a id="profileEdit" class="button-link" href="/chat?settings=account" hidden>Edit profile</a>
+  <div class="shell">
+    <aside id="sidebar" class="sidebar" aria-label="Characters">
+      <div class="side-top">
+        <h2>Characters</h2>
+        <a id="sideProfile" class="side-profile" href="#" hidden aria-label="Your profile page" title="Your profile page"></a>
+      </div>
+      <div id="charList" class="char-list"></div>
+      <div id="groupBox" hidden>
+        <h2>Group chats</h2>
+        <div id="groupList" class="char-list"></div>
+      </div>
+    </aside>
+    <div id="scrim" class="scrim" hidden></div>
+    <main class="content profile-main">
+      <p id="loading" class="muted">Loading profile…</p>
+      <p id="profileErr" class="error" role="alert"></p>
+      <section id="profileCard" class="profile-hero" hidden aria-labelledby="profileName">
+        <span id="profileArt" class="profile-art" aria-hidden="true"></span>
+        <video id="profileArtVideo" class="profile-art-video" muted loop playsinline preload="metadata" aria-hidden="true" hidden></video>
+        <span class="profile-shade" aria-hidden="true"></span>
+        <div class="profile-hero-body">
+          <span id="profileAvatar" class="profile-avatar" aria-hidden="true"></span>
+          <div class="profile-headline">
+            <h1 id="profileName"></h1>
+            <p id="profileMeta" class="muted"></p>
+            <p id="profileBio" class="profile-bio"></p>
+            <div class="row">
+              <a id="profileEdit" class="button-link" href="/chat?settings=account" hidden>Edit profile</a>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
-    <section id="charactersSection" hidden>
-      <h2 id="charactersTitle">Characters</h2>
-      <div id="characterGrid" class="profile-grid"></div>
-      <p id="charactersEmpty" class="muted" hidden></p>
-    </section>
-    <section id="likesSection" hidden>
-      <h2>Liked characters</h2>
-      <p id="likesNote" class="muted"></p>
-      <div id="likesGrid" class="profile-grid"></div>
-    </section>
-    <p><a href="/">Back to all characters</a></p>
-  </main>
+      </section>
+      <section id="charactersSection" class="profile-section" hidden>
+        <h2 id="charactersTitle">Characters</h2>
+        <div id="characterGrid" class="profile-grid"></div>
+        <p id="charactersEmpty" class="muted" hidden></p>
+      </section>
+      <section id="likesSection" class="profile-section" hidden>
+        <h2>Liked characters</h2>
+        <p id="likesNote" class="muted"></p>
+        <div id="likesGrid" class="profile-grid"></div>
+      </section>
+      <p class="profile-back"><a href="/">Back to all characters</a></p>
+    </main>
+  </div>
   <script src="/static/common.js"></script>
   <script src="/static/profile.js"></script>
 </body>

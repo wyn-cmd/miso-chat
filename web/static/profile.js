@@ -1,6 +1,68 @@
 // Account profile page: description, picture, background, the characters the account made, and the
-// characters it has liked when it shares them. Fetched from /api/account/<username>.
+// characters it has liked when it shares them. Fetched from /api/account/<username>. The sidebar holds
+// the viewer's own characters, the same list as the home page, so a chat is always one click away.
 const $ = (id) => document.getElementById(id);
+let colors = {};
+let iconNames = new Set();
+
+function mobileNav() { return window.matchMedia("(max-width: 760px)").matches; }
+
+function setSidebar(open) {
+  $("sidebar").classList.toggle("open", open);
+  $("scrim").hidden = !open;
+  $("menuBtn").setAttribute("aria-expanded", String(open));
+}
+
+function sidebarIcon(name) {
+  const box = el("span", "", "char-icon" + (iconNames.has(name) ? "" : " placeholder"));
+  if (iconNames.has(name)) {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.src = "/api/icon/" + encodeURIComponent(name);
+    img.loading = "lazy";
+    box.appendChild(img);
+  } else {
+    box.appendChild(faceIcon(colors[name]));
+  }
+  return box;
+}
+
+function sidebarButton(name) {
+  const b = el("button", "", "char-item");
+  b.type = "button";
+  b.dataset.name = name;
+  b.dataset.chatName = name;   // where the missed check-in dot goes
+  if (colors[name]) b.style.setProperty("--dot", colors[name]);
+  b.appendChild(sidebarIcon(name));
+  b.appendChild(el("span", name, "char-name"));
+  b.addEventListener("click", () => { location.href = "/chat?c=" + encodeURIComponent(name); });
+  return b;
+}
+
+// The viewer's own characters and groups, drawn the way the home page draws them.
+async function loadSidebar() {
+  let data;
+  try {
+    data = await api("GET", "/api/characters");
+  } catch (err) {
+    $("sidebar").hidden = true;   // the page still works without the list
+    $("menuBtn").hidden = true;
+    return;
+  }
+  colors = data.colors || {};
+  iconNames = new Set(data.icons || []);
+  const list = $("charList");
+  list.textContent = "";
+  for (const name of data.sidebar || []) list.appendChild(sidebarButton(name));
+  if (!(data.sidebar || []).length) {
+    list.appendChild(el("p", "Characters you chat with appear here.", "muted"));
+  }
+  const groups = $("groupList");
+  groups.textContent = "";
+  for (const g of data.groups || []) groups.appendChild(sidebarButton(g.name));
+  $("groupBox").hidden = !(data.groups || []).length;
+  paintUnread();
+}
 
 function usernameFromPath() {
   const parts = location.pathname.split("/").filter(Boolean);
@@ -22,8 +84,10 @@ async function init() {
   }
   if (me.must_change) { location.href = "/chat"; return; }
   $("who").textContent = me.username;
+  renderSideProfile(me);
   if (me.is_admin) $("adminLink").hidden = false;
   if (me.avatar_shape) applyAvatarShape(me.avatar_shape);
+  loadSidebar();
 
   const username = usernameFromPath();
   try {
@@ -43,12 +107,28 @@ function render(data) {
   hero.hidden = false;
   if (data.has_background) {
     hero.classList.add("has-art");
-    $("profileArt").style.backgroundImage =
-      'url("/api/account-background/' + encodeURIComponent(data.username) + "?v=" + data.background_version + '")';
+    const base = "/api/account-background/" + encodeURIComponent(data.username) + "?v=" + data.background_version;
+    const poster = "/api/account-background-poster/" + encodeURIComponent(data.username) + "?v=" + data.poster_version;
+    const video = $("profileArtVideo");
+    if (data.background_video && video && !motionReduced()) {
+      // A video background loops behind the hero. Muted, or the browser refuses to start it.
+      video.poster = poster;
+      video.src = base;
+      video.hidden = false;
+      setArtPlaying(hero, true);
+      hero.classList.add("has-video");
+    } else {
+      // A still background, or a video shown as its first frame when reduced motion was asked for.
+      $("profileArt").style.backgroundImage =
+        'url("' + (data.background_video ? poster : base) + '")';
+    }
   }
 
   const avatar = $("profileAvatar");
   avatar.textContent = "";
+  // The monogram is a case of its own: with no picture the box needs a tile, or a bright ring around an
+  // empty box reads as a broken image. The class says so, since CSS cannot see whether an <img> arrived.
+  hero.classList.toggle("no-avatar", !data.has_avatar);
   if (data.has_avatar) {
     const img = document.createElement("img");
     img.alt = "";
@@ -135,9 +215,12 @@ function characterCard(card) {
   return link;
 }
 
+$("menuBtn").addEventListener("click", () => setSidebar(!$("sidebar").classList.contains("open")));
+$("scrim").addEventListener("click", () => setSidebar(false));
 $("logoutBtn").addEventListener("click", async () => {
   try { await api("POST", "/api/logout"); } catch (err) { /* the session is gone either way */ }
   location.href = "/login";
 });
 
 init();
+refreshUnread();

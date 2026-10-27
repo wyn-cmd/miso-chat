@@ -28,6 +28,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.gzip import GZipMiddleware
 
 from google import genai
 from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_TEMPERATURE, GROUP_TEMPERATURE
@@ -36,7 +37,7 @@ import sandbox
 import llm_backends
 from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude, novels, worlds, tensions, passwords
 import pytz
-from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, TIERS, TIER_MONTHLY_TOKENS, budget_days, recent_days, verify_password, needs_rehash
+from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, TIERS, TIER_MONTHLY_TOKENS, budget_days, recent_days, verify_password, needs_rehash, ADMIN_NAME
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHAR_ROOT = os.path.dirname(HERE)
@@ -200,12 +201,12 @@ def _bubble_pref(store, uid):
 
 
 def _default_art():
-    # Default backgrounds for characters with none: <look>-N.jpg/png/webp in static/defaults (look = moon, folio, spore, classic).
+    # Default backgrounds for characters with none: <look>-N.jpg/png/webp in static/defaults (look = moon, folio, classic).
     # The pages keep only the set for the look the reader is using, and pick one at random from it.
     d = os.path.join(HERE, "static", "defaults")
     if not os.path.isdir(d):
         return []
-    names = sorted(f for f in os.listdir(d) if re.match(r"^(moon|folio|spore|classic)-[\w-]+\.(jpe?g|png|webp)$", f))
+    names = sorted(f for f in os.listdir(d) if re.match(r"^(moon|folio|classic)-[\w-]+\.(jpe?g|png|webp)$", f))
     return ["/static/defaults/" + f for f in names]
 
 
@@ -354,8 +355,35 @@ def _set_session_cookie(resp, token, remember):
     resp.set_cookie(COOKIE, token, httponly=True, samesite="lax", secure=COOKIE_SECURE, path="/", **extra)
 
 
+_scan_cache = {}   # character root -> (key, (solo, groups)); see scan_characters
+
+
+def _scan_key(root):
+    # The modified time and size of everything scan_characters reads. A change to any of them gives a new key,
+    # so a cached result is only reused while the folders are unchanged.
+    def stamp(path):
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+    key = [stamp(root), stamp(os.path.join(root, "personas.json"))]
+    for d in sorted(os.listdir(root)):
+        p = os.path.join(root, d)
+        if os.path.isdir(p):
+            key.append((d, stamp(os.path.join(p, "group_config.json")), stamp(os.path.join(p, "character.md"))))
+    return key
+
+
 def scan_characters(root):
-    # Solo characters have character.md; groups have group_config.json. Anything else is ignored.
+    # Solo characters have character.md; groups have group_config.json. Anything else is ignored. The list is
+    # kept until a file it reads changes, so the pages do not re-read every folder on each request. Copies are
+    # returned, so a caller that edits its list does not change the cache.
+    key = _scan_key(root)
+    cached = _scan_cache.get(root)
+    if cached and cached[0] == key:
+        solo, groups = cached[1]
+        return list(solo), {g: list(m) for g, m in groups.items()}
     solo, groups = [], {}
     personas = set(load_personas(root))
     for d in sorted(os.listdir(root)):
@@ -372,6 +400,7 @@ def scan_characters(root):
             groups[d] = [m for m in members if isinstance(m, str)]
         elif os.path.exists(os.path.join(p, "character.md")):
             solo.append(d)
+    _scan_cache[root] = (key, (list(solo), {g: list(m) for g, m in groups.items()}))
     return solo, groups
 
 
@@ -810,10 +839,28 @@ def _count_model_call(st, uid, model):
         st.rpm.append(time.time())
 
 
+MEDIA_TYPES = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+               ".gif": "image/gif", ".mp4": "video/mp4", ".webm": "video/webm"}
+
+
+def _media_for(path):
+    # The content type for a stored picture or background video. A GIF must be served as image/gif or the
+    # browser shows one frame; a video must be its own type or it will not play.
+    return MEDIA_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
+
+
+def _has_account_page(user):
+    # Every account gets a profile page except the built-in 'admin'. That one is the fallback creator for
+    # character folders from before creators were recorded, and it is the name any admin edits as, so a
+    # page for it would describe nobody and would draw every older character to one place.
+    if user is None or user["disabled"]:
+        return False
+    return str(user["username"]).lower() != ADMIN_NAME.lower()
+
+
 def _creator_linkable(st, creator):
-    # Only a real, enabled, non-admin account has a profile page to open.
-    user = st.store.find_user(creator)
-    return bool(user and not user["is_admin"] and not user["disabled"])
+    # The creator handle links when that account has a profile page to open.
+    return _has_account_page(st.store.find_user(creator))
 
 
 def _card_for(st, folder):
@@ -832,16 +879,20 @@ def _card_for(st, folder):
 def _account_files(st, uid):
     avatar = account_profiles.avatar_path(st.data_dir, uid)
     background = account_profiles.background_path(st.data_dir, uid)
-    return avatar, background
+    video = account_profiles.background_video_path(st.data_dir, uid)
+    return avatar, background, video
 
 
 def _account_profile_meta(st, uid):
     profile = account_profiles.read(st.data_dir, uid)
-    avatar, background = _account_files(st, uid)
+    avatar, background, video = _account_files(st, uid)
+    poster = account_profiles.background_poster_path(st.data_dir, uid)
     return {"description": profile["description"], "likes_visible": profile["likes_visible"],
-            "has_avatar": avatar is not None, "has_background": background is not None,
+            "has_avatar": avatar is not None, "has_background": (background or video) is not None,
+            "background_video": video is not None,
             "avatar_version": account_profiles.version(avatar),
-            "background_version": account_profiles.version(background)}
+            "background_version": account_profiles.version(background or video),
+            "poster_version": account_profiles.version(poster)}
 
 
 def _created_cards(st, viewer, username):
@@ -875,8 +926,8 @@ def _liked_cards(st, viewer, uid):
 
 def _account_target(st, username):
     target = st.store.find_user(username)
-    if target is None or target["is_admin"] or target["disabled"]:
-        raise HTTPException(404, "This account does not have a profile.")
+    if not _has_account_page(target):
+        raise HTTPException(404, "This account does not have a profile page.")
     return target
 
 
@@ -1687,6 +1738,20 @@ class BodyLimit:
         return await self.app(scope, again, send)
 
 
+class StaticGzip:
+    # Compresses the static scripts and styles, the largest files a page loads. Chat replies stream as they are
+    # written, and a compressor would hold them back, so only /static/ paths pass through the compressor.
+    def __init__(self, app):
+        self.app = app
+        self.gzip = GZipMiddleware(app, minimum_size=512)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith("/static/"):
+            await self.gzip(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+
 async def _plain_reply(send, status, text):
     body = json.dumps({"detail": text}).encode("utf-8")
     await send({"type": "http.response.start", "status": status, "headers": [
@@ -1730,6 +1795,7 @@ def make_app(client=None, data_dir=None, char_root=None):
 
     # Sign-in bodies and the page's JSON are small, so larger ones are refused. Uploads keep their own limits.
     app.add_middleware(BodyLimit)
+    app.add_middleware(StaticGzip)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -2029,7 +2095,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             info["models"] = {"gemini": "auto", "extra": [m for m in _extra_models(st) if _model_allowed(st, user, m)]}
             info["model"] = store.get_pref(user["id"], "model") or ""   # the saved choice, so the picker reloads it
             info["personas"] = _persona_list(st, user)
-            if not user["is_admin"]:
+            if _has_account_page(user):
                 info["profile"] = _account_profile_meta(st, user["id"])
         resp = JSONResponse(info)
         token = request.cookies.get(COOKIE)
@@ -2079,8 +2145,8 @@ def make_app(client=None, data_dir=None, char_root=None):
     async def account_profile_set(request: Request):
         _csrf(request)
         user = require(request)
-        if user["is_admin"]:
-            raise HTTPException(403, "Admin accounts do not have a profile.")
+        if not _has_account_page(user):
+            raise HTTPException(403, "This account does not have a profile page.")
         body = _read_body(await request.json())
         has_description = "description" in body
         has_likes = "likes_visible" in body
@@ -2100,8 +2166,8 @@ def make_app(client=None, data_dir=None, char_root=None):
     async def account_avatar_save(request: Request):
         _csrf(request)
         user = require(request)
-        if user["is_admin"]:
-            raise HTTPException(403, "Admin accounts do not have a profile.")
+        if not _has_account_page(user):
+            raise HTTPException(403, "This account does not have a profile page.")
         try:
             account_profiles.save_avatar(st.data_dir, user["id"], await request.body())
         except editor.EditorError as err:
@@ -2112,8 +2178,8 @@ def make_app(client=None, data_dir=None, char_root=None):
     def account_avatar_remove(request: Request):
         _csrf(request)
         user = require(request)
-        if user["is_admin"]:
-            raise HTTPException(403, "Admin accounts do not have a profile.")
+        if not _has_account_page(user):
+            raise HTTPException(403, "This account does not have a profile page.")
         account_profiles.remove_avatar(st.data_dir, user["id"])
         return _account_profile_meta(st, user["id"])
 
@@ -2121,10 +2187,11 @@ def make_app(client=None, data_dir=None, char_root=None):
     async def account_background_save(request: Request):
         _csrf(request)
         user = require(request)
-        if user["is_admin"]:
-            raise HTTPException(403, "Admin accounts do not have a profile.")
+        if not _has_account_page(user):
+            raise HTTPException(403, "This account does not have a profile page.")
         try:
-            account_profiles.save_background(st.data_dir, user["id"], await request.body())
+            await run_in_threadpool(account_profiles.save_background, st.data_dir, user["id"],
+                                    await request.body())
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         return _account_profile_meta(st, user["id"])
@@ -2133,8 +2200,8 @@ def make_app(client=None, data_dir=None, char_root=None):
     def account_background_remove(request: Request):
         _csrf(request)
         user = require(request)
-        if user["is_admin"]:
-            raise HTTPException(403, "Admin accounts do not have a profile.")
+        if not _has_account_page(user):
+            raise HTTPException(403, "This account does not have a profile page.")
         account_profiles.remove_background(st.data_dir, user["id"])
         return _account_profile_meta(st, user["id"])
 
@@ -2145,16 +2212,31 @@ def make_app(client=None, data_dir=None, char_root=None):
         path = account_profiles.avatar_path(st.data_dir, target["id"])
         if path is None:
             raise HTTPException(404, "No profile picture.")
-        return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "private, max-age=300"})
+        return FileResponse(path, media_type=_media_for(path),
+                            headers={"Cache-Control": "private, max-age=300"})
 
     @app.get("/api/account-background/{username}")
     def account_background_get(username: str, request: Request):
         require(request)
         target = _account_target(st, username)
-        path = account_profiles.background_path(st.data_dir, target["id"])
+        path = (account_profiles.background_video_path(st.data_dir, target["id"])
+                or account_profiles.background_path(st.data_dir, target["id"]))
         if path is None:
             raise HTTPException(404, "No profile background.")
-        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
+        return FileResponse(path, media_type=_media_for(path),
+                            headers={"Cache-Control": "private, max-age=300"})
+
+    @app.get("/api/account-background-poster/{username}")
+    def account_background_poster(username: str, request: Request):
+        # The still frame of a video background. Shown while it loads and instead of it when the reader
+        # asked for reduced motion.
+        require(request)
+        target = _account_target(st, username)
+        path = account_profiles.background_poster_path(st.data_dir, target["id"])
+        if path is None:
+            raise HTTPException(404, "No poster frame.")
+        return FileResponse(path, media_type="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=300"})
 
     @app.get("/api/account/{username}")
     def account_profile(username: str, request: Request):
@@ -2259,7 +2341,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         try:
             for bid in editor.background_ids(root, gid):
                 editor.remove_background(root, gid, bid)
-            editor.add_background(root, gid, data)
+            await run_in_threadpool(editor.add_background, root, gid, data)
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         return {"ok": True, "has_background": True}
@@ -2784,7 +2866,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(404, "No icon.")
         if path is None:
             raise HTTPException(404, "No icon.")
-        media = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg"}.get(os.path.splitext(path)[1].lower())
+        media = _media_for(path)
         return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=300"})
 
     @app.post("/api/settings")
@@ -3326,7 +3408,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(404, "No such character.")
         if path is None:
             raise HTTPException(404, "No icon.")
-        media = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg"}.get(os.path.splitext(path)[1].lower())
+        media = _media_for(path)
         return FileResponse(path, media_type=media, headers={"Cache-Control": cache})
 
     @app.get("/api/icon/{name}/hash")
@@ -3392,7 +3474,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         _require_editor(require(request), name)
         data = await request.body()
         try:
-            bid = editor.add_background(st.char_root, name, data)
+            bid = await run_in_threadpool(editor.add_background, st.char_root, name, data)
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         return {"ok": True, "id": bid, "backgrounds": editor.background_ids(st.char_root, name)}
@@ -3420,7 +3502,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(404, "No such character.")
         if path is None:
             raise HTTPException(404, "No background.")
-        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
+        return FileResponse(path, media_type=_media_for(path), headers={"Cache-Control": "private, max-age=300"})
 
     @app.get("/api/admin/providers")
     def admin_providers_get(request: Request):

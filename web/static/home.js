@@ -21,6 +21,7 @@ async function init() {
   // A new account must set its password first, and that happens on the chat page.
   if (me.must_change) { location.href = "/chat"; return; }
   $("who").textContent = me.username;
+  renderSideProfile(me);
   if (me.avatar_shape) applyAvatarShape(me.avatar_shape);
   if (me.is_admin) $("adminLink").hidden = false;
   await loadCards();
@@ -119,7 +120,7 @@ function renderRecommended(recs, cards) {
   $("homeRecs").hidden = grid.childElementCount === 0;
 }
 
-// The creator handle. Admin accounts have no profile, so their handle stays plain text.
+// The creator handle. The built-in admin account has no profile page, so its handle stays plain text.
 function creatorHandle(name, linkable) {
   const creator = name || "admin";
   if (linkable === false || creator.toLowerCase() === "admin") return el("span", "@" + creator, "home-creator");
@@ -133,10 +134,14 @@ function creatorHandle(name, linkable) {
 function renderCard(card, container) {
   const wrap = el("div", "", "home-card");
   wrap.dataset.chatName = card.name;   // where the missed check-in dot goes
-  const artIds = (card.backgrounds || []).length ? card.backgrounds : lookDefaults(card.default_backgrounds);
+  // A card with no pictures of its own carries a field of circles instead of the shared defaults.
+  const artIds = card.backgrounds || [];
   if (artIds.length) {
     wrap.classList.add("has-art");
     buildArt(wrap, card.name, artIds, container);
+  } else {
+    wrap.classList.add("has-field");
+    wrap.appendChild(circleField(2));
   }
 
   const open = el("div", "", "home-open");
@@ -223,11 +228,6 @@ const ART_SPREAD_MS = 3000;
 const artRuns = new Map();   // container -> list of stop functions
 const REDUCE_MOTION = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
-function artPath(name, bid) {
-  if (bid.charAt(0) === "/") return bid;   // a shared default, already a path
-  return "/api/background/" + encodeURIComponent(name) + "?b=" + encodeURIComponent(bid);
-}
-
 function otherId(ids, current) {
   const pool = ids.length > 1 ? ids.filter((x) => x !== current) : ids;
   return pool[Math.floor(Math.random() * pool.length)];
@@ -236,6 +236,24 @@ function otherId(ids, current) {
 function stopArt(container) {
   for (const stop of artRuns.get(container) || []) stop();
   artRuns.delete(container);
+  for (const v of container.querySelectorAll("video")) v.pause();
+}
+
+// One layer holds either a picture or a video; re-using the layer is what makes the fade between two
+// pieces of art work for both. When the reader asked for reduced motion a video is shown as its poster
+// frame instead: the still is the point, so the video itself is never downloaded.
+function fillArtLayer(layer, name, id) {
+  const video = isVideoArt(id);
+  const still = video ? posterFor(id) : null;
+  const playVideo = video && !motionReduced();
+  layer.textContent = "";
+  layer.style.backgroundImage = "";
+  layer.classList.toggle("video", playVideo);
+  if (playVideo) {
+    layer.appendChild(artVideo(artUrl(name, id), artUrl(name, still)));
+  } else {
+    layer.style.backgroundImage = 'url("' + artUrl(name, still || id) + '")';
+  }
 }
 
 // Two image layers fade into each other, with a shade on top. The stack sits behind the text.
@@ -248,31 +266,35 @@ function buildArt(host, name, ids, container) {
 
   let current = ids[Math.floor(Math.random() * ids.length)];
   let front = 0;
-  layers[0].style.backgroundImage = 'url("' + artPath(name, current) + '")';
+  fillArtLayer(layers[0], name, current);
   layers[0].classList.add("on");
+  setArtPlaying(layers[0], true);
   if (ids.length < 2 || REDUCE_MOTION) return;
 
   let timer = null;
   let stopped = false;
+  const swap = (next) => {
+    const back = layers[1 - front];
+    fillArtLayer(back, name, next);
+    back.classList.add("on");
+    layers[front].classList.remove("on");
+    setArtPlaying(layers[front], false);
+    setArtPlaying(back, true);
+    front = 1 - front;
+    current = next;
+    schedule();
+  };
   const schedule = () => { timer = setTimeout(step, ART_MIN_MS + Math.random() * ART_SPREAD_MS); };
   const step = () => {
     timer = null;
     if (stopped || !stack.isConnected) return;
     if (document.hidden) { schedule(); return; }
     const next = otherId(ids, current);
+    if (isVideoArt(next)) { swap(next); return; }   // a video warms itself up; there is no image to preload
     const pre = new Image();
-    pre.onload = () => {
-      if (stopped) return;
-      const back = layers[1 - front];
-      back.style.backgroundImage = 'url("' + artPath(name, next) + '")';
-      back.classList.add("on");
-      layers[front].classList.remove("on");
-      front = 1 - front;
-      current = next;
-      schedule();
-    };
+    pre.onload = () => { if (!stopped) swap(next); };
     pre.onerror = schedule;
-    pre.src = artPath(name, next);
+    pre.src = artUrl(name, next);
   };
   schedule();
   const stop = () => { stopped = true; clearTimeout(timer); };
