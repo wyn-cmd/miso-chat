@@ -309,7 +309,7 @@ class ClaudeCodeChat:
 
     def _run(self, text):
         # system text goes in a file (line breaks in command-line arguments break through claude.cmd).
-        # --setting-sources "" keeps the personal CLAUDE.md and settings out of roleplay replies.
+        # --setting-sources "" keeps the personal project instructions and settings out of roleplay replies.
         import os
         import tempfile
         fd, sys_path = tempfile.mkstemp(suffix=".txt", prefix="rp_sys_")
