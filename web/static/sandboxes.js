@@ -15,7 +15,7 @@ async function loadCharacters() {
   picker.textContent = "";
   const first = document.createElement("option");
   first.value = "";
-  first.textContent = "Choose a character";
+  first.textContent = window.tr("Choose a character");
   picker.appendChild(first);
   for (const entry of data.solo || []) {
     const name = nameOf(entry);
@@ -34,10 +34,10 @@ async function showCharacter(name) {
   $("accountsSection").hidden = true;
   if (!name) return;
   const data = await api("GET", "/api/admin/sandboxes/" + encodeURIComponent(name));
-  $("accountsTitle").textContent = "Sandboxes for " + data.character;
+  $("accountsTitle").textContent = window.tr("Sandboxes for {name}", { name: data.character });
   $("flagNote").textContent = data.enabled
-    ? "This character's sandbox is switched on."
-    : "This character's sandbox is switched off. Existing files are kept, and the model can't reach them.";
+    ? window.tr("This character's sandbox is switched on.")
+    : window.tr("This character's sandbox is switched off. Existing files are kept, and the model can't reach them.");
   const body = $("accounts");
   body.textContent = "";
   for (const u of data.users) {
@@ -52,9 +52,9 @@ async function showCharacter(name) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "ghost small";
-    b.textContent = "Browse";
+    b.textContent = window.tr("Browse");
     b.disabled = u.files === 0;
-    b.title = u.files === 0 ? "No files yet" : "";
+    b.title = u.files === 0 ? window.tr("No files yet") : "";
     b.addEventListener("click", () => openAccount(u.id, u.username));
     td.appendChild(b);
     tr.appendChild(td);
@@ -65,7 +65,7 @@ async function showCharacter(name) {
     const td = document.createElement("td");
     td.colSpan = 4;
     td.className = "muted";
-    td.textContent = "No accounts yet.";
+    td.textContent = window.tr("No accounts yet.");
     tr.appendChild(td);
     body.appendChild(tr);
   }
@@ -74,7 +74,7 @@ async function showCharacter(name) {
 
 function openAccount(uid, username) {
   currentUid = uid;
-  $("browseTitle").textContent = username + "'s sandbox for " + currentChar;
+  $("browseTitle").textContent = window.tr("{name}'s sandbox for {character}", { name: username, character: currentChar });
   $("browseSection").hidden = false;
   browse("/").catch((err) => setErr(err.message));
 }
@@ -92,7 +92,7 @@ async function browse(path) {
   list.textContent = "";
   for (const e of data.entries) {
     const li = document.createElement("li");
-    li.textContent = (e.type === "folder" ? "[folder] " : "") + e.name;
+    li.textContent = (e.type === "folder" ? window.tr("[folder]") + " " : "") + e.name;
     li.className = e.type === "folder" ? "sandbox-folder" : "sandbox-item";
     li.tabIndex = 0;
     const child = (currentPath === "/" ? "" : currentPath) + "/" + e.name;
@@ -104,10 +104,10 @@ async function browse(path) {
   if (!data.entries.length) {
     const li = document.createElement("li");
     li.className = "muted";
-    li.textContent = "This folder is empty.";
+    li.textContent = window.tr("This folder is empty.");
     list.appendChild(li);
   }
-  if (data.truncated) $("fileNote").textContent = "Only the first 200 entries are shown.";
+  if (data.truncated) $("fileNote").textContent = window.tr("Only the first 200 entries are shown.");
   $("browseUp").onclick = () => {
     if (currentPath === "/") return;
     const cut = currentPath.lastIndexOf("/");
@@ -124,7 +124,7 @@ async function readFile(path) {
   const pre = $("fileText");
   pre.textContent = data.text;   // plain text only
   pre.hidden = false;
-  $("fileNote").textContent = data.truncated ? "Showing the first 20,000 characters." : "";
+  $("fileNote").textContent = data.truncated ? window.tr("Showing the first 20,000 characters.") : "";
 }
 
 document.addEventListener("DOMContentLoaded", () => {

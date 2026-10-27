@@ -241,6 +241,8 @@ Once an account has chatted with characters, the home page shows up to four reco
 
 Avatars are squircles by default. Choose the circle option in the chat Settings.
 
+The search button in the sidebar searches characters, worlds, Mind Palace entries and saved chats. It ignores case and accents, and every word in the query must match. A result opens the chat or the settings panel that owns the match.
+
 ## Chat branches
 
 Each saved message has a Branch button. It copies the chat up to and including that message into a new branch and opens the copy. The chat you branched from is left as it was. The picker in the chat bar switches between the main chat and its branches, and Delete branch removes the open one.
@@ -365,6 +367,12 @@ Admins add backgrounds to a character in the character editor. A character can h
 - Under Settings, Appearance, two sliders set the background brightness (darker or lighter) and the chat bubble opacity. Each account keeps its own values.
 
 A background is never read by OCR and is never used as the profile picture.
+
+## Read aloud
+
+A speaker button under a character reply reads it with the browser's speech synthesis. Press it again to stop. Under Settings, Voice & audio, choose a voice, rate, pitch and volume, test the result, and save a different voice for each character or group. Auto-read is off by default and reads new character replies as they arrive.
+
+These settings are kept in the browser, not the account. The server sends no audio, so the browser or operating system must have voices installed. A browser with no voices shows a status message instead.
 
 ## Themes
 

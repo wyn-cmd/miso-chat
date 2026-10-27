@@ -240,6 +240,10 @@ def needs_rehash(stored):
         return False
 
 
+# The user id under which server-side calls that belong to no account are recorded. Real accounts start at 1.
+SYSTEM_USER = 0
+
+
 class Store:
     def __init__(self, path):
         self.path = path
@@ -585,6 +589,19 @@ class Store:
                   "ON CONFLICT(user_id, day) DO UPDATE SET "
                   "requests = requests + excluded.requests, tokens = tokens + excluded.tokens",
                   (user_id, day, requests, tokens))
+        self._add_daily(day, user_id, requests, tokens, provider, messages, input_tokens, cached_tokens,
+                        output_tokens, seconds, model)
+
+    def add_system_usage(self, requests=0, tokens=0, provider="gemini", input_tokens=0, cached_tokens=0,
+                         output_tokens=0, seconds=0.0, model=None):
+        # Calls the server makes for no account (auto profiles, card drafts). They go into the same daily and
+        # per-model tables under SYSTEM_USER, so the stats total includes them, but never into the usage table
+        # the account caps read, so no one's quota moves.
+        self._add_daily(pacific_date(), SYSTEM_USER, requests, tokens, provider, 0, input_tokens, cached_tokens,
+                        output_tokens, seconds, model)
+
+    def _add_daily(self, day, user_id, requests, tokens, provider, messages, input_tokens, cached_tokens,
+                   output_tokens, seconds, model):
         self._run("INSERT INTO usage_daily (day, user_id, provider, requests, tokens, messages, "
                   "input_tokens, cached_tokens, output_tokens, seconds) "
                   "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
