@@ -14,6 +14,7 @@
 # explicitly as {"thinking": {"type": "disabled"}}.
 import json
 import subprocess
+import time
 from types import SimpleNamespace
 import urllib.error
 import urllib.request
@@ -383,6 +384,76 @@ def _claude_usage(usage):
     prompt = (usage.get("input_tokens") or 0) + read + write
     return usage_obj(prompt, usage.get("output_tokens"), None, read)
 
+
+# ---------------------------------------------------------------- usage of DeepSeek calls
+
+def with_usage(client, sink):
+    # A view of client that reports every DeepSeek call to sink(model, figures, seconds), as the call returns.
+    # figures holds input_tokens, cached_tokens, output_tokens and tokens. Other models pass through unchanged,
+    # so each call site uses the view exactly like the client, and no call site has to count its own tokens.
+    return UsageClient(client, sink)
+
+
+class UsageClient:
+    def __init__(self, client, sink):
+        self._client = client
+        self._sink = sink
+        self.chats = _UsageChats(self)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+class _UsageChats:
+    def __init__(self, view):
+        self.view = view
+
+    def create(self, **kwargs):
+        chat = self.view._client.chats.create(**kwargs)
+        model = kwargs.get("model") or ""
+        if model.startswith("deepseek:"):
+            return _UsageChat(chat, self.view._sink, model)
+        return chat
+
+
+class _UsageChat:
+    def __init__(self, chat, sink, model):
+        self._chat = chat
+        self._sink = sink
+        self._model = model
+
+    def __getattr__(self, name):
+        return getattr(self._chat, name)
+
+    def send_message(self, *args, **kwargs):
+        start = time.time()
+        resp = self._chat.send_message(*args, **kwargs)
+        self._report(getattr(resp, "usage_metadata", None), time.time() - start)
+        return resp
+
+    def send_message_stream(self, *args, **kwargs):
+        # The usage arrives on the last chunk the provider sends, so the figures are read as the chunks pass.
+        start = time.time()
+        usage = None
+        for chunk in self._chat.send_message_stream(*args, **kwargs):
+            found = getattr(chunk, "usage_metadata", None)
+            if found is not None:
+                usage = found
+            yield chunk
+        self._report(usage, time.time() - start)
+
+    def _report(self, usage, seconds):
+        # A call that reports nothing is not counted. Cached tokens are part of the prompt, never more than it.
+        if usage is None:
+            return
+        prompt = int(getattr(usage, "prompt_token_count", None) or 0)
+        cached = min(int(getattr(usage, "cached_content_token_count", None) or 0), prompt)
+        output = int(getattr(usage, "candidates_token_count", None) or 0)
+        total = int(getattr(usage, "total_token_count", None) or 0) or prompt + output
+        if not (prompt or output or total):
+            return
+        self._sink(self._model, {"input_tokens": prompt, "cached_tokens": cached,
+                                 "output_tokens": output, "tokens": total}, round(seconds, 3))
 
 
 # ---------------------------------------------------------------- routing

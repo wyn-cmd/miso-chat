@@ -84,8 +84,8 @@ def _clean_plain(text):
     return t[:1000]
 MEMORY_EVERY = 20       # refresh memory.md every N messages
 MEMORY_SNIPPET = 30     # messages fed into a memory.md refresh
-SOLO_TEMPERATURE = 0.85     # creativity for 1:1 chats unless the user sets their own
-GROUP_TEMPERATURE = 0.7     # group members and the group director
+SOLO_TEMPERATURE = 0.95     # creativity for 1:1 chats unless the user sets their own
+GROUP_TEMPERATURE = 0.95    # group members
 GROUP_CONSECUTIVE = 2       # most replies one member may give in a row within one turn
 AUTO_REPLY_LIMIT = 2        # most replies members give to each other after the director's picks, per turn; 0 turns this off
 AUTO_REQUEST = "Continue the conversation: answer what the group has just said, in character."

@@ -168,14 +168,14 @@ function savedAccent() {
 }
 
 function applyTheme(theme) {
-  const t = theme === "light" ? "light" : "dark";
-  document.documentElement.dataset.theme = t;
+  const mode = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = mode;
   applyMetaTheme();
   for (const b of document.querySelectorAll("#themeBtn")) {
-    const label = t === "light" ? "Switch to dark theme" : "Switch to light theme";
+    const label = t(mode === "light" ? "Switch to dark theme" : "Switch to light theme");
     b.setAttribute("aria-label", label);
     b.title = label;
-    b.innerHTML = t === "light" ? MOON_ICON : SUN_ICON;   // static markup, never model output
+    b.innerHTML = mode === "light" ? MOON_ICON : SUN_ICON;   // static markup, never model output
   }
 }
 
@@ -227,7 +227,7 @@ applyAccent(savedAccent());
 
 function apiError(status, data) {
   const d = data && data.detail;
-  const err = new Error(typeof d === "string" ? d : (d && d.message) || "Request failed");
+  const err = new Error(typeof d === "string" ? d : (d && d.message) || t("Request failed"));
   err.code = d && d.code;
   err.status = status;
   return err;
@@ -305,7 +305,7 @@ async function streamChat(body, handlers, path = "/api/chat") {
     }
   }
   if (!finished && handlers.error) {
-    handlers.error(new Error("The connection dropped. Your message may still have been saved; reloading the chat will show it."));
+    handlers.error(new Error(t("The connection dropped. Your message may still have been saved; reloading the chat will show it.")));
   }
 }
 
@@ -357,8 +357,8 @@ function favStar(name, on, onToggle) {
   s.setAttribute("role", "button");
   s.setAttribute("tabindex", "0");
   s.setAttribute("aria-pressed", String(!!on));
-  s.setAttribute("aria-label", (on ? "Unfavourite " : "Favourite ") + name);
-  s.title = on ? "Remove from favourites" : "Add to favourites";
+  s.setAttribute("aria-label", on ? t("Unfavourite {name}", { name: name }) : t("Favourite {name}", { name: name }));
+  s.title = on ? t("Remove from favourites") : t("Add to favourites");
   const go = async (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -403,7 +403,7 @@ function paintDot(node) {
     node.appendChild(dot);
   }
   dot.textContent = n > 9 ? "9+" : String(n);
-  dot.title = `${n} missed check-in${n === 1 ? "" : "s"}`;
+  dot.title = tn("{n} missed check-in", "{n} missed check-ins", n);
   dot.setAttribute("aria-label", dot.title);
 }
 async function markRead(name) {
@@ -420,7 +420,8 @@ async function markRead(name) {
 // ---- Background art, shared by the gallery, the chat page and the editor --------------------------
 // A background id ending in a video extension is played as a video; every other id is a picture, and a
 // shared default arrives already as a path (so it starts with a slash). Video backgrounds are stored as
-// WebM, with the first frame beside them as <id>.poster.jpg.
+// WebM with an MP4 copy beside them, and the first frame as <id>.poster.jpg. The MP4 is what phones that
+// cannot play VP9 use, so both are offered and the browser picks.
 function isVideoArt(id) {
   return /\.(webm|mp4)$/i.test(String(id || ""));
 }
@@ -428,6 +429,13 @@ function isVideoArt(id) {
 function artUrl(name, id) {
   if (String(id).charAt(0) === "/") return String(id);
   return "/api/background/" + encodeURIComponent(name) + "?b=" + encodeURIComponent(id);
+}
+
+// The H.264 copy of a video background, or null when the id is not a video or is a shared default.
+function artFallbackUrl(name, id) {
+  const s = String(id || "");
+  if (s.charAt(0) === "/" || !/\.webm$/i.test(s)) return null;
+  return artUrl(name, s.replace(/\.webm$/i, ".mp4"));
 }
 
 // The still frame of a video background, or null when the id is not a video.
@@ -440,20 +448,43 @@ function motionReduced() {
   return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 }
 
+// Point a video at its art. The MP4 source comes second and carries no codecs hint, so a browser that
+// cannot decode the VP9 WebM skips it instead of showing a still. A picture background passes no fallback.
+function setArtSources(video, url, fallback) {
+  for (const s of [...video.querySelectorAll("source")]) s.remove();
+  video.removeAttribute("src");
+  if (fallback) {
+    const webm = document.createElement("source");
+    webm.type = 'video/webm; codecs="vp9"';
+    webm.src = url;
+    const mp4 = document.createElement("source");
+    mp4.type = "video/mp4";
+    mp4.src = fallback;
+    video.append(webm, mp4);
+  } else {
+    video.src = url;
+  }
+  video.load();
+}
+
 // A silent looping video for use as a background. It is muted, because browsers refuse to autoplay
 // anything else. Its poster is the first frame, so a paused card shows the picture instead of a black box.
-function artVideo(url, poster) {
+// playsinline and webkit-playsinline keep iPhone Safari from opening it full screen. loop=false is used by
+// the gallery, which waits for a card's video to end before it fades to the next piece.
+function artVideo(url, poster, fallback, loop) {
   const v = document.createElement("video");
   v.className = "art-video";
   v.muted = true;
-  v.loop = true;
+  v.defaultMuted = true;
+  v.loop = loop !== false;
   v.playsInline = true;
   v.preload = "metadata";
   if (poster) v.poster = poster;
   v.setAttribute("muted", "");
   v.setAttribute("playsinline", "");
+  v.setAttribute("webkit-playsinline", "");
   v.setAttribute("aria-hidden", "true");
-  v.src = url;
+  setArtSources(v, url, fallback);
   if (artVideoEdge) artVideoEdge.observe(v);
   return v;
 }
@@ -471,21 +502,71 @@ const artVideoEdge = typeof IntersectionObserver === "function" ? new Intersecti
   }
 }) : null;
 
+// Videos whose play() was refused: an iPhone in Low Power Mode blocks even a muted autoplay, and a
+// browser may refuse while the file is still loading. They are tried again on the first touch or click,
+// and whenever the video reports it has enough data.
+const blockedVideos = new Set();
+let artGestureBound = false;
+
 function syncArtVideo(v) {
   const on = !!v.__want && v.__inView !== false && !document.hidden && !motionReduced();
   if (on) {
-    const p = v.play();
-    if (p && p.catch) p.catch(() => {});
+    playArtVideo(v);
   } else {
     v.pause();
+    blockedVideos.delete(v);
   }
 }
 
+function playArtVideo(v) {
+  if (v.ended) return;   // a gallery card's finished video waits for the fade; it must not start again
+  v.muted = true;   // the property, not only the attribute: iOS goes by the property
+  const p = v.play();
+  if (!p || !p.catch) return;
+  p.then(() => blockedVideos.delete(v)).catch(() => {
+    if (!v.__want) return;
+    blockedVideos.add(v);
+    bindArtGesture();
+  });
+}
+
+function retryBlockedVideos() {
+  if (motionReduced()) return;   // reduced motion means the poster frame stays, so nothing is retried
+  for (const v of [...blockedVideos]) {
+    if (!v.isConnected || !v.__want) { blockedVideos.delete(v); continue; }
+    v.muted = true;
+    const p = v.play();
+    if (!p || !p.catch) continue;
+    p.then(() => blockedVideos.delete(v)).catch(() => {});
+  }
+}
+
+function bindArtGesture() {
+  if (artGestureBound) return;
+  artGestureBound = true;
+  const events = ["pointerdown", "touchstart", "click"];
+  const once = () => {
+    for (const ev of events) document.removeEventListener(ev, once, true);
+    retryBlockedVideos();
+  };
+  for (const ev of events) document.addEventListener(ev, once, true);
+}
+
 // Play or pause a background video inside a layer. A refusal (autoplay policy, unloaded source) is not
-// worth reporting: the poster frame stays, which is the same thing a still background would show.
+// worth reporting: the poster frame stays until the next attempt, which the readiness and gesture
+// listeners above make.
 function setArtPlaying(host, playing) {
   const v = host && host.querySelector("video");
   if (!v) return;
+  if (!v.__artReadyBound) {
+    v.__artReadyBound = true;
+    v.muted = true;
+    v.setAttribute("playsinline", "");
+    v.setAttribute("webkit-playsinline", "");
+    const ready = () => syncArtVideo(v);   // a late start still respects reduced motion and the tab
+    v.addEventListener("loadeddata", ready);
+    v.addEventListener("canplay", ready);
+  }
   v.__want = !!playing;
   syncArtVideo(v);
 }

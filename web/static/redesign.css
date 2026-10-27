@@ -12,8 +12,10 @@
 .sidebar h2, .sheet h2 { margin: var(--space-md) 0 var(--space-xs); }
 
 /* art keeps its own colour; only the light is brought into the room. The sepia, saturation and dimming are baked
-   into the stored copy by the server (web/editor.py), so the page applies only the contrast, a cheap per-pixel step. */
-.art-layer, .profile-art, .page-art, .char-bg-img { filter: contrast(1.02); }
+   into the stored copy by the server (web/editor.py), so the page applies only the contrast, a cheap per-pixel step.
+   Never put a filter on the body or on an art layer that holds a video: a filter on an ancestor makes Android
+   Chrome fail to draw the video. */
+.art-layer:not(.video), .profile-art, .char-bg-img { filter: contrast(1.02); }
 
 /* the ground: one warm wash from the top, so no screen is a flat field */
 body {

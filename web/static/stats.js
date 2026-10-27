@@ -56,7 +56,7 @@ function drawChart(holder, label, points, key) {
     values.forEach((v, i) => {
       const c = svgEl("circle", { cx: x(i).toFixed(1), cy: y(v).toFixed(1), r: 3.5, class: "pt" });
       const title = svgEl("title", {});
-      title.textContent = `${points[i].day}: ${fmt(v)}`;
+      title.textContent = window.tr("{day}: {value}", { day: points[i].day, value: fmt(v) });
       c.appendChild(title);
       svg.appendChild(c);
     });
@@ -70,21 +70,21 @@ function drawChart(holder, label, points, key) {
 }
 
 function render(d) {
-  const label = PROVIDER_NAMES[d.provider] || PROVIDER_NAMES.all;
+  const label = window.tr(PROVIDER_NAMES[d.provider] || PROVIDER_NAMES.all);
 
   const t = d.today;
   const pct = Math.min(100, (t.global_requests / Math.max(1, t.global_cap)) * 100);
   $("todayBar").style.width = pct.toFixed(1) + "%";
-  $("todayText").textContent = `All accounts: ${fmt(t.global_requests)} of ${fmt(t.global_cap)} API calls (${pct.toFixed(1)}%). `
-    + "The count resets at midnight Pacific.";
+  $("todayText").textContent = window.tr("All accounts: {used} of {cap} API calls ({percent}%).", { used: fmt(t.global_requests), cap: fmt(t.global_cap), percent: pct.toFixed(1) }) + " "
+    + window.tr("The count resets at midnight Pacific.");
 
-  $("noteLine").textContent = `Showing ${label}, last ${d.days} days. ${d.note}`;
-  $("hTokens").textContent = `Tokens per day · ${label}`;
-  $("hRequests").textContent = `API calls per day · ${label}`;
-  $("hMessages").textContent = `Messages per day · ${label}`;
-  drawChart($("chartTokens"), "Tokens per day", d.series, "tokens");
-  drawChart($("chartRequests"), "API calls per day", d.series, "requests");
-  drawChart($("chartMessages"), "Messages per day", d.series, "messages");
+  $("noteLine").textContent = window.tr("Showing {label}, last {days} days. {note}", { label: label, days: d.days, note: d.note });
+  $("hTokens").textContent = window.tr("Tokens per day · {label}", { label: label });
+  $("hRequests").textContent = window.tr("API calls per day · {label}", { label: label });
+  $("hMessages").textContent = window.tr("Messages per day · {label}", { label: label });
+  drawChart($("chartTokens"), window.tr("Tokens per day"), d.series, "tokens");
+  drawChart($("chartRequests"), window.tr("API calls per day"), d.series, "requests");
+  drawChart($("chartMessages"), window.tr("Messages per day"), d.series, "messages");
 
   const totals = { requests: 0, tokens: 0, messages: 0 };
   const tb = $("totalsBody");
@@ -94,35 +94,35 @@ function render(d) {
     totals.requests += v.requests;
     totals.tokens += v.tokens;
     totals.messages += v.messages;
-    const tr = row([PROVIDER_NAMES[p], fmt(v.requests), fmt(v.tokens), fmt(v.messages)]);
-    if (p === d.provider) tr.classList.add("active");
-    tb.appendChild(tr);
+    const line = row([window.tr(PROVIDER_NAMES[p]), fmt(v.requests), fmt(v.tokens), fmt(v.messages)]);
+    if (p === d.provider) line.classList.add("active");
+    tb.appendChild(line);
   }
-  tb.appendChild(row(["Total", fmt(totals.requests), fmt(totals.tokens), fmt(totals.messages)]));
+  tb.appendChild(row([window.tr("Total"), fmt(totals.requests), fmt(totals.tokens), fmt(totals.messages)]));
 
   const ub = $("usersBody");
   ub.textContent = "";
-  if (!t.users.length) ub.appendChild(row(["No usage today for this key", "", "", ""]));
+  if (!t.users.length) ub.appendChild(row([window.tr("No usage today for this key"), "", "", ""]));
   for (const u of t.users) ub.appendChild(row([u.username, fmt(u.requests), fmt(u.tokens), fmt(u.messages)]));
 
   const cb = $("charBody");
   cb.textContent = "";
-  if (!d.characters.length) cb.appendChild(row(["No character history yet", "", "", "", "", ""]));
+  if (!d.characters.length) cb.appendChild(row([window.tr("No character history yet"), "", "", "", "", ""]));
   for (const c of d.characters) {
     cb.appendChild(row([c.name, fmt(c.accounts), fmt(c.messages), fmt(c.history_tokens), fmt(c.memory_tokens), c.last_memory]));
   }
 
   const gb = $("groupBox");
   gb.textContent = "";
-  if (!d.groups.length) gb.appendChild(el("p", "No group history yet.", "muted"));
+  if (!d.groups.length) gb.appendChild(el("p", window.tr("No group history yet."), "muted"));
   for (const g of d.groups) {
     const block = el("div", null, "group-block");
     block.appendChild(el("h3", g.name));
-    const members = g.members.length ? g.members.join(", ") : "none listed";
-    block.appendChild(el("p", `Members: ${members}. ${fmt(g.messages)} messages, ${fmt(g.history_tokens)} history tokens, `
-      + `${fmt(g.memory_tokens)} memory-bank tokens. Last memory update: ${g.last_memory}.`, "muted"));
+    const members = g.members.length ? g.members.join(", ") : window.tr("none listed");
+    block.appendChild(el("p", window.tr("Members: {members}. {messages} messages, {history} history tokens, ", { members: members, messages: fmt(g.messages), history: fmt(g.history_tokens) })
+      + window.tr("{memory} memory-bank tokens. Last memory update: {last}.", { memory: fmt(g.memory_tokens), last: g.last_memory }), "muted"));
     const ul = el("ul", null, "breakdown");
-    for (const b of g.breakdown) ul.appendChild(el("li", `${b.speaker}: ${fmt(b.messages)} msgs (${fmt(b.tokens)} tokens)`));
+    for (const b of g.breakdown) ul.appendChild(el("li", window.tr("{speaker}: {messages} msgs ({tokens} tokens)", { speaker: b.speaker, messages: fmt(b.messages), tokens: fmt(b.tokens) })));
     block.appendChild(ul);
     gb.appendChild(block);
   }
@@ -144,12 +144,12 @@ function renderSplit(d) {
     sum.cached_tokens += cached;
     sum.output_tokens += Number(v.output_tokens || 0);
     sum.seconds += Number(v.seconds || 0);
-    const tr = row([PROVIDER_NAMES[p], fmt(input), fmt(cached), fmt(Math.max(0, input - cached)),
+    const line = row([window.tr(PROVIDER_NAMES[p]), fmt(input), fmt(cached), fmt(Math.max(0, input - cached)),
       fmt(v.output_tokens), Number(v.seconds || 0).toFixed(1)]);
-    if (p === d.provider) tr.classList.add("active");
-    body.appendChild(tr);
+    if (p === d.provider) line.classList.add("active");
+    body.appendChild(line);
   }
-  body.appendChild(row(["Total", fmt(sum.input_tokens), fmt(sum.cached_tokens),
+  body.appendChild(row([window.tr("Total"), fmt(sum.input_tokens), fmt(sum.cached_tokens),
     fmt(Math.max(0, sum.input_tokens - sum.cached_tokens)), fmt(sum.output_tokens), sum.seconds.toFixed(1)]));
 }
 
@@ -159,27 +159,27 @@ function renderDeepSeek(d) {
   body.textContent = "";
   const ds = d.deepseek || { models: [], totals: { cost: {} } };
   if (!ds.models.length) {
-    body.appendChild(row(["No DeepSeek usage in this range", "", "", "", "", "", ""]));
+    body.appendChild(row([window.tr("No DeepSeek usage in this range"), "", "", "", "", "", ""]));
     $("dsNote").textContent = "";
     return;
   }
   for (const m of ds.models) {
     const cached = Math.min(Number(m.cached_tokens || 0), Number(m.input_tokens || 0));
-    const label = m.fallback_rates ? `${m.model} (fallback rates)` : m.model;
+    const label = m.fallback_rates ? window.tr("{model} (fallback rates)", { model: m.model }) : m.model;
     body.appendChild(row([label, fmt(m.requests), fmt(cached), fmt(Math.max(0, Number(m.input_tokens) - cached)),
       fmt(m.output_tokens), Number(m.seconds || 0).toFixed(1), money(m.cost[currency], currency)]));
   }
   const t = ds.totals;
-  const tr = row(["Total", fmt(t.requests), fmt(t.cached_tokens),
+  const line = row([window.tr("Total"), fmt(t.requests), fmt(t.cached_tokens),
     fmt(Math.max(0, Number(t.input_tokens || 0) - Number(t.cached_tokens || 0))), fmt(t.output_tokens),
     Number(t.seconds || 0).toFixed(1), money(t.cost[currency], currency)]);
-  tr.classList.add("active");
-  body.appendChild(tr);
+  line.classList.add("active");
+  body.appendChild(line);
   const rates = (ds.prices && ds.prices["deepseek-flash"] && ds.prices["deepseek-flash"][currency]) || null;
   $("dsNote").textContent = rates
-    ? `Per million tokens in ${currency.toUpperCase()}: cached input ${rates.cache_hit}, uncached input ${rates.cache_miss}, `
-      + `output ${rates.output}. Off-peak discounts and your own plan are not included.`
-    : "No rates are loaded for this currency.";
+    ? window.tr("Per million tokens in {currency}: cached input {cached}, uncached input {uncached}, ", { currency: currency.toUpperCase(), cached: rates.cache_hit, uncached: rates.cache_miss })
+      + window.tr("output {output}. Off-peak discounts and your own plan are not included.", { output: rates.output })
+    : window.tr("No rates are loaded for this currency.");
 }
 
 async function load() {
@@ -190,7 +190,7 @@ async function load() {
     const d = await api("GET", `/api/admin/stats?days=${encodeURIComponent(days)}&provider=${encodeURIComponent(provider)}`);
     lastPayload = d;
     render(d);
-    $("stamp").textContent = "Updated " + new Date().toLocaleTimeString();
+    $("stamp").textContent = window.tr("Updated {time}", { time: MISO_I18N.date(new Date(), { timeStyle: "medium" }) });
   } catch (err) {
     $("err").textContent = err.message;
   }

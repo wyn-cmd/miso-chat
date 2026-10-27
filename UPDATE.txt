@@ -1,14 +1,14 @@
-Miso Chat 1.5.1 update
+Miso Chat 1.5.2-beta-1 update
 
-This update brings the server to 1.5.1 from 1.5.0. It adds a fourth look (Dusk), a panda app icon, video and animated pictures for accounts and characters, and background circles for characters without pictures. It removes the Spore look. The endpoints and the data layout are the same as 1.5.0, so chats, characters, accounts and the settings carry over.
+This update brings the server to 1.5.2-beta-1 from 1.5.1. It adds read-aloud for character replies, a Voice & audio settings panel, one Story & memory card for Worlds, Mind Palace and Dreams, a 0.95 default creativity for chats and groups, and fixes for command notices. The endpoints and the data layout are the same as 1.5.1, so chats, characters, accounts and the settings carry over.
 
-Video backgrounds need ffmpeg and ffprobe on the server's PATH. They are optional: without them, the rest of the app works, and a video upload is refused with a message. Install them before you use video. Nothing else needs a new package. requirements.txt is unchanged.
+Read aloud uses the voices installed in the browser or operating system. The server sends no audio. Nothing needs a new package, and requirements.txt is unchanged. ffmpeg and ffprobe are still needed only for video backgrounds.
 
-The terminal client is 1.5.1. Its code is the same as 1.5.0, and the server accepts any client with the same major.minor version.
+The terminal client is 1.5.2-beta-1. Its code is the same as 1.5.1, and the server accepts any client with the same major.minor version.
 
 Before you update, note these changes:
-- Spore is gone. A browser that had chosen Spore now shows Moonlit.
-- Pictures and videos saved before this update are not re-processed. They show without the new colour look and blur until you upload them again.
+- The default creativity is now 0.95 for one-to-one chats and groups. A creativity you saved for a character or group still applies.
+- Worlds, Mind Palace and Dreams are now under Settings, Story & memory.
 
 1. Stop the web app.
 
@@ -20,8 +20,8 @@ Before you update, note these changes:
 
 4. Data: no migration step is needed. Nothing in data/ is rewritten.
 
-5. Start the web app again and sign in. Check the home page, a chat, and the Dusk look under Settings, Appearance, Theme.
+5. Start the web app again and sign in. Check the home page, a chat, Settings, Story & memory, and Settings, Voice & audio.
 
-6. Video: upload a short MP4 as a background and check it plays. If it is refused, check that ffmpeg and ffprobe run from a terminal on the server. On some phones a video shows only its poster frame; this is a known issue in CHANGELOG.md.
+6. Open a chat with a character reply and press the speaker button. If no voice plays, check that the browser has voices installed under its speech settings.
 
-7. Report anything that breaks against the 1.5.1 release notes in CHANGELOG.md.
+7. Report anything that breaks against the 1.5.2-beta-1 release notes in CHANGELOG.md.
