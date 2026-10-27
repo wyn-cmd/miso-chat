@@ -4,7 +4,7 @@ Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.P
 
 ## 1.5.1 - 2026-10-27
 
-A look, icon and speed release, built on 1.5.0. It adds a fourth look, Dusk, a new app icon, video and animated pictures for accounts and characters, and background circles for characters without pictures. It retires the Spore look and lightens the page on weaker devices. The server's endpoints and data layout are the same as 1.5.0, so chats, characters, accounts and settings carry over. The terminal client is 1.5.1 with the same code as 1.5.0.
+A look, icon and speed release, built on 1.5.0. The server's endpoints and data layout are the same as 1.5.0, and the terminal client is 1.5.1 with the same code.
 
 ### Added
 - **Dusk look** (Settings, Appearance, Theme): a slate ground with warm bone text and a periwinkle accent, with a light variant for the day.
@@ -15,7 +15,6 @@ A look, icon and speed release, built on 1.5.0. It adds a fourth look, Dusk, a n
 - **App icon**: a panda in the Moonlit colours, used for the browser tab, the home-screen icon and the page header.
 
 ### Changed
-- Spore is removed. A browser that had chosen Spore now gets Moonlit, and its three Spore default pictures are removed.
 - Picture backgrounds are saved as PNG. Pictures saved before this release stay JPEG and are still read.
 - The colour look (sepia, saturation and dimming) is applied once, when a picture or video is saved. The page applies only the contrast step.
 - In light mode, card and chat pictures and videos are shown with no shade over them.
@@ -27,6 +26,11 @@ A look, icon and speed release, built on 1.5.0. It adds a fourth look, Dusk, a n
 - The keyboard-fit check runs only while the message box has focus.
 - Video backgrounds, picture backgrounds and profile backgrounds are not re-processed. A background saved before this release keeps its old file: its colour look and blur are not applied, so it shows as it is. Upload it again to get the new look.
 - The manifest's theme colours match the Moonlit ground.
+
+### Removed
+- The Spore look. A browser that had chosen Spore now gets Moonlit.
+- The three Spore default background pictures.
+- The Spore screenshots from `docs/screenshots`.
 
 ### Known issues
 - On some phones a video background shows only its poster frame. Not yet resolved; the likely causes are the WebM codec on older iOS or autoplay blocking.
