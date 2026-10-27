@@ -11,8 +11,9 @@
 }
 .sidebar h2, .sheet h2 { margin: var(--space-md) 0 var(--space-xs); }
 
-/* art keeps its own colour; only the light is brought into the room */
-.art-layer, .profile-art, .page-art, .char-bg-img { filter: sepia(0.16) saturate(1.08) contrast(1.02) brightness(0.95); }
+/* art keeps its own colour; only the light is brought into the room. The sepia, saturation and dimming are baked
+   into the stored copy by the server (web/editor.py), so the page applies only the contrast, a cheap per-pixel step. */
+.art-layer, .profile-art, .page-art, .char-bg-img { filter: contrast(1.02); }
 
 /* the ground: one warm wash from the top, so no screen is a flat field */
 body {
@@ -104,7 +105,6 @@ header::after { content: ""; position: absolute; inset: 0; pointer-events: none;
 .shell { background: transparent; }
 .sidebar { background: var(--color-paper-2); border-right: 1px solid var(--color-rule); padding: var(--space-md); }
 .sidebar h2 { font-family: var(--font-body); font-size: var(--text-xs); font-weight: 500; letter-spacing: 0; color: var(--color-muted); margin: var(--space-md) 0 var(--space-xs); }
-.side-head { margin: 0 0 var(--space-xs); }
 .side-section { border-top: 1px solid var(--color-rule); padding-top: var(--space-sm); margin-top: var(--space-md); }
 .side-label { font-size: var(--text-xs); color: var(--color-muted); }
 /* sidebar rows: flat paper until chosen, then the third paper step with a coral edge. The prefix keeps
@@ -282,7 +282,24 @@ body.centered h1 { font-size: var(--text-section); }
 /* ---- 14. profiles ---- */
 .profile-hero { border-radius: var(--radius-card); overflow: hidden; }
 .profile-name, .profile-char-name { font-family: var(--font-display); color: var(--color-ink); }
-.profile-shade { background: color-mix(in oklab, var(--color-paper) 55%, transparent); }
+/* The scrim over a picture is this look's own paper, and the name takes the theme's ink with it.
+   style.css paints that name near-white because Hyacinth stands it on a near-black gradient; over a paper
+   scrim in the light theme the white went pale and took the picture with it, so both follow the theme: a
+   gradient that deepens under the text, and ink that stays ink. */
+.profile-hero.has-art .profile-shade {
+  background: linear-gradient(180deg,
+    color-mix(in oklab, var(--color-paper) 28%, transparent),
+    color-mix(in oklab, var(--color-paper) 82%, transparent));
+}
+.profile-hero.has-art .profile-headline h1 { color: var(--color-ink); text-shadow: none; }
+.profile-hero.has-art .profile-bio,
+.profile-hero.has-art .profile-meta,
+.profile-hero.has-art .muted { color: var(--color-ink-2); text-shadow: none; }
+/* the ring around the picture has to hold over a paper scrim as well as over a photograph */
+.profile-hero.has-art .profile-avatar {
+  border-color: color-mix(in oklab, var(--color-paper) 52%, var(--color-ink));
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .2);
+}
 .profile-bio, .profile-meta { color: var(--color-ink-2); }
 
 /* ---- 15. motion is state only ---- */

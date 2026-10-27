@@ -10,7 +10,7 @@ This is a personal project. It is built for use on one machine or a private netw
 
 The pictures use seven made-up characters and made-up chats. They show no real account, character or data. The characters have no backgrounds of their own, so each picture shows the default backgrounds for its look.
 
-Miso Chat has four looks, chosen under Settings, Appearance, Theme: Moonlit (the default), Soft Shadows, Spore (1.5.0) and Hyacinth (1.4.1). The first four pictures show every look on desktop and on a phone. The Moonlit set comes after them.
+Miso Chat has four looks, chosen under Settings, Appearance, Theme: Moonlit (the default), Soft Shadows, Dusk and Hyacinth (1.4.1). The pictures show every look on desktop and on a phone.
 
 Desktop, home page, all four looks:
 
@@ -20,7 +20,7 @@ Desktop, home page, all four looks:
     <td align="center"><img src="docs/screenshots/soft-shadows-desktop-home.png" alt="Soft Shadows: home on desktop" width="480"><br>Soft Shadows: home</td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/spore-desktop-home.png" alt="Spore (1.5.0): home on desktop" width="480"><br>Spore (1.5.0): home</td>
+    <td align="center"><img src="docs/screenshots/dusk-desktop-home.png" alt="Dusk: home on desktop" width="480"><br>Dusk: home</td>
     <td align="center"><img src="docs/screenshots/hyacinth-desktop-home.png" alt="Hyacinth (1.4.1): home on desktop" width="480"><br>Hyacinth (1.4.1): home</td>
   </tr>
 </table>
@@ -33,18 +33,18 @@ Desktop, a chat, all four looks:
     <td align="center"><img src="docs/screenshots/soft-shadows-desktop-chat.png" alt="Soft Shadows: a chat on desktop" width="480"><br>Soft Shadows: a chat</td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/spore-desktop-chat.png" alt="Spore (1.5.0): a chat on desktop" width="480"><br>Spore (1.5.0): a chat</td>
+    <td align="center"><img src="docs/screenshots/dusk-desktop-chat.png" alt="Dusk: a chat on desktop" width="480"><br>Dusk: a chat</td>
     <td align="center"><img src="docs/screenshots/hyacinth-desktop-chat.png" alt="Hyacinth (1.4.1): a chat on desktop" width="480"><br>Hyacinth (1.4.1): a chat</td>
   </tr>
 </table>
 
-Phone, home, all four looks (left to right: Moonlit, Soft Shadows, Spore, Hyacinth):
+Phone, home, all four looks (left to right: Moonlit, Soft Shadows, Dusk, Hyacinth):
 
 <table>
   <tr>
     <td align="center"><img src="docs/screenshots/moonlit-phone-home.png" alt="Moonlit (default): home on a phone" width="200"><br>Moonlit (default): home</td>
     <td align="center"><img src="docs/screenshots/soft-shadows-phone-home.png" alt="Soft Shadows: home on a phone" width="200"><br>Soft Shadows: home</td>
-    <td align="center"><img src="docs/screenshots/spore-phone-home.png" alt="Spore (1.5.0): home on a phone" width="200"><br>Spore (1.5.0): home</td>
+    <td align="center"><img src="docs/screenshots/dusk-phone-home.png" alt="Dusk: home on a phone" width="200"><br>Dusk: home</td>
     <td align="center"><img src="docs/screenshots/hyacinth-phone-home.png" alt="Hyacinth (1.4.1): home on a phone" width="200"><br>Hyacinth (1.4.1): home</td>
   </tr>
 </table>
@@ -55,7 +55,7 @@ Phone, a chat, all four looks (same order):
   <tr>
     <td align="center"><img src="docs/screenshots/moonlit-phone-chat.png" alt="Moonlit (default): a chat on a phone" width="200"><br>Moonlit (default): chat</td>
     <td align="center"><img src="docs/screenshots/soft-shadows-phone-chat.png" alt="Soft Shadows: a chat on a phone" width="200"><br>Soft Shadows: chat</td>
-    <td align="center"><img src="docs/screenshots/spore-phone-chat.png" alt="Spore (1.5.0): a chat on a phone" width="200"><br>Spore (1.5.0): chat</td>
+    <td align="center"><img src="docs/screenshots/dusk-phone-chat.png" alt="Dusk: a chat on a phone" width="200"><br>Dusk: chat</td>
     <td align="center"><img src="docs/screenshots/hyacinth-phone-chat.png" alt="Hyacinth (1.4.1): a chat on a phone" width="200"><br>Hyacinth (1.4.1): chat</td>
   </tr>
 </table>
@@ -361,14 +361,14 @@ Admins add backgrounds to a character in the character editor. A character can h
 
 - A chat picks one background at random each time it opens.
 - Home cards and the info card cycle through the backgrounds at random. Each change waits 5 to 8 seconds, then fades to the next picture. Reduced-motion settings keep one still picture.
-- A character with no backgrounds uses the default set for the look in use, in `web/static/defaults/`: blurred circles in each look's main colour (`moon-N` for Moonlit, `folio-N` for Soft Shadows, `spore-N` for Spore, `classic-N` for Hyacinth). These cycle the same way.
+- A character with no backgrounds uses the default set for the look in use, in `web/static/defaults/`: blurred circles in each look's main colour (`moon-N` for Moonlit, `folio-N` for Soft Shadows, `classic-N` for Hyacinth; Dusk uses the full list). These cycle the same way.
 - Under Settings, Appearance, two sliders set the background brightness (darker or lighter) and the chat bubble opacity. Each account keeps its own values.
 
 A background is never read by OCR and is never used as the profile picture.
 
 ## Themes
 
-Four looks ship with this version. **Moonlit** is the default. **Soft Shadows** is a reading view that sets the chat as a written page. **Spore** is the 1.5.0 look: a warm umber ground with parchment text, a hot coral for actions, bars and the active row, and a jade for what you wrote yourself. **Hyacinth** is the 1.4.1 look, unchanged.
+Four looks ship with this version. **Moonlit** is the default. **Soft Shadows** is a reading view that sets the chat as a written page. **Dusk** is the calm end of the day: a slate ground, warm bone text and a soft periwinkle accent. **Hyacinth** is the 1.4.1 look, unchanged.
 
 Choose one under Settings, Appearance, Theme. The choice applies to every page, login included, and takes effect at once with no reload and no lost chat state. It is kept per browser, next to the light/dark setting, not per account: two accounts on one browser share it, and a different browser starts on Moonlit.
 
@@ -497,8 +497,8 @@ This copy does not include the automated test suite. A basic static check is:
 
 The fonts in `web/static/fonts` are all licensed under the SIL Open Font License 1.1. Each licence text sits beside its files.
 
-- Young Serif, the Moonlit and Spore display face: copyright 2023 The Young Serif Project Authors. See `web/static/fonts/OFL-youngserif.txt`.
-- Instrument Sans, the Moonlit and Spore interface face: copyright 2022 The Instrument Sans Project Authors. See `web/static/fonts/OFL-instrumentsans.txt`.
+- Young Serif, a bundled display face: copyright 2023 The Young Serif Project Authors. See `web/static/fonts/OFL-youngserif.txt`.
+- Instrument Sans, the Moonlit and Dusk interface face: copyright 2022 The Instrument Sans Project Authors. See `web/static/fonts/OFL-instrumentsans.txt`.
 - Inter, the Hyacinth interface face and a chat font choice: copyright The Inter Project Authors. JetBrains Mono, the monospace choice: copyright JetBrains s.r.o. Both are in `web/static/fonts/OFL-inter-jetbrains-mono.txt`.
 - Merriweather, a serif chat font choice: copyright 2024 The Merriweather Project Authors. See `web/static/fonts/OFL.txt`.
 - Literata, a serif chat font choice: copyright 2017 The Literata Project Authors. See `web/static/fonts/OFL-literata.txt`.

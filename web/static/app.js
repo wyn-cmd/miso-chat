@@ -3,6 +3,7 @@
 const $ = (id) => document.getElementById(id);
 let me = null;
 let current = null;   // character or group chat currently open
+const creatorMap = new Map();   // solo character -> who made it, and whether that account has a page
 let favSet = new Set();            // characters this account has starred
 let popularSet = new Set();        // top 10% of characters by user-sent messages
 let editableSet = new Set();   // characters this account may change (shows the sidebar pencil)
@@ -431,7 +432,28 @@ function startEdit(box, i, m) {
 }
 
 // Settings sheet: the per-character rows show or hide with a note when no character is open.
+function renderCreatorRow() {
+  // The creator of the open solo character, with a link to that account's page. Groups and novels have none.
+  const row = $("charCreatorRow");
+  const box = $("charCreator");
+  if (!row || !box) return;
+  const info = current ? creatorMap.get(current) : null;
+  row.hidden = !info;
+  box.textContent = "";
+  if (!info) return;
+  const name = info.creator || "admin";
+  if (!info.linkable || name.toLowerCase() === "admin") {
+    box.appendChild(el("span", "@" + name, "muted"));
+    return;
+  }
+  const link = el("a", "@" + name, "creator-link");
+  link.href = "/u/" + encodeURIComponent(name);
+  link.title = "View " + name + "'s profile";
+  box.appendChild(link);
+}
+
 function loadCharSettings() {
+  renderCreatorRow();
   for (const n of document.querySelectorAll(".char-only")) n.hidden = !current;
   for (const n of document.querySelectorAll(".needs-char")) n.hidden = !!current;
   $("palaceRow").hidden = !current;
@@ -819,10 +841,12 @@ function renderModels() {
   renderAccountPrefs();
 }
 
-// ---- Account profile settings. Admin accounts have no profile, so the block stays hidden.
+// ---- Account profile settings. The block shows only when the server sends a profile: the built-in
+// admin account has no page, so there it stays hidden.
 function renderProfileSettings(resetBio = true) {
   const box = $("profileSettings");
   if (!box) return;
+  renderSideProfile(me);
   const p = me && me.profile;
   box.hidden = !p;
   if (!p) return;
@@ -835,7 +859,12 @@ function renderProfileSettings(resetBio = true) {
   $("profilePicRemove").hidden = !p.has_avatar;
   const background = $("profileBgPreview");
   background.hidden = !p.has_background;
-  if (p.has_background) background.src = "/api/account-background/" + encodeURIComponent(me.username) + "?v=" + (p.background_version || 0);
+  if (p.has_background) {
+    // A video background previews as its still frame; the poster is the only thing an <img> can show.
+    background.src = p.background_video
+      ? "/api/account-background-poster/" + encodeURIComponent(me.username) + "?v=" + (p.poster_version || 0)
+      : "/api/account-background/" + encodeURIComponent(me.username) + "?v=" + (p.background_version || 0);
+  }
   $("profileBgRemove").hidden = !p.has_background;
   $("profileLikes").checked = !!p.likes_visible;
 }
@@ -1049,6 +1078,7 @@ function markActive() {
     else b.removeAttribute("aria-current");
   }
   setChatHeader(displayName(current || ""));
+  renderCreatorRow();
 }
 
 async function loadCharacters(choose = true) {
@@ -1060,6 +1090,10 @@ async function loadCharacters(choose = true) {
   editableSet = new Set(data.editable || []);
   favSet = new Set(data.favourites || []);
   popularSet = new Set(data.popular || []);
+  creatorMap.clear();
+  for (const card of data.cards || []) {
+    creatorMap.set(card.name, { creator: card.creator || "admin", linkable: card.creator_profile !== false });
+  }
   soloNames = data.solo || [];   // set before the lists are drawn: the star check reads it
   renderPersonas(data.personas || []);
   const solo = $("charList");
@@ -1087,30 +1121,81 @@ async function loadCharacters(choose = true) {
   else { current = null; markActive(); $("chatSection").hidden = true; }   // nothing to open yet: no empty chat window
 }
 
-// A character's background sits behind its chat, and the whole page takes it.
+// A character's background sits behind its chat, and the whole page takes it. A picture goes through the
+// --chat-art variable; a video needs a real element, so it plays in the fixed layer beside the shell. When
+// the reader asked for reduced motion a video is shown as its poster frame, and never starts.
 function applyChatArt(name) {
-  // The whole page takes the art too, so the bars beside the chat column show the same picture.
   const section = $("chatSection");
   if (!section) return;
   const ids = name ? (bgIds[name] || []) : [];
-  // A character without backgrounds of its own, or no character at all, takes a shared default.
-  const pool = ids.length
-    ? ids.map((b) => "/api/background/" + encodeURIComponent(name) + "?b=" + encodeURIComponent(b))
-    : lookDefaults(defaultArt);
-  if (pool.length) {
-    // One picture is chosen at random each time the page or character opens.
-    const url = pool[Math.floor(Math.random() * pool.length)];
-    const art = 'url("' + url + '")';
-    section.style.setProperty("--chat-art", art);
-    document.body.style.setProperty("--chat-art", art);
-    section.classList.add("has-art");
-    document.body.classList.add("page-art");
-  } else {
-    section.style.removeProperty("--chat-art");
-    document.body.style.removeProperty("--chat-art");
-    section.classList.remove("has-art");
-    document.body.classList.remove("page-art");
+  // A solo character with no backgrounds of its own shows the animated circles, tinted by its mood and affection.
+  if (name && !ids.length && soloNames.includes(name)) {
+    clearChatArt(section);
+    applyAmbientMood(name);
+    return;
   }
+  // No character at all takes a shared default.
+  const pool = ids.length ? ids : lookDefaults(defaultArt);
+  clearChatArt(section);
+  if (!pool.length) return;
+  // One piece is chosen at random each time the page or character opens.
+  const chosenId = pool[Math.floor(Math.random() * pool.length)];
+  const chosen = artUrl(name, chosenId);
+  const still = posterFor(chosenId);
+  section.classList.add("has-art");
+  document.body.classList.add("page-art");
+  if (isVideoArt(chosenId) && !motionReduced()) {
+    const host = $("pageArtVideo");
+    const video = $("pageArtVideoEl");
+    if (host && video) {
+      if (still) video.poster = artUrl(name, still);
+      else video.removeAttribute("poster");
+      video.src = chosen;
+      host.hidden = false;
+      setArtPlaying(host, true);
+      return;
+    }
+  }
+  const art = 'url("' + (still ? artUrl(name, still) : chosen) + '")';
+  section.style.setProperty("--chat-art", art);
+  document.body.style.setProperty("--chat-art", art);
+}
+
+// Reads the character's energy (mood) and affection (attitude), and tints the circles by them. A feature that is
+// switched off, or a character that cannot be read, leaves the plain colours; so does a reply that arrives after
+// the reader has moved on to another character.
+async function applyAmbientMood(name) {
+  let warm = 0, green = 0;
+  try {
+    const [m, a] = await Promise.all([
+      api("GET", "/api/character-state?character=" + encodeURIComponent(name)),
+      api("GET", "/api/character-attitude?character=" + encodeURIComponent(name)),
+    ]);
+    if (m.enabled) green = Math.min(1, Math.max(0, m.energy / 100));
+    if (a.enabled) warm = Math.min(1, Math.max(0, a.affection / 100));
+  } catch (err) {
+    return;
+  }
+  if (current !== name) return;
+  setAmbientMood(warm, green);
+}
+
+// Takes the background away: the picture variables, the classes and the video element's source.
+function clearChatArt(section) {
+  setAmbientMood(0, 0);
+  section.style.removeProperty("--chat-art");
+  document.body.style.removeProperty("--chat-art");
+  section.classList.remove("has-art");
+  document.body.classList.remove("page-art");
+  const host = $("pageArtVideo");
+  const video = $("pageArtVideoEl");
+  if (video) {
+    video.pause();
+    video.removeAttribute("src");
+    video.removeAttribute("poster");
+    video.load();
+  }
+  if (host) host.hidden = true;
 }
 
 async function pickCharacter(name) {
@@ -1473,6 +1558,7 @@ async function init() {
     return;
   }
   $("who").textContent = me.username;
+  renderSideProfile(me);
   $("menuBtn").setAttribute("aria-expanded", String(!mobileNav()));
   $("editBox").hidden = false;   // any account can create characters; the pencil shows only on the ones it may change
   if (me.is_admin) {
@@ -1603,7 +1689,10 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener("scroll", fitToVisibleArea);
 }
 window.addEventListener("resize", fitToVisibleArea);
-setInterval(fitToVisibleArea, 300);
+// The keyboard only opens while the message box has focus, so the 300ms backstop runs only then.
+let fitTimer = null;
+$("msg").addEventListener("focus", () => { if (!fitTimer) fitTimer = setInterval(fitToVisibleArea, 300); });
+$("msg").addEventListener("blur", () => { clearInterval(fitTimer); fitTimer = null; fitToVisibleArea(); });
 fitToVisibleArea();
 $("msg").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("chatForm").requestSubmit(); }
@@ -2071,7 +2160,7 @@ setInterval(refreshUnread, 60000);
   });
 })();
 
-// The look itself: Spore (1.5.0) or Hyacinth, the 1.4.1 look. Kept per browser, like the light/dark theme.
+// The look itself: Moonlit, Soft Shadows, Dusk or Hyacinth, the 1.4.1 look. Kept per browser, like the light/dark theme.
 (function uiThemePicker() {
   const pick = document.getElementById("uiThemePick");
   if (!pick) return;
@@ -2204,7 +2293,8 @@ setInterval(refreshUnread, 60000);
   const headerChat = document.getElementById("headerChat");
   const accountSlot = document.getElementById("accountSlot");
   const section = document.getElementById("chatSection");
-  const parts = [["chatIcon", "chat"], ["chatTitle", "chat"], ["rollBtn", "chat"], ["settingsBtn", "chat"], ["adminLink", "account"], ["pwBtn", "account"], ["logoutBtn", "account"]]
+  // Roll stays in the chat bar beside Tree, Undo and Select at every width, so the four keep one size.
+  const parts = [["chatIcon", "chat"], ["chatTitle", "chat"], ["settingsBtn", "chat"], ["adminLink", "account"], ["pwBtn", "account"], ["logoutBtn", "account"]]
     .map(([id, group]) => {
       const node = document.getElementById(id);
       const home = document.createComment("home:" + id);   // where the control belongs on desktop
@@ -2237,11 +2327,8 @@ setInterval(refreshUnread, 60000);
     }
   }
   function placeUndo() {
-    if (phone.matches) {
-      if (undo.previousElementSibling !== branchTree) branchTree.parentNode.insertBefore(undo, branchTree.nextSibling);
-    } else if (undoHome.nextSibling !== undo) {
-      undoHome.parentNode.insertBefore(undo, undoHome.nextSibling);
-    }
+    // Undo keeps its own place in the chat bar at every width, so the run reads Tree, Roll, Undo, Select.
+    if (undoHome.nextSibling !== undo) undoHome.parentNode.insertBefore(undo, undoHome.nextSibling);
   }
   function place() {
     placeTree();
@@ -2263,7 +2350,12 @@ setInterval(refreshUnread, 60000);
   const sync = () => document.body.classList.toggle("chat-open", !section.hidden);
   new MutationObserver(sync).observe(section, { attributes: true, attributeFilter: ["hidden"] });
   const placeAll = () => { place(); placeGear(); };
-  new MutationObserver(placeAll).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  // placeAll only reads the "locked" class, so it runs when that class changes and not on every class change.
+  let wasLocked = document.body.classList.contains("locked");
+  new MutationObserver(() => {
+    const locked = document.body.classList.contains("locked");
+    if (locked !== wasLocked) { wasLocked = locked; placeAll(); }
+  }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
   if (phone.addEventListener) phone.addEventListener("change", placeAll); else phone.addListener(placeAll);
   sync();
   placeAll();

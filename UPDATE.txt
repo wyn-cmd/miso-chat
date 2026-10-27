@@ -1,10 +1,14 @@
-Miso Chat 1.5.0 update
+Miso Chat 1.5.1 update
 
-This update brings the server to 1.5.0 from 1.4.1. It adds worlds for stories, novels, narrative tension, a second reading look called Soft Shadows, clipping and quenching that keep long chats cheaper to run, and sign-in hardening for internet-facing use. The endpoints and the data layout are the same as 1.4.1, so chats, characters, accounts and the switches from 1.4.1 carry over.
+This update brings the server to 1.5.1 from 1.5.0. It adds a fourth look (Dusk), a panda app icon, video and animated pictures for accounts and characters, and background circles for characters without pictures. It removes the Spore look. The endpoints and the data layout are the same as 1.5.0, so chats, characters, accounts and the settings carry over.
 
-Everyone is signed out once after the update, because the login cookie has a new name. Sign in again as usual.
+Video backgrounds need ffmpeg and ffprobe on the server's PATH. They are optional: without them, the rest of the app works, and a video upload is refused with a message. Install them before you use video. Nothing else needs a new package. requirements.txt is unchanged.
 
-The terminal client is now 1.5.0, and the server accepts clients with the same major.minor version. A 1.4.1 client is refused, so download the 1.5.0 client from the web app, or from the release page on GitHub.
+The terminal client is 1.5.1. Its code is the same as 1.5.0, and the server accepts any client with the same major.minor version.
+
+Before you update, note these changes:
+- Spore is gone. A browser that had chosen Spore now shows Moonlit.
+- Pictures and videos saved before this update are not re-processed. They show without the new colour look and blur until you upload them again.
 
 1. Stop the web app.
 
@@ -14,19 +18,10 @@ The terminal client is now 1.5.0, and the server accepts clients with the same m
 
    The zip leaves alone: .env, data/, every character folder, and the files you keep beside them.
 
-4. No new packages are needed. requirements.txt is unchanged. The update adds new modules (worlds, novels, tensions and passwords), new stylesheets and two new font families, all inside the folders the zip brings.
+4. Data: no migration step is needed. Nothing in data/ is rewritten.
 
-5. Data: no migration step is needed. Each account's worlds and novels are created on first use. The sign-in throttle tables gain one column at first start, added automatically. Nothing in data/ is rewritten.
+5. Start the web app again and sign in. Check the home page, a chat, and the Dusk look under Settings, Appearance, Theme.
 
-6. A new install creates the admin account with a random one-time password, printed once in the server log. Sign in with it and change it. An existing install keeps its admin account and password unchanged; change the password if it is still a default one.
+6. Video: upload a short MP4 as a background and check it plays. If it is refused, check that ffmpeg and ffprobe run from a terminal on the server. On some phones a video shows only its poster frame; this is a known issue in CHANGELOG.md.
 
-7. Settings you may want to look at:
-   - Appearance, Theme: Moonlit (the new default), Soft Shadows, Spore (1.5.0) or Hyacinth (1.4.1).
-   - Chat history: Clip older messages, on by default. Turn it off to send older messages in full.
-   - Chat history: the rolling window. It is at least the size you set, and up to nine messages more.
-   - Account: Quench long chats. Off for solo chats until you switch it on. Group chats are quenched unless you switch it off here.
-   - Worlds: write a world for a chat or novel. Each entry shows its own token count, and a save over a limit is refused with a message.
-
-8. Group chats: each member's reply is prompted differently in this release, so check a few replies after the update. A group now allows two extra replies a turn after the director's picks, down from four.
-
-9. Optional: install chafa to draw character pictures in the terminal client. The README has the steps.
+7. Report anything that breaks against the 1.5.1 release notes in CHANGELOG.md.

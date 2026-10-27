@@ -16,8 +16,8 @@ VERSION = 1
 MAX_ZIP = 60 * 1024 * 1024         # the uploaded archive
 MAX_UNPACKED = 120 * 1024 * 1024   # the files inside it, summed before anything is extracted
 CARD_FILES = ("character.md", "context.md", "examples.json", "profile.json", "creator.json", "palace.json",
-              "sandbox.json", "icon.png", "icon.jpg", "icon.webp")
-BG_MEMBER = re.compile(r"^backgrounds/[0-9a-f]{12}\.jpg$")   # one file per background in the archive
+              "sandbox.json", "icon.png", "icon.jpg", "icon.webp", "icon.gif")
+BG_MEMBER = re.compile(r"^backgrounds/[0-9a-f]{12}(?:\.poster)?\.(?:png|jpg|webm)$")   # one file per background
 HISTORY_FILES = ("memory.json", "memory.md", "pinned.md", "summary.json", "episodes.json")
 HISTORY_DIR = "history/"
 NEUTRAL = "#8a8f98"
@@ -35,8 +35,15 @@ def export_zip(root, data_dir, uid, name, include_history):
         raise EditorError("No such character.")
     members = [(f, os.path.join(path, f)) for f in CARD_FILES if os.path.isfile(os.path.join(path, f))]
     for bid in editor.background_ids(root, name):
-        arc = "background.jpg" if bid == editor.LEGACY_ID else editor.BG_DIR + "/" + bid + ".jpg"
-        members.append((arc, editor.background_path(root, name, bid)))
+        # The file keeps its own extension on disk: a PNG for new pictures, a JPEG for older ones, a WebM for video.
+        found = editor.background_path(root, name, bid)
+        arc = ("background.jpg" if bid == editor.LEGACY_ID
+               else editor.BG_DIR + "/" + os.path.basename(found))
+        members.append((arc, found))
+        poster = editor.poster_path(root, name, bid)
+        if poster:
+            stem = bid[:-len(editor.VIDEO_STORE_EXT)]
+            members.append((editor.BG_DIR + "/" + stem + editor.VIDEO_POSTER_SUFFIX, poster))
     has_history = False
     if include_history:
         state = _state_dir(data_dir, uid, os.path.basename(path))
@@ -73,7 +80,12 @@ def _text_member(zf, info, label, limit=20000):
 
 
 def _is_background(n):
-    return n == "background.jpg" or bool(BG_MEMBER.match(n))
+    return n == "background.jpg" or bool(BG_MEMBER.match(n))   # legacy single file, or one per background
+
+
+def _is_poster(n):
+    # The still frame of a video background travels with it but is not a background of its own.
+    return n.endswith(editor.VIDEO_POSTER_SUFFIX)
 
 
 def _check_members(zf):
@@ -148,8 +160,19 @@ def import_zip(root, data_dir, uid, username, data, admin=True):
             if isinstance(c, dict) and isinstance(c.get("creator"), str) and c["creator"].strip():
                 creator = c["creator"].strip()[:40]
 
-        icon = next(((n, zf.read(members[n])) for n in ("icon.png", "icon.jpg", "icon.webp") if n in members), None)
-        backgrounds = [zf.read(members[n]) for n in sorted(members) if _is_background(n)]
+        icon = next(((n, zf.read(members[n]))
+                     for n in ("icon.png", "icon.jpg", "icon.webp", "icon.gif") if n in members), None)
+        posters = {n: zf.read(members[n]) for n in members if _is_poster(n)}
+        backgrounds = []
+        for n in sorted(members):
+            if not _is_background(n) or _is_poster(n):
+                continue
+            data = zf.read(members[n])
+            still = None
+            if editor.is_video_id(n):
+                stem = os.path.basename(n)[:-len(editor.VIDEO_STORE_EXT)]
+                still = posters.get(editor.BG_DIR + "/" + stem + editor.VIDEO_POSTER_SUFFIX)
+            backgrounds.append((data, still))
 
         history = {}
         for f in HISTORY_FILES:
@@ -170,8 +193,9 @@ def import_zip(root, data_dir, uid, username, data, admin=True):
         editor.record_creator(path, creator)
         if icon is not None:
             editor.save_icon(root, name, icon[1])
-        for data in backgrounds:
-            editor.add_background(root, name, data)
+        for data, still in backgrounds:
+            # A WebM from one of our own archives is already converted, so it is stored as it is.
+            editor.add_background(root, name, data, poster=still, stored=True)
     except Exception:
         if created:
             shutil.rmtree(path, ignore_errors=True)

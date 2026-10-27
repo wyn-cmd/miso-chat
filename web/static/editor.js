@@ -472,14 +472,32 @@ function renderBgList() {
   if (!items.length) box.appendChild(el("p", "No backgrounds yet.", "muted"));
   for (const item of items) {
     const thumb = el("div", "", "bg-thumb");
-    const img = document.createElement("img");
-    img.alt = "";
-    img.src = item.file ? URL.createObjectURL(item.file) : "/api/background/" + encodeURIComponent(editing) + "?b=" + encodeURIComponent(item.id);
+    const src = item.file ? URL.createObjectURL(item.file) : "/api/background/" + encodeURIComponent(editing) + "?b=" + encodeURIComponent(item.id);
+    const isVid = item.file ? /^video\//.test(item.file.type) : isVideoArt(item.id);
+    let media;
+    if (isVid) {
+      // A video background previews as itself, muted, so the list shows what the page will loop. Its still
+      // frame stands in until the video has enough bytes to draw.
+      media = document.createElement("video");
+      media.muted = true;
+      media.loop = true;
+      media.playsInline = true;
+      media.preload = "metadata";
+      media.setAttribute("muted", "");
+      media.setAttribute("playsinline", "");
+      media.setAttribute("aria-hidden", "true");
+      if (!item.file) media.poster = "/api/background/" + encodeURIComponent(editing) + "?b=" + encodeURIComponent(posterFor(item.id));
+      media.src = src;
+    } else {
+      media = document.createElement("img");
+      media.alt = "";
+      media.src = src;
+    }
     const rm = el("button", "Remove", "ghost small");
     rm.type = "button";
     rm.setAttribute("aria-label", "Remove this background");
     rm.addEventListener("click", () => removeBackground(item));
-    thumb.append(img, rm);
+    thumb.append(media, rm);
     box.appendChild(thumb);
   }
   $("edBgNote").textContent = items.length + " of " + BG_MAX + " backgrounds.";
@@ -807,8 +825,9 @@ async function uploadBackground() {
   await loadCharacters();
 }
 
-// A background chosen on the new-character form waits until the character exists.
-const NEW_BG_MAX = 10 * 1024 * 1024;
+// A background chosen on the new-character form waits until the character exists. A picture may be up to
+// 10 MB and a video up to 50 MB, so the queue accepts the larger figure and the server checks the rest.
+const NEW_BG_MAX = 50 * 1024 * 1024;
 
 
 function queueNewBackground(files) {
@@ -816,7 +835,7 @@ function queueNewBackground(files) {
   const tooBig = files.some((f) => f.size > NEW_BG_MAX);
   const room = BG_MAX - pendingBgs.length;
   pendingBgs = pendingBgs.concat(tooBig ? [] : files.slice(0, Math.max(0, room)));
-  $("edBgErr").textContent = tooBig ? "Background uploads can be up to 10 MB." : files.length > room ? "Only " + Math.max(0, room) + " more fit (up to 10)." : "";
+  $("edBgErr").textContent = tooBig ? "Background uploads can be up to 50 MB." : files.length > room ? "Only " + Math.max(0, room) + " more fit (up to 10)." : "";
   $("edBgFile").value = "";
   renderBgList();
 }
@@ -830,7 +849,7 @@ function onBgFilesChosen() {
   }
   const tooBig = files.some((f) => f.size > NEW_BG_MAX);
   const over = bgItems.length + files.length > BG_MAX;
-  $("edBgErr").textContent = tooBig ? "Background uploads can be up to 10 MB." : over ? "A character can have up to 10 backgrounds. Remove one first." : "";
+  $("edBgErr").textContent = tooBig ? "Background uploads can be up to 50 MB." : over ? "A character can have up to 10 backgrounds. Remove one first." : "";
   $("edBgSave").disabled = tooBig || over;
 }
 
