@@ -104,6 +104,15 @@ th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); 
 .shell { display:flex; height: calc(100vh - 52px); height: calc(100dvh - 52px); }
 .sidebar { width: 336px; flex: none; overflow-y: auto; background: var(--card); border-right: 1px solid var(--line); padding: 4px 12px 16px; }
 .sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 4px 6px; }
+/* the sidebar's own header row: the Characters heading, the Back button and the account's picture on one
+   line. The heading takes the free space, so the two controls sit together at the right edge. */
+.sidebar .side-top { display: flex; align-items: center; gap: 8px; margin: 16px 4px 6px; }
+.sidebar .side-top h2 { margin: 0 auto 0 0; }
+.side-top .side-back { flex: none; }
+.side-profile { flex: none; display: grid; place-items: center; width: 34px; height: 34px; overflow: hidden; border: 1px solid var(--line); border-radius: 36%; background: var(--surface); color: var(--text-soft); font-size: 13px; font-weight: 700; text-decoration: none; }
+.side-profile:hover { border-color: var(--accent); color: var(--ink); }
+.side-profile img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; object-position: 50% 50%; }
+[data-avatar="circle"] .side-profile { border-radius: 50%; corner-shape: round; }
 .char-list { display: flex; flex-direction: column; gap: 2px; }
 .char-item { text-align: left; background: var(--char-bg); color: var(--ink); border: 1px solid var(--char-line); padding: 7px 10px; border-radius: 6px; }
 .char-item:hover:not(:disabled) { background: var(--char-hover); }
@@ -300,7 +309,6 @@ input.budget { width: 84px; margin-right: 4px; }
   #chatSection .bar > #chatIcon { width: 24px; height: 24px; }
   #chatSection .bar > .chat-title { font-size: 15px; }
   #chatSection .bar > #usage { font-size: 11px; }
-  #chatSection .bar > #undoBtn { padding: 3px 8px; font-size: 13px; }
   .font-select { font-size: 11px; padding: 2px 4px; }
   .size-ctl span { font-size: 12px; min-width: 34px; }
   .size-ctl button { padding: 2px 7px; }
@@ -365,7 +373,7 @@ header { font-size: clamp(10px, calc(var(--chat-size) * 0.87), 16px); }
   #chatSection .bar > #usage { order: 1; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
   .u-long { display: none; }
   .u-short { display: inline; }
-  #chatSection .bar > #undoBtn { order: 2; flex: none; padding: 3px 10px; font-size: 13px; }
+  #chatSection .bar > #undoBtn { order: 2; flex: none; }
   #chatSection .bar > .settings-btn { order: 3; flex: none; justify-self: auto; padding: 3px 10px; }
 }
 
@@ -374,8 +382,14 @@ header { font-size: clamp(10px, calc(var(--chat-size) * 0.87), 16px); }
 .sheet .char-item { padding: 8px 10px; font-size: 14px; }
 
 /* ---- highlight colour and surface. --accent is set from Settings (see common.js); the theme tokens live at the top. */
-body { background: radial-gradient(900px 480px at 0% -10%, var(--accent-soft), transparent 70%), radial-gradient(700px 420px at 100% -6%, color-mix(in srgb, var(--accent-2) 13%, transparent), transparent 70%), var(--bg); background-attachment: fixed; }
-header { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--card) 82%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 1px 0 var(--line), 0 6px 18px rgba(0, 0, 0, .25); }
+body { background: var(--bg); }
+/* The glow is a fixed layer behind the page rather than a fixed background on body: a fixed background is repainted
+   on every scroll, while a fixed layer is composited once and moved by the browser. */
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(900px 480px at 0% -10%, var(--accent-soft), transparent 70%), radial-gradient(700px 420px at 100% -6%, color-mix(in srgb, var(--accent-2) 13%, transparent), transparent 70%); }
+/* a chat with a picture behind it keeps the picture alone, as it did when the glow was part of body's background */
+body.page-art::before { display: none; }
+header { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--card) 96%, transparent); box-shadow: 0 1px 0 var(--line), 0 6px 18px rgba(0, 0, 0, .25); }
 .brand { letter-spacing: .01em; }
 .card { border-radius: var(--radius); box-shadow: var(--shadow); }
 table { border-radius: 10px; overflow: hidden; }
@@ -451,9 +465,28 @@ a { text-decoration-color: var(--accent-glow); text-underline-offset: 3px; }
 @media (max-width: 760px) {
   #chatSection .bar { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
   #chatSection .bar > #usage { order: 0; flex: 1 1 auto; min-width: 0; }
-  #chatSection .bar > #undoBtn, #chatSection .bar > #rollBtn { order: 0; flex: none; padding: 3px 8px; font-size: 13px; }
+  #chatSection .bar > #undoBtn, #chatSection .bar > #rollBtn { order: 0; flex: none; }
   .dice-btn { width: 26px; height: 26px; right: 6px; bottom: 6px; }
   .msg-wrap textarea { padding-right: 38px; }
+}
+
+/* ---- Tree, Roll, Undo and Select are one button family: the same box and the same text size at every
+   width. Each button's own rule still decides where it sits; this block owns only its size. */
+#chatSection .bar > .chat-action,
+#headerChat > .chat-action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  #chatSection .bar > .chat-action,
+  #headerChat > .chat-action { min-height: 30px; padding: 4px 10px; font-size: 13px; }
 }
 
 /* ---- sandboxes: the editor's checkbox row and the admin browser */
@@ -475,17 +508,16 @@ a { text-decoration-color: var(--accent-glow); text-underline-offset: 3px; }
   #headerChat { gap: 6px; }
   header > .spacer { display: none; }   /* otherwise it takes the leftover width and pushes the gear off the right edge */
   #headerChat > .chat-title { flex: 1 1 0; }
-  #headerChat > #undoBtn, #headerChat > #rollBtn { flex: none; padding: 3px 8px; font-size: 13px; }
-  #chatSection .bar { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
+  #headerChat > #undoBtn, #headerChat > #rollBtn { flex: none; }
+  #chatSection .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; row-gap: 6px; }
   #chatSection .bar > #usage { order: 0; flex: 1 1 auto; min-width: 0; }
 }
 
-/* ---- Send is an up arrow on every screen; on phones the header row has no Roll button (Roll stays in the chat bar on desktop). */
+/* ---- Send is an up arrow on every screen. Roll stays in the chat bar with Tree, Undo and Select. */
 #sendBtn { display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; min-width: 48px; }
 #sendBtn svg { width: 20px; height: 20px; }
 @media (max-width: 760px) {
   #sendBtn { min-width: 44px; padding: 0 10px; }
-  #headerChat > #rollBtn { display: none; }
 }
 
 /* ---- deleting saved messages: the trash beside Regenerate, the pick boxes and the pick bar */
@@ -503,7 +535,7 @@ button.danger:not(:disabled):hover { background: color-mix(in srgb, var(--error)
 button.danger:disabled { opacity: .5; }
 @media (max-width: 760px) {
   /* the bar wraps on phones: the Select button sits on the title row, after Undo */
-  #chatSection .bar > #selectBtn { order: 3; padding: 3px 8px; font-size: 13px; }
+  #chatSection .bar > #selectBtn { order: 3; }
   .pick-bar { gap: 6px; padding: 6px 8px; }
   .pick-bar #pickCount { flex: 1 0 100%; }
 }
@@ -546,23 +578,28 @@ header .icon-btn { flex: 0 0 36px; }
 a.brand { text-decoration: none; }
 .home-main { max-width: 1040px; margin: 0 auto; padding: 22px 16px 40px; }
 .home-main h1 { font-size: 22px; margin: 4px 0; }
-.home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 16px; }
+/* The card is a row (picture, then text), so a column has to be wide enough to hold both: at 240px the
+   text column fell to about 96px and the name, creator and description broke one word per line. 290px is
+   the width the card had in the design shots; below that the text moves under the picture instead. */
+.home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr)); gap: 14px; margin-top: 16px; }
 /* The card is the page colour; the gradient shows through the 1px border as its outline. */
 .home-card { position: relative; border: 1px solid transparent; border-radius: 14px;
   background: linear-gradient(var(--bg), var(--bg)) padding-box, linear-gradient(135deg, var(--accent), var(--accent-2)) border-box; }
 .home-card:hover .home-name { color: var(--accent); }
-.home-card .home-open { background: none; border: 0; color: inherit; font: inherit; font-weight: 400; text-align: left; width: 100%; height: 100%; display: flex; flex-direction: row; align-items: flex-start; gap: 14px; padding: 18px 50px 18px 18px; border-radius: 14px; cursor: pointer; }
+.home-card .home-open { background: none; border: 0; color: inherit; font: inherit; font-weight: 400; text-align: left; width: 100%; height: 100%; display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 14px; padding: 18px 50px 18px 18px; border-radius: 14px; cursor: pointer; }
 .home-card .home-open:hover { background: none; }
 .home-avatar { flex: 0 0 64px; width: 64px; height: 64px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--avatar-ring, var(--line)); overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text-soft); font-size: 24px; font-weight: 700; }
 .home-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .face { display: block; width: 100%; height: 100%; background: var(--accent); }
 .face svg { display: block; width: 100%; height: 100%; }
-.home-text { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-width: 0; }
+/* When the card cannot give the text this much room beside the picture, the text wraps to its own line
+   and takes the full card width. Without the basis it was squeezed into whatever was left. */
+.home-text { display: flex; flex-direction: column; gap: 6px; flex: 1 1 132px; min-width: 0; }
 .home-name { font-weight: 700; font-size: 16px; color: var(--ink); }
 .home-headline { font-size: 14px; color: var(--text-soft); line-height: 1.45; margin: 0; }
 .home-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .home-tag { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--input); color: var(--muted); }
-.home-card .home-info { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--surface); color: var(--text-soft); border: 1px solid var(--line); font-family: Georgia, serif; font-style: italic; font-weight: 700; }
+.home-card .home-info { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--surface); color: var(--text-soft); border: 1px solid var(--line); font-family: Georgia, serif; font-weight: 700; }
 .home-dialog { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; width: min(520px, 92vw); padding: 22px; }
 .home-dialog::backdrop { background: rgba(0, 0, 0, .55); }
 .home-dialog h2 { margin: 0; font-size: 20px; }
@@ -791,7 +828,6 @@ body.page-art { background: linear-gradient(var(--shade-overlay), var(--shade-ov
 .persona-form label { display: grid; gap: 4px; font-size: 13px; }
 .persona-form textarea { width: 100%; resize: vertical; }
 .persona-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.side-head { display: flex; justify-content: flex-start; padding: 6px 4px 0; }
 .desk-meters { display: flex; align-items: center; gap: 12px; margin: 6px 0 0; }
 .desk-meters:empty { display: none; }
 .desk-meters #usage { flex: none; font-size: 12px; white-space: nowrap; }
@@ -808,23 +844,48 @@ body.page-art { background: linear-gradient(var(--shade-overlay), var(--shade-ov
   text-decoration: none; }
 .button-link:hover { border-color: var(--accent); color: var(--ink); }
 
-.profile-main { max-width: 980px; }
+/* The page column is a fixed-height flex box (the shell is one window tall) that scrolls. A flex child may
+   shrink below its own content, so when a profile or gallery page was taller than the window the blocks in
+   it were squeezed: the hero flattened from 184px to 42px and its overflow clipped the picture and the text.
+   These pages scroll instead of squeezing, so their blocks keep their natural height. */
+.profile-main > *, .home-main > * { flex: 0 0 auto; }
+
+/* The profile page sits in the same shell as the gallery and the chat, so the sidebar and the header line up.
+   The hero hugs its content until it has a background picture to show. */
+.profile-main { max-width: 980px; width: 100%; margin: 0 auto; }
 .profile-hero { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 18px;
-  min-height: 230px; display: flex; align-items: flex-end; padding: 24px; margin-bottom: 10px;
+  min-height: 230px; display: flex; align-items: flex-end; padding: 24px; margin: 0 0 18px;
   background: linear-gradient(135deg, var(--surface), var(--surface-2)); }
+.profile-hero:not(.has-art) { min-height: fit-content; align-items: center; padding: 20px 24px; }
+.profile-hero:not(.has-art) .profile-shade { display: none; }
 .profile-art { position: absolute; inset: 0; background-size: cover; background-position: center; }
 .profile-shade { position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(2,3,7,.10), rgba(2,3,7,.78)); }
-.profile-hero-body { position: relative; display: flex; align-items: flex-end; gap: 18px; width: 100%; flex-wrap: wrap; }
+  background: linear-gradient(180deg, rgba(2,3,7,.28), rgba(2,3,7,.86)); }
+/* A video is far busier than a still, so its hero keeps a gradient scrim. This selector carries the hero
+   class on purpose: redesign.css sets a flat wash on .profile-shade and loads later, and only a more
+   specific rule wins against it. */
+.profile-hero.has-video .profile-shade { display: block;
+  background: linear-gradient(180deg, rgba(2,3,7,.34), rgba(2,3,7,.84)); }
+.profile-hero-body { position: relative; display: flex; align-items: center; gap: 18px; width: 100%; flex-wrap: wrap; }
+.profile-hero.has-art .profile-hero-body { align-items: flex-end; }
 .profile-avatar { flex: none; width: 96px; height: 96px; border-radius: 36%; overflow: hidden;
   border: 2px solid rgba(255,255,255,.75); background: var(--surface); display: flex; align-items: center;
   justify-content: center; font-size: 34px; font-weight: 700; color: var(--text-soft); }
-.profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.profile-avatar img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; object-position: 50% 50%; }
+/* With no picture the hero shows a monogram. A bright ring around an empty box read as a broken image,
+   so the monogram gets a tile of its own, with a ring that holds in either theme. */
+.profile-hero.no-avatar .profile-avatar { background: var(--surface-2);
+  border-color: color-mix(in oklab, var(--ink) 24%, transparent); }
 .profile-headline { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .profile-headline h1 { margin: 0; font-size: 28px; overflow-wrap: anywhere; }
 .profile-bio { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 660px; }
 .profile-hero.has-art .profile-headline h1, .profile-hero.has-art .profile-bio,
 .profile-hero.has-art .profile-meta, .profile-hero.has-art .muted { color: #f4f8ff; text-shadow: 0 1px 8px rgba(0,0,0,.6); }
+/* the two character lists share one heading rhythm, and both start at the hero's left edge */
+.profile-section { margin: 0 0 18px; }
+.profile-section h2 { font-size: 18px; margin: 0 0 8px; }
+.profile-section > .muted { margin: 0 0 10px; }
+.profile-back { margin: 4px 0 0; }
 .profile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .profile-char { display: flex; gap: 12px; align-items: flex-start; padding: 14px; border: 1px solid var(--line);
   border-radius: 14px; background: var(--card); color: inherit; text-decoration: none; }
@@ -832,7 +893,7 @@ body.page-art { background: linear-gradient(var(--shade-overlay), var(--shade-ov
 .profile-char-avatar { flex: none; width: 52px; height: 52px; border-radius: 36%; overflow: hidden;
   box-shadow: 0 0 0 1.5px var(--avatar-ring, var(--line)); display: flex; align-items: center;
   justify-content: center; background: var(--surface-2); }
-.profile-char-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.profile-char-avatar img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; object-position: 50% 50%; }
 .profile-char-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .profile-char-name { font-weight: 700; }
 .profile-char-line { font-size: 13px; color: var(--text-soft); }
@@ -849,7 +910,7 @@ body.page-art { background: linear-gradient(var(--shade-overlay), var(--shade-ov
 .profile-thumb.wide { width: 72px; }
 
 @media (max-width: 600px) {
-  .profile-hero { padding: 18px; }
+  .profile-hero, .profile-hero:not(.has-art) { padding: 18px; }
   .profile-avatar { width: 72px; height: 72px; font-size: 26px; }
   .profile-headline h1 { font-size: 22px; }
   .profile-grid { grid-template-columns: 1fr; }
@@ -865,3 +926,59 @@ body.page-art { background: linear-gradient(var(--shade-overlay), var(--shade-ov
 
 /* Mind Palace: the marker on an entry the character added itself */
 .palace-auto { font-size: 12px; margin: 0 0 4px; }
+
+/* ---- ambient: soft blurred circles that drift behind every page, on phones as well as desktop. Each circle has its own
+   tone, size, path, pace and start point (common.js circleField), so the field is never the same twice. The page field
+   is fixed behind everything and shows only where a character has no picture of its own. Its tint (affection toward
+   amber, energy toward green) is set on the root by app.js and is zero everywhere else. */
+.ambient-field { position: absolute; inset: 0; z-index: -1; overflow: hidden; border-radius: inherit; pointer-events: none;
+  container-type: size; --tone-1: var(--accent); --tone-2: var(--accent-2); --tone-3: var(--accent-3); }
+.ambient-page { position: fixed; --ambient-amber: #f5a94b; --ambient-leaf: #5fd38a;
+  --tone-1: color-mix(in oklab, color-mix(in oklab, var(--accent) calc(100% - var(--ambient-warm, 0%)), var(--ambient-amber)) calc(100% - var(--ambient-green, 0%)), var(--ambient-leaf));
+  --tone-2: color-mix(in oklab, color-mix(in oklab, var(--accent-2) calc(100% - var(--ambient-warm, 0%)), var(--ambient-amber)) calc(100% - var(--ambient-green, 0%)), var(--ambient-leaf));
+  --tone-3: color-mix(in oklab, color-mix(in oklab, var(--accent-3) calc(100% - var(--ambient-warm, 0%)), var(--ambient-amber)) calc(100% - var(--ambient-green, 0%)), var(--ambient-leaf)); }
+body.page-art .ambient-page { display: none; }
+:root body:not(.page-art) { isolation: isolate; }
+.ambient-circle { position: absolute; left: 0; top: 0; width: var(--s); height: var(--s);
+  background: radial-gradient(circle closest-side, color-mix(in oklab, var(--tone) var(--a), transparent), transparent 46%);
+  transform: translate(calc(var(--x0) - 50%), calc(var(--y0) - 50%));
+  animation: ambient-drift var(--cd, 75s) ease-in-out var(--cs, 0s) infinite alternate; }
+@keyframes ambient-drift {
+  0%   { transform: translate(calc(var(--x0) - 50%), calc(var(--y0) - 50%)); }
+  35%  { transform: translate(calc(var(--x1) - 50%), calc(var(--y1) - 50%)); }
+  70%  { transform: translate(calc(var(--x2) - 50%), calc(var(--y2) - 50%)); }
+  100% { transform: translate(calc(var(--x3) - 50%), calc(var(--y3) - 50%)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ambient-circle { animation: none; }
+}
+
+/* ---- background videos: muted, looping. The blur and dimming are baked into the WebM by the server (editor.py),
+   so the page applies no filter here: a live filter on a full-screen video is the costliest thing on the page.
+   The scale-up hides the soft edge a blur leaves at the border of the frame. A reader who asked for reduced
+   motion is shown the poster frame instead, so nothing here moves. */
+.art-layer.video { background: none; }
+.art-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block;
+  transform: scale(1.05); pointer-events: none; }
+/* the chat page's video background sits behind the sidebar and the chat column */
+.shell { position: relative; }
+.page-art-video { position: absolute; inset: 0; z-index: 0; overflow: hidden; }
+.page-art-video video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  transform: scale(1.05); }
+.page-art-video .art-shade { position: absolute; inset: 0; background: rgba(2, 3, 7, .62); }
+/* Light mode shows background pictures and videos as they are: no shade over them, on cards or in chat. */
+[data-theme="light"] .art-shade { display: none; }
+/* Above the video. The sidebar only needs a stacking context where it is a flex column: on phones it is a
+   fixed drawer, and a position: relative here beat the drawer's own rule and pushed the page off-screen. */
+.shell > .content { position: relative; z-index: 1; }
+@media (min-width: 761px) { .shell > .sidebar { position: relative; z-index: 1; } }
+/* a video background on an account page loops behind the hero */
+.profile-art-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  transform: scale(1.05); }
+
+@media (prefers-reduced-motion: reduce) {
+  .art-video, .page-art-video video, .profile-art-video { transform: none; }
+}
+
+/* A home card with no picture of its own carries its own circle field (common.js circleField), behind its text. */
+.home-card.has-field { isolation: isolate; }

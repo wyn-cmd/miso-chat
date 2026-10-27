@@ -2,19 +2,21 @@
 
 // Theme and highlight colour. Stored per browser in localStorage ("rp_theme", "rp_accent").
 // The light/dark tokens live in style.css and tokens.css; theme-init.js sets the attribute before first paint.
-// "rp_ui" picks which look the app wears: "spore" (1.5.0, the default), "classic" (Hyacinth, the 1.4.1 look) or "moon"
-// (Moonlit, a sheet of its own over redesign.css). The stored value stays "classic" even though the theme is named
-// Hyacinth, so choices already saved in a browser keep working. Classic switches the redesign stylesheet off, so the
-// plain style.css underneath shows through. Moonlit keeps redesign.css and adds moon.css over it, with data-look="moon".
+// "rp_ui" picks which look the app wears: "moon" (Moonlit, the default, a sheet of its own over redesign.css),
+// "folio" (Soft Shadows), "dusk", or "classic" (Hyacinth, the 1.4.1 look). The stored value stays "classic" even
+// though the theme is named Hyacinth, so choices already saved in a browser keep working. Classic switches the
+// redesign stylesheet off, so the plain style.css underneath shows through. The other looks keep redesign.css and
+// add their own sheet over it, with data-look set to the look's name. A saved look that no longer exists (Spore)
+// falls back to Moonlit.
 const UI_KEY = "rp_ui";
-const UI_SPORE = "spore";
 const UI_CLASSIC = "classic";
 const UI_MOON = "moon";
 const UI_FOLIO = "folio";
-// The sheet each look adds over redesign.css. Spore needs none; Hyacinth switches redesign.css off instead.
-const LOOK_SHEETS = { moon: "/static/moon.css", folio: "/static/folio.css" };
+const UI_DUSK = "dusk";
+// The sheet each look adds over redesign.css. Hyacinth switches redesign.css off instead.
+const LOOK_SHEETS = { moon: "/static/moon.css", folio: "/static/folio.css", dusk: "/static/dusk.css" };
+const ACCENT_DEFAULT_DUSK = "#a0b0f4";
 const ACCENT_DEFAULT_FOLIO = "#1b6e66";
-const ACCENT_DEFAULT_SPORE = "#fb836d";
 const ACCENT_DEFAULT_CLASSIC = "#4cc4ff";
 const ACCENT_DEFAULT_MOON = "#8fd3cc";
 const THEME_KEY = "rp_theme";
@@ -37,7 +39,7 @@ function lookDefaults(list) {
 function uiThemeName() {
   try {
     const saved = localStorage.getItem(UI_KEY);
-    return saved === UI_CLASSIC || saved === UI_SPORE || saved in LOOK_SHEETS ? saved : UI_MOON;
+    return saved === UI_CLASSIC || saved in LOOK_SHEETS ? saved : UI_MOON;
   } catch (e) { return UI_MOON; }
 }
 
@@ -45,7 +47,8 @@ function accentDefault() {
   const look = uiThemeName();
   if (look === UI_CLASSIC) return ACCENT_DEFAULT_CLASSIC;
   if (look === UI_FOLIO) return ACCENT_DEFAULT_FOLIO;
-  return look === UI_MOON ? ACCENT_DEFAULT_MOON : ACCENT_DEFAULT_SPORE;
+  if (look === UI_DUSK) return ACCENT_DEFAULT_DUSK;
+  return ACCENT_DEFAULT_MOON;
 }
 
 // The paper colour of the active look, for the browser's own chrome around the page.
@@ -66,7 +69,7 @@ function applyMetaTheme() {
 // The attribute is data-look, not data-ui: data-ui is the marker design tools use for a cropped interface fragment,
 // and setting it on <html> makes an inspector read the whole page as a fragment.
 function applyUi(name) {
-  const look = name === UI_CLASSIC || name === UI_SPORE || name in LOOK_SHEETS ? name : UI_MOON;
+  const look = name === UI_CLASSIC || name in LOOK_SHEETS ? name : UI_MOON;
   document.documentElement.dataset.look = look;
   const link = document.getElementById("uiTheme");
   if (link) link.disabled = look === UI_CLASSIC;
@@ -88,6 +91,57 @@ function applyUi(name) {
   const pick = document.getElementById("accentPick");
   if (pick && !savedAccent()) pick.value = accentDefault();
 }
+
+// Soft circles drifting in a field. Each circle is drawn with its own tone, size, path, pace and start point, so no
+// two fields move alike. The page field is fixed behind everything; a card's field sits inside the card. Only the page
+// field takes a character's tint (setAmbientMood), so its colours and pace move with the character's mood and affection.
+function randBetween(a, b) { return a + Math.random() * (b - a); }
+
+function setCirclePace(c, speed) {
+  const pace = Number(c.dataset.pace);
+  c.style.setProperty("--cd", (pace * speed).toFixed(1) + "s");
+  c.style.setProperty("--cs", (-Number(c.dataset.start) * pace * speed).toFixed(1) + "s");
+}
+
+function circleField(count, extra) {
+  const field = el("span", "", "ambient-field" + (extra ? " " + extra : ""));
+  field.setAttribute("aria-hidden", "true");
+  const sizes = extra ? [20, 39] : [34, 68];   // in cqmax: a share of the larger side of the field
+  for (let i = 0; i < count; i++) {
+    const c = el("span", "", "ambient-circle");
+    c.style.setProperty("--tone", "var(--tone-" + ((i % 3) + 1) + ")");
+    c.style.setProperty("--a", Math.round(randBetween(14, 30)) + "%");
+    c.style.setProperty("--s", randBetween(sizes[0], sizes[1]).toFixed(1) + "cqmax");
+    for (let k = 0; k < 4; k++) {
+      c.style.setProperty("--x" + k, randBetween(-10, 110).toFixed(1) + "cqw");
+      c.style.setProperty("--y" + k, randBetween(-10, 110).toFixed(1) + "cqh");
+    }
+    c.dataset.pace = 70 + 1 + Math.floor(Math.random() * 10);   // the 70 second baseline plus a random 1 to 10
+    c.dataset.start = Math.random().toFixed(4);                  // where in the cycle it starts, as a fraction
+    setCirclePace(c, 1);
+    field.appendChild(c);
+  }
+  return field;
+}
+
+// The tint and speed of the page field: affection warms its colours toward amber (up to 8 percent), energy leans them
+// toward green (up to 6 percent), and both speed the drift by up to 15 percent. At zero it is the look's own.
+let pageField = null;
+function setAmbientMood(warm, green) {
+  const s = document.documentElement.style;
+  s.setProperty("--ambient-warm", (warm * 8).toFixed(1) + "%");
+  s.setProperty("--ambient-green", (green * 6).toFixed(1) + "%");
+  const speed = 1 - 0.15 * (warm + green) / 2;
+  if (pageField) for (const c of pageField.querySelectorAll(".ambient-circle")) setCirclePace(c, speed);
+}
+
+function mountPageField() {
+  if (pageField || !document.body) return;
+  pageField = circleField(3, "ambient-page");
+  document.body.prepend(pageField);
+}
+if (document.body) mountPageField(); else document.addEventListener("DOMContentLoaded", mountPageField);
+setAmbientMood(0, 0);
 
 function applyAccent(hex) {
   const s = document.documentElement.style;
@@ -131,6 +185,29 @@ function applyAvatarShape(shape) {
   const circle = shape === "circle";
   document.documentElement.dataset.avatar = circle ? "circle" : "squircle";
   try { localStorage.setItem(AVATAR_KEY, circle ? "circle" : "squircle"); } catch (e) { /* storage blocked */ }
+}
+
+// The account's own picture at the top of the sidebar, beside the Characters heading. It opens the
+// profile page for the signed-in account. The server sends a profile only for accounts that have a
+// page, so the built-in admin account leaves this link hidden.
+function renderSideProfile(me) {
+  const link = document.getElementById("sideProfile");
+  if (!link) return;
+  const profile = me && me.profile ? me.profile : null;
+  link.hidden = !profile;
+  if (!profile) return;
+  link.href = "/u/" + encodeURIComponent(me.username);
+  link.textContent = "";
+  if (profile.has_avatar) {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.src = "/api/account-avatar/" + encodeURIComponent(me.username) + "?v=" + (profile.avatar_version || 0);
+    link.appendChild(img);
+  } else {
+    const initial = document.createElement("span");
+    initial.textContent = (me.username.charAt(0) || "?").toUpperCase();
+    link.appendChild(initial);
+  }
 }
 
 function toggleTheme() {
@@ -339,3 +416,83 @@ async function markRead(name) {
     refreshUnread();
   }
 }
+
+// ---- Background art, shared by the gallery, the chat page and the editor --------------------------
+// A background id ending in a video extension is played as a video; every other id is a picture, and a
+// shared default arrives already as a path (so it starts with a slash). Video backgrounds are stored as
+// WebM, with the first frame beside them as <id>.poster.jpg.
+function isVideoArt(id) {
+  return /\.(webm|mp4)$/i.test(String(id || ""));
+}
+
+function artUrl(name, id) {
+  if (String(id).charAt(0) === "/") return String(id);
+  return "/api/background/" + encodeURIComponent(name) + "?b=" + encodeURIComponent(id);
+}
+
+// The still frame of a video background, or null when the id is not a video.
+function posterFor(id) {
+  if (!isVideoArt(id)) return null;
+  return String(id).replace(/\.(webm|mp4)$/i, ".poster.jpg");
+}
+
+function motionReduced() {
+  return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+}
+
+// A silent looping video for use as a background. It is muted, because browsers refuse to autoplay
+// anything else. Its poster is the first frame, so a paused card shows the picture instead of a black box.
+function artVideo(url, poster) {
+  const v = document.createElement("video");
+  v.className = "art-video";
+  v.muted = true;
+  v.loop = true;
+  v.playsInline = true;
+  v.preload = "metadata";
+  if (poster) v.poster = poster;
+  v.setAttribute("muted", "");
+  v.setAttribute("playsinline", "");
+  v.setAttribute("aria-hidden", "true");
+  v.src = url;
+  if (artVideoEdge) artVideoEdge.observe(v);
+  return v;
+}
+
+// A background video plays only while it is wanted, on screen and the tab is showing. A grid of cards
+// otherwise decodes every video at once, and an open tab keeps decoding behind other windows.
+// v.__want is set by setArtPlaying; v.__inView is set by the observer, and an element it has not reported
+// on yet (the chat and profile videos, which sit in the page) counts as in view.
+const artVideoEdge = typeof IntersectionObserver === "function" ? new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    const v = entry.target;
+    if (!v.isConnected) { artVideoEdge.unobserve(v); continue; }
+    v.__inView = entry.isIntersecting;
+    syncArtVideo(v);
+  }
+}) : null;
+
+function syncArtVideo(v) {
+  const on = !!v.__want && v.__inView !== false && !document.hidden && !motionReduced();
+  if (on) {
+    const p = v.play();
+    if (p && p.catch) p.catch(() => {});
+  } else {
+    v.pause();
+  }
+}
+
+// Play or pause a background video inside a layer. A refusal (autoplay policy, unloaded source) is not
+// worth reporting: the poster frame stays, which is the same thing a still background would show.
+function setArtPlaying(host, playing) {
+  const v = host && host.querySelector("video");
+  if (!v) return;
+  v.__want = !!playing;
+  syncArtVideo(v);
+}
+
+// Switching tabs or minimising the window pauses every wanted video; coming back resumes the ones on screen.
+document.addEventListener("visibilitychange", () => {
+  for (const v of document.querySelectorAll("video")) {
+    if (v.__want) syncArtVideo(v);
+  }
+});
