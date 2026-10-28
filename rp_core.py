@@ -530,7 +530,8 @@ class Engine:
         self.dream_file = os.path.join(self.state_dir, "dream.json")
         self.dream_calls = 0               # model calls the last dream made, for the server's dream cap
         last = _read_json(self.dream_file, {})
-        self.dream_len = int(last.get("len", 0)) if isinstance(last, dict) else 0   # history length at the last dream        self.event_memory_enabled = False  # the admin switch in effect this turn; set by the server
+        self.dream_len = int(last.get("len", 0)) if isinstance(last, dict) else 0   # history length at the last dream
+        self.event_memory_enabled = False  # the admin switch in effect this turn; set by the server
         self.event_text = ""               # the event block for this turn; empty when off or nothing matches
         self.graph_file = os.path.join(self.state_dir, eventgraph.FILE)
         self.graph = eventgraph.load(self.graph_file)   # the event memory graph, written by the nightly dream
