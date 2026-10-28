@@ -159,7 +159,7 @@ function renderDeepSeek(d) {
   body.textContent = "";
   const ds = d.deepseek || { models: [], totals: { cost: {} } };
   if (!ds.models.length) {
-    body.appendChild(row([window.tr("No DeepSeek usage in this range"), "", "", "", "", "", ""]));
+    body.appendChild(row([window.tr("No DeepSeek usage in this range"), "", "", "", "", "", "", ""]));
     $("dsNote").textContent = "";
     return;
   }
@@ -167,18 +167,18 @@ function renderDeepSeek(d) {
     const cached = Math.min(Number(m.cached_tokens || 0), Number(m.input_tokens || 0));
     const label = m.fallback_rates ? window.tr("{model} (fallback rates)", { model: m.model }) : m.model;
     body.appendChild(row([label, fmt(m.requests), fmt(cached), fmt(Math.max(0, Number(m.input_tokens) - cached)),
-      fmt(m.output_tokens), Number(m.seconds || 0).toFixed(1), money(m.cost[currency], currency)]));
+      fmt(m.output_tokens), fmt(m.peak_tokens), Number(m.seconds || 0).toFixed(1), money(m.cost[currency], currency)]));
   }
   const t = ds.totals;
   const line = row([window.tr("Total"), fmt(t.requests), fmt(t.cached_tokens),
     fmt(Math.max(0, Number(t.input_tokens || 0) - Number(t.cached_tokens || 0))), fmt(t.output_tokens),
-    Number(t.seconds || 0).toFixed(1), money(t.cost[currency], currency)]);
+    fmt(t.peak_tokens), Number(t.seconds || 0).toFixed(1), money(t.cost[currency], currency)]);
   line.classList.add("active");
   body.appendChild(line);
   const rates = (ds.prices && ds.prices["deepseek-flash"] && ds.prices["deepseek-flash"][currency]) || null;
   $("dsNote").textContent = rates
-    ? window.tr("Per million tokens in {currency}: cached input {cached}, uncached input {uncached}, ", { currency: currency.toUpperCase(), cached: rates.cache_hit, uncached: rates.cache_miss })
-      + window.tr("output {output}. Off-peak discounts and your own plan are not included.", { output: rates.output })
+    ? window.tr("Per million tokens in {currency} at the peak rate: cached input {cached}, uncached input {uncached}, ", { currency: currency.toUpperCase(), cached: rates.peak.cache_hit, uncached: rates.peak.cache_miss })
+      + window.tr("output {output}. Off-peak hours (01:00-04:00 and 06:00-10:00 UTC, Monday to Friday) bill half of this; your own plan is not included.", { output: rates.peak.output })
     : window.tr("No rates are loaded for this currency.");
 }
 
