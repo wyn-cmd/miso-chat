@@ -291,7 +291,7 @@ Every limit is checked before each turn. A turn is blocked when any window is al
 
 Each account can see its usage under Settings, Account, Token usage (View usage). The pop-up shows a progress bar and percentage for each window. The bar in the chat top bar shows whichever window is closest to its limit.
 
-The admin stats page also splits the tokens the way providers bill them: cached input (a prompt-cache hit), uncached input and output, with the model time spent on each turn. That split starts with this version, so earlier days show 0 there. For tokens that went to the DeepSeek key it adds a cost estimate per model, in USD or CNY, from published DeepSeek rates per million tokens. The rates are mapped onto this server's DeepSeek model ids and leave out off-peak discounts, so read the figure as an estimate. To use your own rates, set the `deepseek_prices` setting to JSON in the same shape as the table in `web/pricing.py`.
+The admin stats page also splits the tokens the way providers bill them: cached input (a prompt-cache hit), uncached input and output, with the model time spent on each turn. That split starts with this version, so earlier days show 0 there. For tokens that went to the DeepSeek key it adds a cost estimate per model, in USD or CNY, from published DeepSeek rates per million tokens. The rates are mapped onto this server's DeepSeek model ids and follow DeepSeek's billing hours: each call is priced by the hour its answer finished, at the peak rate in peak hours (01:00-04:00 and 06:00-10:00 UTC, Monday to Friday) and at half of it the rest of the time. That split starts with this version too, so earlier DeepSeek days are priced at the off-peak rate, and Chinese public holidays are treated as weekdays, so read the figure as an estimate. To use your own rates, set the `deepseek_prices` setting to JSON in the same shape as the table in `web/pricing.py`.
 
 ## Saving tokens
 
@@ -482,7 +482,13 @@ It asks for the backup password. Keep `MISO_SECRET_KEY` from the restored `.env`
 
 ## Checks
 
-This copy does not include the automated test suite. A basic static check is:
+The tests folder holds automated tests for the core logic: the token and request limits, the window and clip boundary math, clipping, and the quenching stages. A second file walks the repository as the sanitisation scan: no secret or personal data, no local-state files, an empty substitutions table, and matching version strings. Run from the project folder:
+
+    python -m unittest discover -s tests
+
+The rp_core tests need the same packages as the server (`pytz`, `google-genai`); the scan tests run on any Python. When the variable `MISO_PRIVATE_TERMS` names a file of private terms, one per line, the scan checks those terms too and skips that check otherwise.
+
+A basic static check is:
 
     pip install pyflakes
     python -m pyflakes rp_core.py llm_backends.py dotenv_loader.py web
