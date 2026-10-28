@@ -1993,7 +1993,9 @@ def make_app(client=None, data_dir=None, char_root=None):
             "characters": characters, "groups": groups,
             "note": "Per-provider counts start when this update went live. Earlier usage is counted as Gemini, "
                     "with no message counts. The token split (cached input, uncached input, output) starts with "
-                    "this update too, so earlier days show 0 there.",
+                    "this update too, so earlier days show 0 there. The peak and off-peak split for DeepSeek "
+                    "starts with this update as well: each call is priced by the hour its answer finished, and "
+                    "earlier DeepSeek days are priced at the off-peak rate.",
         }
 
     # ---- session

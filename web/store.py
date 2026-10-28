@@ -13,6 +13,7 @@ import datetime
 import pytz
 
 from rp_core import pacific_date
+from web import pricing
 
 REMEMBER_SECONDS = 30 * 24 * 3600      # "keep me signed in": renewed while the device keeps using the site
 SHORT_SESSION_SECONDS = 12 * 3600      # without "keep me signed in"
@@ -244,6 +245,21 @@ def needs_rehash(stored):
 SYSTEM_USER = 0
 
 
+def utcnow():
+    # The current UTC time, as its own function so tests can pin it.
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _peak_split(provider, input_tokens, cached_tokens, output_tokens):
+    # Which share of one call's tokens DeepSeek bills at the peak rate: all of them if the call's
+    # completion fell in a peak window, none of them otherwise. Other providers have no split.
+    if provider != "deepseek" or pricing.is_offpeak(utcnow()):
+        return 0, 0, 0
+    cached = min(int(cached_tokens or 0), int(input_tokens or 0))
+    uncached = max(0, int(input_tokens or 0) - cached)
+    return cached, uncached, int(output_tokens or 0)
+
+
 class Store:
     def __init__(self, path):
         self.path = path
@@ -277,6 +293,13 @@ class Store:
                     c.execute(f"ALTER TABLE usage_daily ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
             if "seconds" not in dcols:
                 c.execute("ALTER TABLE usage_daily ADD COLUMN seconds REAL NOT NULL DEFAULT 0")
+            # The peak and off-peak split: which of a DeepSeek call's tokens were billed at the peak rate.
+            # Older rows keep 0: the split was not recorded then, and is priced as off-peak instead.
+            mcols = {r["name"] for r in c.execute("PRAGMA table_info(usage_models)")}
+            for table, cols in (("usage_daily", dcols), ("usage_models", mcols)):
+                for col in ("peak_cached_tokens", "peak_miss_tokens", "peak_output_tokens"):
+                    if col not in cols:
+                        c.execute(f"ALTER TABLE {table} ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
             cols = {r["name"] for r in c.execute("PRAGMA table_info(sessions)")}
             if "remember" not in cols:
                 c.execute("ALTER TABLE sessions ADD COLUMN remember INTEGER NOT NULL DEFAULT 0")
@@ -602,34 +625,48 @@ class Store:
 
     def _add_daily(self, day, user_id, requests, tokens, provider, messages, input_tokens, cached_tokens,
                    output_tokens, seconds, model):
+        peak_cached, peak_miss, peak_output = _peak_split(provider, input_tokens, cached_tokens, output_tokens)
         self._run("INSERT INTO usage_daily (day, user_id, provider, requests, tokens, messages, "
-                  "input_tokens, cached_tokens, output_tokens, seconds) "
-                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                  "input_tokens, cached_tokens, output_tokens, seconds, "
+                  "peak_cached_tokens, peak_miss_tokens, peak_output_tokens) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                   "ON CONFLICT(day, user_id, provider) DO UPDATE SET "
                   "requests = requests + excluded.requests, tokens = tokens + excluded.tokens, "
                   "messages = messages + excluded.messages, "
                   "input_tokens = input_tokens + excluded.input_tokens, "
                   "cached_tokens = cached_tokens + excluded.cached_tokens, "
                   "output_tokens = output_tokens + excluded.output_tokens, "
-                  "seconds = seconds + excluded.seconds",
+                  "seconds = seconds + excluded.seconds, "
+                  "peak_cached_tokens = peak_cached_tokens + excluded.peak_cached_tokens, "
+                  "peak_miss_tokens = peak_miss_tokens + excluded.peak_miss_tokens, "
+                  "peak_output_tokens = peak_output_tokens + excluded.peak_output_tokens",
                   (day, user_id, provider, requests, tokens, messages,
-                   input_tokens, cached_tokens, output_tokens, seconds))
+                   input_tokens, cached_tokens, output_tokens, seconds,
+                   peak_cached, peak_miss, peak_output))
         if model:
             self._run("INSERT INTO usage_models (day, user_id, model, provider, requests, input_tokens, "
-                      "cached_tokens, output_tokens, seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                      "cached_tokens, output_tokens, seconds, "
+                      "peak_cached_tokens, peak_miss_tokens, peak_output_tokens) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                       "ON CONFLICT(day, user_id, model) DO UPDATE SET "
                       "provider = excluded.provider, requests = requests + excluded.requests, "
                       "input_tokens = input_tokens + excluded.input_tokens, "
                       "cached_tokens = cached_tokens + excluded.cached_tokens, "
                       "output_tokens = output_tokens + excluded.output_tokens, "
-                      "seconds = seconds + excluded.seconds",
-                      (day, user_id, model, provider, requests, input_tokens, cached_tokens, output_tokens, seconds))
+                      "seconds = seconds + excluded.seconds, "
+                      "peak_cached_tokens = peak_cached_tokens + excluded.peak_cached_tokens, "
+                      "peak_miss_tokens = peak_miss_tokens + excluded.peak_miss_tokens, "
+                      "peak_output_tokens = peak_output_tokens + excluded.peak_output_tokens",
+                      (day, user_id, model, provider, requests, input_tokens, cached_tokens, output_tokens,
+                       seconds, peak_cached, peak_miss, peak_output))
 
     def usage_breakdown(self, days, provider="all"):
-        # Input, cached input, output and seconds over the given day strings, per provider.
+        # Input, cached input, output, seconds and the peak-rate share over the given day strings, per provider.
         marks = ",".join("?" for _ in days)
         sql = (f"SELECT provider, SUM(input_tokens) AS input_tokens, SUM(cached_tokens) AS cached_tokens, "
-               f"SUM(output_tokens) AS output_tokens, SUM(seconds) AS seconds "
+               f"SUM(output_tokens) AS output_tokens, SUM(seconds) AS seconds, "
+               f"SUM(peak_cached_tokens) AS peak_cached_tokens, SUM(peak_miss_tokens) AS peak_miss_tokens, "
+               f"SUM(peak_output_tokens) AS peak_output_tokens "
                f"FROM usage_daily WHERE day IN ({marks})")
         args = list(days)
         if provider != "all":
@@ -638,11 +675,13 @@ class Store:
         return self._run(sql + " GROUP BY provider", tuple(args), fetch="all")
 
     def usage_model_totals(self, days, provider="all"):
-        # Per-model input, cached input, output and seconds over the given day strings.
+        # Per-model input, cached input, output, seconds and the peak-rate share over the given day strings.
         marks = ",".join("?" for _ in days)
         sql = (f"SELECT model, provider, SUM(requests) AS requests, SUM(input_tokens) AS input_tokens, "
                f"SUM(cached_tokens) AS cached_tokens, SUM(output_tokens) AS output_tokens, "
-               f"SUM(seconds) AS seconds FROM usage_models WHERE day IN ({marks})")
+               f"SUM(seconds) AS seconds, SUM(peak_cached_tokens) AS peak_cached_tokens, "
+               f"SUM(peak_miss_tokens) AS peak_miss_tokens, SUM(peak_output_tokens) AS peak_output_tokens "
+               f"FROM usage_models WHERE day IN ({marks})")
         args = list(days)
         if provider != "all":
             sql += " AND provider = ?"

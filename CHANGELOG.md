@@ -2,21 +2,23 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
-## 1.5.2-beta-1 - 2026-10-28
+## 1.5.2 - 2026-10-28
 
-A read-aloud, search and settings cleanup release, built on 1.5.1. The server's endpoints and data layout are the same as 1.5.1, and the terminal client is 1.5.2-beta-1 with the same code.
+A read-aloud, search and settings cleanup release, built on 1.5.1. The server's endpoints and data layout are the same as 1.5.1, and the terminal client is 1.5.2 with the same code.
 
 ### Added
 - **Read aloud** (chat and Settings, Voice & audio): a speaker button under each character reply reads it with the browser's speech synthesis. The browser remembers a voice, rate, pitch and volume, and a different voice for each character or group. Auto-read is off by default.
 - **Voice & audio settings**: the panel lists the voices installed in the browser, keeps a saved voice when it is unavailable, and shows a status line when speech is unsupported or has no voices. Test and stop buttons are included.
 - **Scenario library** (Settings, Scenarios): each account keeps its own opening messages for chats, with three to start from. A new chat can offer one chosen scenario, one at random, or none; the opening appears in the chat window with a Start button and is only sent when pressed.
 - **Global search** (sidebar): searches characters, worlds, Mind Palace entries and saved chats. A result opens the chat or the settings panel that owns the match.
+- **Peak and off-peak pricing** for the DeepSeek cost estimate. Each call is priced by the hour its answer finished, at the published peak rates in peak hours (01:00-04:00 and 06:00-10:00 UTC, Monday to Friday) and at the off-peak rates, half of them, the rest of the time. The stats table adds a Peak tokens column.
 
 ### Changed
 - **Default creativity** is now 0.95 for both one-to-one chats and groups. Per-character and per-group settings still override it, and the Default button clears them.
 - **Settings** now has one Story & memory card for Worlds, Mind Palace and Dreams, in place of three separate cards. Each subpanel returns to Story & memory.
 - **Command help** now lists the commands that work in the web chat and notes that `/verbose`, `/exit`, `/quit` and `/quit-clear` are terminal-only. `/exit` no longer claims to close the web chat.
 - The settings grid keeps its 12 cards in four rows of three on desktop after the new Voice & audio card and the Story & memory merge.
+- The DeepSeek rate table holds the published peak and off-peak rates for both currencies; the old table was stale and priced every hour at one rate. An older single-tier `deepseek_prices` override is read as the peak tier, with the off-peak tier at half of it. Chinese public holidays are treated as weekdays, so calls then can be priced high.
 
 ### Removed
 - The separate Worlds, Mind Palace and Dreams cards from the settings grid. Their panels are still available under Story & memory.
@@ -24,6 +26,8 @@ A read-aloud, search and settings cleanup release, built on 1.5.1. The server's 
 ### Fixed
 - `/help` and other command notices no longer disappear when the command reloads the chat history.
 - `/undo` now reloads the chat and then shows its command notice.
+- The engine initialises the event memory switch again; a comment had swallowed the line that set it, so an engine created outside the web app had no switch to read.
+- The tests folder holds automated tests for the token and request limits, window math, clipping, quenching and the sanitisation scans.
 
 ### Known issues
 - Read aloud depends on the voices installed in the browser or operating system. The server does not send audio, and a browser with no voices shows a status message instead.
