@@ -1,11 +1,12 @@
 # Private group chats: one account's groups of solo characters. Only the owner sees or edits them.
 # Member characters stay shared. Each group's chat, memory and notes live in the owner's folder.
 import datetime
-import json
 import os
 import re
 import secrets
 import shutil
+
+from web import user_index
 
 INDEX = "private_groups.json"
 PREFIX = "grp-"
@@ -22,41 +23,28 @@ class GroupError(ValueError):
     pass
 
 
-def _index_path(data_dir, uid):
-    return os.path.join(data_dir, "users", str(uid), INDEX)
-
-
 def state_root(data_dir, uid, gid):
-    return os.path.join(data_dir, "users", str(uid), gid)
+    return user_index.item_path(data_dir, uid, gid)
 
 
 def _read(data_dir, uid):
-    try:
-        with open(_index_path(data_dir, uid), encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        data = {}
     items = []
-    for item in data.get("items", []) if isinstance(data, dict) else []:
-        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not ID_RE.fullmatch(item["id"]):
+    for item in user_index.read_items(data_dir, uid, INDEX):
+        if not isinstance(item.get("id"), str) or not ID_RE.fullmatch(item["id"]):
             continue
-        members = [m for m in item.get("members", []) if isinstance(m, str)]
+        raw_members = item.get("members")
+        members = [m for m in raw_members if isinstance(m, str)] if isinstance(raw_members, list) else []
         items.append({"id": item["id"], "name": clean_name(item.get("name")) or "Group",
                       "members": members, "created": str(item.get("created") or "")})
     return items
 
 
 def _write(data_dir, uid, items):
-    path = _index_path(data_dir, uid)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"items": items}, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    user_index.write_items(data_dir, uid, INDEX, items)
 
 
 def clean_name(name):
-    return " ".join(str(name or "").split())[:NAME_MAX]
+    return user_index.clean_name(name, NAME_MAX)
 
 
 def list_for(data_dir, uid):
@@ -64,10 +52,7 @@ def list_for(data_dir, uid):
 
 
 def get(data_dir, uid, gid):
-    for item in _read(data_dir, uid):
-        if item["id"] == gid:
-            return item
-    return None
+    return user_index.find_by_id(_read(data_dir, uid), gid)
 
 
 def find_by_key(data_dir, uid, key, key_of):
@@ -132,11 +117,7 @@ def delete(data_dir, uid, gid):
 
 def get_notes(data_dir, uid, gid):
     # One note per member, kept in the group's own folder so every branch of the group shares them.
-    try:
-        with open(os.path.join(state_root(data_dir, uid, gid), NOTES_FILE), encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {}
+    data = user_index.read_json(os.path.join(state_root(data_dir, uid, gid), NOTES_FILE))
     if not isinstance(data, dict):
         return {}
     return {k: str(v)[:NOTE_MAX] for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
@@ -152,10 +133,5 @@ def set_notes(data_dir, uid, gid, notes, members):
         if text:
             clean[member] = text
     root = state_root(data_dir, uid, gid)
-    os.makedirs(root, exist_ok=True)
-    path = os.path.join(root, NOTES_FILE)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(clean, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    user_index.write_json(os.path.join(root, NOTES_FILE), clean)
     return clean
