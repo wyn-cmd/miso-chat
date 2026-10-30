@@ -504,6 +504,7 @@ A basic static check is:
 ## Known limits
 
 - Usage caps and token budgets are checked before each turn. A turn that starts under budget can finish over it.
+- Prepaid credits (MCC) are a balance an admin tops up by hand; no payment processor is wired in. Requests are approved on the balance page, or automatically when that switch is on, and credits are spent only after a tier's daily, weekly or monthly budget is used up.
 - OCR accuracy depends on the picture. Tested with clean rendered text, Tesseract read most characters correctly. Real phone screenshots with heavy blur, emoji or stylised fonts are harder, so check the draft.
 - Drafts are one model call per file. A long file is cut at 30,000 characters before it is sent.
 - Chat branches are full copies, so each one takes up disk space in proportion to the chat it copies.

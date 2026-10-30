@@ -27,4 +27,6 @@ def refusal(password, username=""):
     # a run of one or two characters, such as aaaaaaaaaa or ababababab, is one guess for a stranger
     if len(set(password)) <= 2:
         return "Use a mix of characters, not one or two repeated."
+    if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+        return "Use at least one letter and one number."
     return None

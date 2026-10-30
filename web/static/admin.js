@@ -160,6 +160,7 @@ async function loadSettings() {
   $("s_event_memory_enabled").checked = s.event_memory_enabled === "1";
   $("s_memory_policy_enabled").checked = s.memory_policy_enabled === "1";
   $("s_offscreen_enabled").checked = s.offscreen_enabled === "1";
+  $("s_credits_auto_accept").checked = s.credits_auto_accept === "1";
   $("s_dream_daily_cap").value = s.dream_daily_cap;
   $("s_offscreen_daily_cap").value = s.offscreen_daily_cap;
   $("s_dream_every_days").value = s.dream_every_days;
@@ -205,6 +206,7 @@ $("settingsForm").addEventListener("submit", async (ev) => {
       event_memory_enabled: $("s_event_memory_enabled").checked,
       memory_policy_enabled: $("s_memory_policy_enabled").checked,
       offscreen_enabled: $("s_offscreen_enabled").checked,
+      credits_auto_accept: $("s_credits_auto_accept").checked,
       dream_daily_cap: parseInt($("s_dream_daily_cap").value, 10),
       offscreen_daily_cap: parseInt($("s_offscreen_daily_cap").value, 10),
       dream_every_days: parseInt($("s_dream_every_days").value, 10),

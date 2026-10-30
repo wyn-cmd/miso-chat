@@ -69,7 +69,7 @@ COOKIE = "__Host-rp_session" if COOKIE_SECURE else "rp_session"
 LOGIN_CHECKS = 4
 MAX_MESSAGE = 4000
 MAX_DELETE = 500         # most messages one delete call may remove
-MIN_PASSWORD = 10
+MIN_PASSWORD = 12
 # Sign-in input limits. No account can have a longer name, and no password this long can be a real one: such input is
 # refused before any lookup or hash. Passwords set from now on are capped too; longer ones set earlier still sign in.
 MAX_LOGIN_USERNAME = 64
@@ -480,6 +480,17 @@ def _csrf(request):
     # Browsers won't send a custom header cross-site without a CORS preflight, which we never allow.
     if request.headers.get("x-requested-with") != "roleplay":
         raise HTTPException(403, "Bad request.")
+    # Defence in depth: when the browser sends an Origin, it must agree with the Host we are serving.
+    origin = request.headers.get("origin")
+    if origin:
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(origin)
+        except ValueError:
+            raise HTTPException(403, "Bad request.")
+        host = request.headers.get("host", request.url.netloc)
+        if parsed.netloc != host:
+            raise HTTPException(403, "Bad request.")
 
 
 def _current_user(request):
@@ -961,6 +972,11 @@ def _budget_block(st, user):
     # Why a turn must wait, or None: a window whose tokens are already at or over its budget blocks.
     for b in _budget_status(st, user):
         if b["budget"] is not None and b["used"] >= b["budget"]:
+            # Prepaid credits: drain one token instead of blocking, when a balance exists.
+            if st.store.credit_balance(user["id"]) > 0:
+                st.store.adjust_credit(user["id"], -1)
+                st.store.audit("credit_drain", user["username"], None, f"{b['kind']} budget")
+                return None
             return (f"Your {b['kind']} token budget is used up ({b['used']:,} of {b['budget']:,} tokens). "
                     f"It {b['reset']}.")
     return None
@@ -1143,9 +1159,14 @@ def _check_caps(st, user):
     used = st.store.usage_today(user["id"])["requests"]
     cap = _effective_cap(st, user)
     if used >= cap:
-        raise HTTPException(429, {"code": "cap_reached",
-                                  "message": f"Daily request cap reached ({used}/{cap}). "
-                                             "It resets at midnight Pacific."})
+        # Prepaid credits: drain one token instead of blocking, when a balance exists.
+        if st.store.credit_balance(user["id"]) > 0:
+            st.store.adjust_credit(user["id"], -1)
+            st.store.audit("credit_drain", user["username"], None, "daily cap")
+        else:
+            raise HTTPException(429, {"code": "cap_reached",
+                                      "message": f"Daily request cap reached ({used}/{cap}). "
+                                                 "It resets at midnight Pacific."})
     blocked = _budget_block(st, user)
     if blocked:
         raise HTTPException(429, {"code": "budget_reached", "message": blocked})
@@ -1238,7 +1259,7 @@ def _apply_chat_settings(st, user, name, engine):
 
 
 SWITCHES = ("memory_enabled", "palace_enabled", "episodes_enabled", "dreams_enabled", "mood_enabled", "attitude_enabled",
-            "event_memory_enabled", "memory_policy_enabled", "dreams_in_novels", "offscreen_enabled")
+            "event_memory_enabled", "memory_policy_enabled", "dreams_in_novels", "offscreen_enabled", "credits_auto_accept")
 
 
 def _apply_switches(st, engine):
@@ -2027,12 +2048,51 @@ def make_app(client=None, data_dir=None, char_root=None):
         if COOKIE_SECURE:
             # Only over https: the browser then refuses plain http for this site. Set only when the site is served over https.
             resp.headers["Strict-Transport-Security"] = "max-age=31536000"
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith("/api/") and "Cache-Control" not in resp.headers:
+            # Keep a cache header a route set itself (icons, backgrounds) so they are not re-fetched per page.
             resp.headers["Cache-Control"] = "no-store"
         elif request.url.path == "/" or request.url.path.startswith(("/static/", "/login", "/admin", "/2fa-setup", "/u/")):
             # pages and assets must revalidate, so an old cached copy never hides a new layout
             resp.headers["Cache-Control"] = "no-cache"
         return resp
+
+    # Per-account request rate limit, 30 a second or 600 a minute. Icon and background requests are exempt:
+    # a character grid asks for one per card, so counting them would block a normal page load. A burst gets
+    # a short cooldown with Retry-After, never a permanent block; sign-in has its own failed-attempt limits.
+    _RATE_EXEMPT = ("/api/icon/", "/api/background/", "/api/version", "/api/client/")
+    _rate_hits = {}
+    _rate_lock = threading.Lock()
+
+    @app.middleware("http")
+    async def rate_limit(request: Request, call_next):
+        path = request.url.path
+        if not path.startswith("/api/") or path.startswith(_RATE_EXEMPT):
+            return await call_next(request)
+        uid = None
+        cookie = request.cookies.get(COOKIE)
+        if cookie:
+            try:
+                u = st.store.session_user(cookie)
+                if u:
+                    uid = u["id"]
+            except Exception:
+                pass
+        ip = client_ip(request)
+        key = (uid, ip) if uid is not None else ("anon", ip)
+        now = time.time()
+        with _rate_lock:
+            hits = _rate_hits.setdefault(key, [])
+            cutoff = now - 60.0
+            while hits and hits[0] < cutoff:
+                hits.pop(0)
+            recent_second = sum(1 for t in hits if t >= now - 1.0)
+            if recent_second >= 30 or len(hits) >= 600:
+                return JSONResponse({"detail": "Too many requests. Please wait a moment."},
+                                    status_code=429, headers={"Retry-After": "2"})
+            hits.append(now)
+            if len(hits) > 2000:
+                _rate_hits.pop(key, None)
+        return await call_next(request)
 
     def page(name):
         return FileResponse(os.path.join(HERE, "static", name), media_type="text/html")
@@ -2070,6 +2130,10 @@ def make_app(client=None, data_dir=None, char_root=None):
         return page("sandboxes.html")
 
     # The maker page for a novel or a group chat. The kind comes from the address; ?id= edits an existing one.
+    @app.get("/balance")
+    def balance_page():
+        return page("balance.html")
+
     @app.get("/create/novel")
     def create_novel_page():
         return page("maker.html")
@@ -2206,13 +2270,16 @@ def make_app(client=None, data_dir=None, char_root=None):
             _ip_note_fail(ip)
             ip_locked = store.record_failed_ip(username, ip)
             lock = store.record_failed_login(username)
+            store.audit("login_fail", username, ip)
             if lock:
                 if lock[0] == "permanent":
                     found = store.find_user(username)
                     if found:
                         store.end_all_sessions(found["id"])
+                    store.audit("account_lock", username, ip, "permanent")
                 raise _lock_error(lock)
             if ip_locked:
+                store.audit("ip_block", username, ip)
                 raise _ip_error()
             raise HTTPException(401, "Wrong username or password.")
         if not user["totp_enabled"]:
@@ -2220,6 +2287,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             # is half of it, so the code step clears them when the code is right.
             store.clear_login_lock(username)
             store.clear_ip_throttle(username, ip)
+            store.audit("login_success", user["username"], ip)
         if needs_rehash(user["pw_hash"]):
             # Hashes made at a lower scrypt cost are upgraded now that the password is known.
             store.upgrade_hash(user["id"], password)
@@ -2273,6 +2341,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         if not ok:
             _ip_note_fail(ip)
             lock = store.record_failed_login(user["username"])
+            store.audit("login_2fa_fail", user["username"], ip)
             if lock:
                 if lock[0] == "permanent":
                     store.end_all_sessions(user["id"])
@@ -2280,6 +2349,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(401, "That code is wrong or was already used. Enter the one showing now.")
         store.clear_login_lock(user["username"])
         store.clear_ip_throttle(user["username"], client_ip(request))
+        store.audit("login_success", user["username"], ip, "2fa")
         if stage == "setup":
             store.set_totp(user["id"], user["totp_secret"], True, True, step)
         else:
@@ -2361,6 +2431,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         store.set_password(user["id"], new, must_change=False)
         remember = store.session_remembered(request.cookies.get(COOKIE))
         store.end_all_sessions(user["id"])
+        store.audit("password_change", user["username"], client_ip(request))
         token = store.new_session(user["id"], remember=remember)
         resp = JSONResponse({"ok": True})
         _set_session_cookie(resp, token, remember)
@@ -2521,6 +2592,57 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(404, "No such track.")
         return FileResponse(path, media_type=music.SERVED[os.path.splitext(fname)[1]],
                             headers={"Cache-Control": "private, max-age=300"})
+
+    # ---- prepaid credits (MCC): balance, top-up requests, admin approval
+    @app.get("/api/credits")
+    def credits_view(request: Request):
+        user = require(request)
+        reqs = store.credit_requests_for_user(user["id"])
+        return {"tier": _tier_of(user), "balance": store.credit_balance(user["id"]),
+                "auto_accept": store.get_setting("credits_auto_accept") == "1",
+                "requests": reqs}
+
+    @app.post("/api/credits/request")
+    async def credits_request(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        raw = body.get("tokens")
+        tokens = int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) and float(raw).is_integer() else None
+        price = body.get("price")
+        if tokens is None or tokens <= 0 or tokens > 10_000_000:
+            raise HTTPException(400, "tokens must be a positive whole number.")
+        if not isinstance(price, (int, float)) or isinstance(price, bool) or price < 0:
+            raise HTTPException(400, "price must be a non-negative number.")
+        rid = store.add_credit_request(user["id"], tokens, price)
+        if store.get_setting("credits_auto_accept") == "1":
+            store.decide_credit_request(rid, True, user["id"])
+            store.audit("credit_auto_approved", user["username"], client_ip(request), f"{tokens} tokens")
+            return {"ok": True, "auto": True, "balance": store.credit_balance(user["id"])}
+        store.audit("credit_request", user["username"], client_ip(request), f"{tokens} tokens")
+        return {"ok": True, "auto": False, "request_id": rid}
+
+    @app.get("/api/admin/credit-requests")
+    def admin_credit_requests(request: Request):
+        require(request, admin=True)
+        rows = store.list_credit_requests()
+        users = {u["id"]: u["username"] for u in store.list_users()}
+        return {"requests": [{"id": r["id"], "user_id": r["user_id"],
+                              "username": users.get(r["user_id"], "?"),
+                              "tokens": r["tokens"], "price_mcc": r["price_mcc"],
+                              "status": r["status"], "created_at": r["created_at"]} for r in rows]}
+
+    @app.post("/api/admin/credit-requests/{rid}")
+    async def admin_decide_credit(rid: int, request: Request):
+        _csrf(request)
+        me_ = require(request, admin=True)
+        body = _read_body(await request.json())
+        approve = bool(body.get("approve"))
+        ok = store.decide_credit_request(rid, approve, me_["id"])
+        if not ok:
+            raise HTTPException(404, "No such pending request.")
+        store.audit("credit_decide", me_["username"], client_ip(request), f"req {rid} {'approved' if approve else 'rejected'}")
+        return {"ok": True}
 
     @app.get("/api/account/{username}")
     def account_profile(username: str, request: Request):
@@ -3689,6 +3811,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         except ValueError as err:
             raise HTTPException(400, str(err))
         log(f"user {username} created by {me_['username']}")
+        store.audit("admin_create_user", me_["username"], client_ip(request), username)
         return {"id": uid, "username": username}
 
     @app.post("/api/admin/users/{uid}")
@@ -3733,9 +3856,11 @@ def make_app(client=None, data_dir=None, char_root=None):
                 raise HTTPException(400, weak)
             store.set_password(uid, new, must_change=True)
             store.end_all_sessions(uid)
+            store.audit("admin_reset_password", me_["username"], client_ip(request), target["username"])
         if body.get("unlock_sign_in"):
             store.unlock_account(target["username"])
             log(f"sign-in lock cleared for {target['username']} by {me_['username']}")
+            store.audit("admin_unlock", me_["username"], client_ip(request), target["username"])
         if "require_2fa" in body:
             # Requiring it turns the account's two-factor sign-in on; it's set up at the next password sign-in.
             # Requiring it on an account that isn't set up yet ends its sessions: it must finish the set-up page first.

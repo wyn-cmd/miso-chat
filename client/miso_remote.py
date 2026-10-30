@@ -40,7 +40,7 @@ SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".miso_remote", "settings.
 USAGE_BAR_KINDS = ("daily", "weekly", "monthly")
 DEFAULT_USAGE_BAR = "daily"
 # Keep in step with VERSION at the project root. A server must share this major.minor.
-CLIENT_VERSION = "1.6.0"
+CLIENT_VERSION = "1.6.0-beta-4"
 
 
 class ApiError(Exception):

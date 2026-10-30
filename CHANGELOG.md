@@ -2,6 +2,27 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.6.0-beta-4 - 2026-10-30
+
+A beta built on 1.6.0, adding prepaid credits, a sign-in and upload hardening pass and a rate-limit fix. The terminal client is 1.6.0-beta-4. The server adds two tables, one column and one setting on first start.
+
+### Added
+- **Prepaid credits (MCC)**: each account has a token balance. When a tier's daily, weekly or monthly request quota is used up, the next request draws one credit from the balance instead of stopping, until the balance is empty.
+- **Balance page** at `/balance`: shows the tier and balance and sends a top-up request for a token count and a price in MCC. It opens from Settings and carries the usual top bar.
+- **Admin credit requests**: pending top-ups are reviewed on the balance page and approved or rejected there. An "approve automatically" switch skips the review, and each approval credits the account once.
+- **Audit log**: a hash-chained record of sign-ins, locks, admin actions and credit changes, kept in the database.
+- **Upload scanning hook**: ClamAV is used when it is installed, before a portrait, background, music track or imported zip is stored.
+
+### Changed
+- **Passwords**: a new password needs at least 12 characters and includes a letter and a digit. Common passwords, repeated characters and the username are refused.
+- **Request rate limit**: 30 requests a second or 600 a minute per account and address. A burst gets a short cooldown with `Retry-After`, not a permanent block, and icon and background requests are exempt.
+- **Request checks**: state-changing requests must come from the same origin, and sign-in bodies and page JSON have a size limit.
+
+### Fixed
+- Character icons and backgrounds were re-downloaded on every page load because a security header overrode their cache header; they now cache for five minutes.
+- The rate limiter could permanently block an account and its sign-in when a character grid loaded quickly. The permanent block is gone and an admin no longer has to unlock it.
+- A credit top-up returned a bad request when the balance page sent one, and an approved request could be credited twice. Both are fixed.
+
 ## 1.6.0 - 2026-10-30
 
 A release built on 1.5.2, carrying the off-screen life, author's notes, dream bubble viewer, reasoning levels, relationship speed, the Story Bible, document import, a character wizard, Mind Palace checks, core memory, theme music and the Lantern look. The terminal client is 1.6.0.

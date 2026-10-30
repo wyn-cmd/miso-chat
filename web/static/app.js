@@ -276,6 +276,7 @@ async function openTokenUsage() {
 }
 $("tokenUsageBtn").addEventListener("click", openTokenUsage);
 $("tokenUsageClose").addEventListener("click", () => $("tokenUsageDlg").close());
+$("balanceBtn").addEventListener("click", () => { location.href = "/balance"; });
 
 // Follow new text only while the reader is at the bottom, so scrolling up to read history is not undone.
 function nearBottom(log) {
