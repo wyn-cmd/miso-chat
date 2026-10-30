@@ -2,12 +2,11 @@
 # Only the owner sees or uses them. Each lives in the owner's folder as user.md (plus an icon) and is listed in
 # the owner's persona list. Admin personas (shared, from personas.json) are unaffected.
 import datetime
+import json
 import os
 import re
 import secrets
 import shutil
-
-from web import user_index
 
 INDEX = "personas.json"
 FOLDER = "personas"
@@ -28,8 +27,12 @@ def is_own_id(value):
     return isinstance(value, str) and bool(ID_RE.fullmatch(value))
 
 
+def _index_path(data_dir, uid):
+    return os.path.join(data_dir, "users", str(uid), INDEX)
+
+
 def root_for(data_dir, uid):
-    return os.path.join(user_index.user_dir(data_dir, uid), FOLDER)
+    return os.path.join(data_dir, "users", str(uid), FOLDER)
 
 
 def folder_for_persona(data_dir, uid, pid):
@@ -37,9 +40,14 @@ def folder_for_persona(data_dir, uid, pid):
 
 
 def _read(data_dir, uid):
+    try:
+        with open(_index_path(data_dir, uid), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
     items = []
-    for item in user_index.read_items(data_dir, uid, INDEX):
-        if not is_own_id(item.get("id")):
+    for item in data.get("items", []) if isinstance(data, dict) else []:
+        if not isinstance(item, dict) or not is_own_id(item.get("id")):
             continue
         items.append({
             "id": item["id"],
@@ -52,11 +60,16 @@ def _read(data_dir, uid):
 
 
 def _write(data_dir, uid, items):
-    user_index.write_items(data_dir, uid, INDEX, items)
+    path = _index_path(data_dir, uid)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"items": items}, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
 
 
 def clean_name(name):
-    return user_index.clean_name(name, NAME_MAX)
+    return " ".join(str(name or "").split())[:NAME_MAX]
 
 
 def clean_description(text):
@@ -68,7 +81,10 @@ def list_for(data_dir, uid):
 
 
 def get(data_dir, uid, pid):
-    return user_index.find_by_id(_read(data_dir, uid), pid)
+    for item in _read(data_dir, uid):
+        if item["id"] == pid:
+            return item
+    return None
 
 
 def _check(name, colour, description):
@@ -83,9 +99,13 @@ def _check(name, colour, description):
 def write_card(folder, name, colour, description):
     # The engine reads user.md: the description first, then the Persona and Colour lines last, so a stray
     # "name:" or "colour:" inside the description can't change them.
+    os.makedirs(folder, exist_ok=True)
     body = description.strip()
     text = (body + "\n\n" if body else "") + f"Persona: {name}\nColour: {colour}\n"
-    user_index.write_text(os.path.join(folder, "user.md"), text)
+    tmp = os.path.join(folder, "user.md.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, os.path.join(folder, "user.md"))
 
 
 def create(data_dir, uid, name, colour, description):
@@ -105,7 +125,7 @@ def create(data_dir, uid, name, colour, description):
 
 def update(data_dir, uid, pid, name, colour, description):
     items = _read(data_dir, uid)
-    target = user_index.find_by_id(items, pid)
+    target = next((i for i in items if i["id"] == pid), None)
     if target is None:
         raise PersonaError("No such persona.")
     name, colour, description = _check(name, colour, description)

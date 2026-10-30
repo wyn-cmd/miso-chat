@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS checkins (
     user_id INTEGER NOT NULL,
     character TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 0,
+    every_days INTEGER NOT NULL DEFAULT 1,
     mode TEXT NOT NULL DEFAULT 'at',
     at_min INTEGER NOT NULL DEFAULT 1200,
     start_min INTEGER NOT NULL DEFAULT 540,
@@ -126,9 +127,17 @@ CREATE TABLE IF NOT EXISTS dreams (
     user_id INTEGER NOT NULL,
     character TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 0,
+    every_days INTEGER NOT NULL DEFAULT 1,
     start_min INTEGER NOT NULL DEFAULT 120,
     end_min INTEGER NOT NULL DEFAULT 360,
     tz TEXT NOT NULL DEFAULT '',
+    last_day TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, character)
+);
+CREATE TABLE IF NOT EXISTS directors (
+    user_id INTEGER NOT NULL,
+    character TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
     last_day TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, character)
 );
@@ -195,6 +204,8 @@ DEFAULT_SETTINGS = {
     "attitude_enabled": "0",     # relationship with the user (affection, trust, five levels): 1 on, 0 off
     "event_memory_enabled": "0", # event memory graph, written by dreams and recalled into prompts: 1 on, 0 off
     "memory_policy_enabled": "0", # learned memory retention: score self-written memories by outcome, 1 on, 0 off
+    "offscreen_enabled": "0",    # off-screen life: a daily director writes what characters did between sessions, 1 on, 0 off
+    "offscreen_daily_cap": "20", # most model calls the off-screen director may make across the server each day
     "budget_webhook_url": "",    # where budget alerts (80% and 100% of a window) are posted as JSON; empty = off
 }
 
@@ -313,6 +324,12 @@ class Store:
                              ("totp_required", "INTEGER NOT NULL DEFAULT 0")):
                 if col not in ucols:
                     c.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
+            checkcols = {r["name"] for r in c.execute("PRAGMA table_info(checkins)")}
+            if "every_days" not in checkcols:
+                c.execute("ALTER TABLE checkins ADD COLUMN every_days INTEGER NOT NULL DEFAULT 1")
+            dreamcols = {r["name"] for r in c.execute("PRAGMA table_info(dreams)")}
+            if "every_days" not in dreamcols:
+                c.execute("ALTER TABLE dreams ADD COLUMN every_days INTEGER NOT NULL DEFAULT 1")
 
     # ---- low-level
 
@@ -772,8 +789,8 @@ class Store:
                   "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, str(value)))
 
     # Scheduled check-ins: one row per account and character. The columns are set through checkin_update.
-    CHECKIN_FIELDS = ("enabled", "mode", "at_min", "start_min", "end_min", "tz", "target_day", "target_min",
-                      "fired_day", "unread")
+    CHECKIN_FIELDS = ("enabled", "every_days", "mode", "at_min", "start_min", "end_min", "tz", "target_day",
+                      "target_min", "fired_day", "unread")
 
     def checkin_get(self, user_id, character):
         return self._run("SELECT * FROM checkins WHERE user_id = ? AND character = ?",
@@ -802,7 +819,7 @@ class Store:
         return self._run("SELECT * FROM checkins WHERE enabled = 1", fetch="all")
 
     # Autonomous dreaming: one row per account and character. Columns are set through dream_update.
-    DREAM_FIELDS = ("enabled", "start_min", "end_min", "tz", "last_day")
+    DREAM_FIELDS = ("enabled", "every_days", "start_min", "end_min", "tz", "last_day")
 
     def dream_get(self, user_id, character):
         return self._run("SELECT * FROM dreams WHERE user_id = ? AND character = ?", (user_id, character), fetch="one")
@@ -819,6 +836,25 @@ class Store:
 
     def dream_enabled_rows(self):
         return self._run("SELECT * FROM dreams WHERE enabled = 1", fetch="all")
+
+    # Off-screen life: one row per account and character. Columns are set through director_update.
+    DIRECTOR_FIELDS = ("enabled", "last_day")
+
+    def director_get(self, user_id, character):
+        return self._run("SELECT * FROM directors WHERE user_id = ? AND character = ?", (user_id, character), fetch="one")
+
+    def director_update(self, user_id, character, **fields):
+        bad = set(fields) - set(self.DIRECTOR_FIELDS)
+        if bad:
+            raise ValueError(f"unknown director fields: {sorted(bad)}")
+        self._run("INSERT OR IGNORE INTO directors (user_id, character) VALUES (?, ?)", (user_id, character))
+        if fields:
+            cols = ", ".join(f"{k} = ?" for k in fields)
+            self._run(f"UPDATE directors SET {cols} WHERE user_id = ? AND character = ?",
+                      (*fields.values(), user_id, character))
+
+    def director_enabled_rows(self):
+        return self._run("SELECT * FROM directors WHERE enabled = 1", fetch="all")
 
     # Character mood: one row per account and character. The fields are set as a whole through mood_save.
     MOOD_FIELDS = ("energy", "affinity", "emotion", "streak", "last_update", "last_user", "reached")

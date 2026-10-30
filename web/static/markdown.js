@@ -5,11 +5,15 @@
 // Emphasis markers are tidied first (fixEmphasis), because models often write them slightly wrong.
 // The stored text is never changed; only what is shown.
 
+// One compiled pattern for every call. Nested calls share it, so each call restores the read position it found.
+const MD_INLINE = /`(?<code>[^`\n]+)`|\[(?<linkText>[^\]\n]+)\]\((?<linkUrl>https?:\/\/[^\s)]+)\)|\*\*\*(?=\S)(?<boldItalic>[\s\S]*?\S)\*\*\*|\*\*(?=\S)(?<bold>[\s\S]*?\S)\*\*|__(?=\S)(?<bold2>[\s\S]*?\S)__|\*(?=[^\s*])(?<italic>[^*\n]*?[^\s*])\*|(?<![A-Za-z0-9])_(?=[^\s_])(?<italic2>[^_\n]*?[^\s_])_(?![A-Za-z0-9])|["“](?<quote>[^"“”\n]+)["”]/g;
+
 function mdInline(text, parent) {
-  const pattern = /`(?<code>[^`\n]+)`|\[(?<linkText>[^\]\n]+)\]\((?<linkUrl>https?:\/\/[^\s)]+)\)|\*\*\*(?=\S)(?<boldItalic>[\s\S]*?\S)\*\*\*|\*\*(?=\S)(?<bold>[\s\S]*?\S)\*\*|__(?=\S)(?<bold2>[\s\S]*?\S)__|\*(?=[^\s*])(?<italic>[^*\n]*?[^\s*])\*|(?<![A-Za-z0-9])_(?=[^\s_])(?<italic2>[^_\n]*?[^\s_])_(?![A-Za-z0-9])|["“](?<quote>[^"“”\n]+)["”]/g;
+  const resume = MD_INLINE.lastIndex;
+  MD_INLINE.lastIndex = 0;
   let last = 0;
   let m;
-  while ((m = pattern.exec(text)) !== null) {
+  while ((m = MD_INLINE.exec(text)) !== null) {
     const g = m.groups;
     if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
     if (g.code !== undefined) {
@@ -46,9 +50,10 @@ function mdInline(text, parent) {
       mdInline(g.italic !== undefined ? g.italic : g.italic2, em);
       parent.appendChild(em);
     }
-    last = pattern.lastIndex;
+    last = MD_INLINE.lastIndex;
   }
   if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  MD_INLINE.lastIndex = resume;
 }
 
 // ---- emphasis repair (display only)
@@ -101,13 +106,21 @@ function fixRuns(s) {
 
   // pair each closer with the nearest open run of the same length (or the open run just below it when
   // the closer is longer). A run with a space before it closes an open run only when no later run of its
-  // length can close properly; otherwise it opens an inner span.
+  // length can close properly; otherwise it opens an inner span. Later closers and open runs are counted
+  // by length, so each step stays constant time.
+  const laterClosers = [0, 0, 0, 0];
+  const hasLaterCloser = new Array(runs.length);
+  for (let idx = runs.length - 1; idx >= 0; idx--) {
+    const r = runs[idx];
+    hasLaterCloser[idx] = laterClosers[r.len] > 0;
+    if (r.canClose && !r.lenient) laterClosers[r.len] += 1;
+  }
   const stack = [];
+  const openCount = [0, 0, 0, 0];
   for (let idx = 0; idx < runs.length; idx++) {
     const r = runs[idx];
-    const sameLen = stack.some((o) => o.len === r.len);
-    const laterCloser = runs.slice(idx + 1).some((q) => q.len === r.len && q.canClose && !q.lenient);
-    if (r.canClose || (r.canOpen && sameLen && !laterCloser)) {
+    const sameLen = openCount[r.len] > 0;
+    if (r.canClose || (r.canOpen && sameLen && !hasLaterCloser[idx])) {
       let j = -1;
       for (let k = stack.length - 1; k >= 0; k--) {
         if (stack[k].len === r.len) { j = k; break; }
@@ -119,21 +132,23 @@ function fixRuns(s) {
           const k = Math.min(o.len, r.len);
           o.role = "open"; o.keep = k; o.partner = r;
           r.role = "close"; r.keep = k; r.partner = o;
+          for (let n = stack.length - 1; n >= j; n--) openCount[stack[n].len] -= 1;
           stack.length = j;
           continue;
         }
       }
     }
-    if (r.canOpen) stack.push(r);
+    if (r.canOpen) { stack.push(r); openCount[r.len] += 1; }
   }
   // a pair inside another pair cannot be shown (the renderer does not nest emphasis), so the inner
-  // markers are dropped and the outer pair keeps its emphasis
+  // markers are dropped and the outer pair keeps its emphasis. Pairs are properly nested or disjoint,
+  // so one sweep over them by start finds every contained pair.
   const pairs = runs.filter((r) => r.role === "open").map((o) => [o, o.partner]);
+  pairs.sort((a, b) => a[0].start - b[0].start);
+  let outerEnd = -1;
   for (const [o, c] of pairs) {
-    if (pairs.some(([o2, c2]) => o2 !== o && o2.start < o.start && c.end < c2.end)) {
-      o.role = "dropped";
-      c.role = "dropped";
-    }
+    if (c.end < outerEnd) { o.role = "dropped"; c.role = "dropped"; }
+    else outerEnd = c.end;
   }
 
   const edits = [];

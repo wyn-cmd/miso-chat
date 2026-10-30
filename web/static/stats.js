@@ -10,13 +10,6 @@ const money = (value, currency) => `${Number(value || 0).toFixed(4)} ${currency.
 let lastPayload = null;
 let currency = localStorage.getItem("miso.stats.currency") === "cny" ? "cny" : "usd";
 
-function el(tag, text, cls) {
-  const node = document.createElement(tag);
-  if (text !== undefined && text !== null) node.textContent = text;
-  if (cls) node.className = cls;
-  return node;
-}
-
 function row(cells) {
   const tr = document.createElement("tr");
   for (const c of cells) tr.appendChild(el("td", c));

@@ -8,16 +8,16 @@ import re
 import shutil
 import zipfile
 
-from web import editor, examples
+from web import editor, examples, relationship
 from web.editor import EditorError
 
 FORMAT = "miso-character"
 VERSION = 1
 MAX_ZIP = 60 * 1024 * 1024         # the uploaded archive
 MAX_UNPACKED = 120 * 1024 * 1024   # the files inside it, summed before anything is extracted
-CARD_FILES = ("character.md", "context.md", "examples.json", "profile.json", "creator.json", "palace.json",
+CARD_FILES = ("character.md", "context.md", "author_note.md", "relationship.json", "examples.json", "profile.json", "creator.json", "palace.json",
               "sandbox.json", "icon.png", "icon.jpg", "icon.webp", "icon.gif")
-BG_MEMBER = re.compile(r"^backgrounds/[0-9a-f]{12}(?:\.poster)?\.(?:png|jpg|gif|webm)$")   # one file per background
+BG_MEMBER = re.compile(r"^backgrounds/[0-9a-f]{12}(?:\.poster)?\.(?:png|jpg|gif|webp|webm)$")   # one file per background
 HISTORY_FILES = ("memory.json", "memory.md", "pinned.md", "summary.json", "episodes.json")
 HISTORY_DIR = "history/"
 NEUTRAL = "#8a8f98"
@@ -134,6 +134,16 @@ def import_zip(root, data_dir, uid, username, data, admin=True):
         colour = COLOUR_LINE.search(card)
         colour = colour.group(1) if colour else NEUTRAL
         context = _text_member(zf, members["context.md"], "context.md") if "context.md" in members else ""
+        author_note = (_text_member(zf, members["author_note.md"], "author_note.md", limit=editor.AUTHOR_NOTE_MAX)
+                       if "author_note.md" in members else None)
+
+        relationship_settings = None
+        if "relationship.json" in members:
+            raw = _json_member(zf, members["relationship.json"], "relationship.json")
+            try:
+                relationship_settings = relationship.checked(raw)
+            except ValueError as err:
+                raise EditorError(f"relationship.json is not usable: {err}") from None
 
         profile = None
         if "profile.json" in members:
@@ -188,7 +198,8 @@ def import_zip(root, data_dir, uid, username, data, admin=True):
     created = False
     try:
         editor.write_card(root, name, card, context, colour, creating=True, sandbox_on=sandbox_on, profile=profile,
-                          example_messages=example_messages)
+                          example_messages=example_messages, author_note=author_note,
+                          relationship_settings=relationship_settings)
         created = True
         editor.record_creator(path, creator)
         if icon is not None:

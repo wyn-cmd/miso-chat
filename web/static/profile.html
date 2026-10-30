@@ -11,7 +11,7 @@
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","folio","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
@@ -85,6 +85,7 @@
     </div>
     <p id="infoHeadline" class="home-headline"></p>
     <p id="infoCreator" class="muted"></p>
+    <p id="infoRelationship" class="muted"></p>
     <div id="infoTags" class="home-tags"></div>
     <p id="infoBody" class="home-info-body"></p>
     <div class="row">
@@ -115,10 +116,19 @@
         <button id="peBgRemove" class="ghost small" type="button" hidden>Remove</button>
       </span>
     </div>
+    <div id="peMusicBox" class="sheet-row" hidden><span>Theme music</span>
+      <span class="profile-upload">
+        <div id="peMusicList"></div>
+        <input id="peMusicFile" type="file" accept="audio/*" aria-label="Add a theme music track">
+        <span id="peMusicNote" class="muted"></span>
+        <span id="peMusicErr" class="error"></span>
+      </span>
+    </div>
     <label class="inline"><input id="peLikes" type="checkbox"> Let other accounts see the characters I've liked</label>
     <p id="peMsg" class="muted" aria-live="polite"></p>
   </dialog>
   <script src="/static/common.js"></script>
+  <script src="/static/theme_music.js"></script>
   <script src="/static/cards.js"></script>
   <script src="/static/search.js"></script>
   <script src="/static/profile.js"></script>

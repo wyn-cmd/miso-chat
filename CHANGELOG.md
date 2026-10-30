@@ -2,6 +2,93 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.6.0 - 2026-10-30
+
+A release built on 1.5.2, carrying the off-screen life, author's notes, dream bubble viewer, reasoning levels, relationship speed, the Story Bible, document import, a character wizard, Mind Palace checks, core memory, theme music and the Lantern look. The terminal client is 1.6.0.
+
+### Added
+- **Lantern look**: an editorial reading room, a warm soot ground with an amber lamp, squared corners, a serif chat and ruled lines instead of bubbles, washi paper in the light theme.
+
+### Removed
+- **Soft Shadows look**: the reading view is gone. A browser with it saved falls back to Moonlit, and any character whose background was one of its default images falls back to the look's own default set.
+
+### Added
+- **Character wizard** at `/create/character`: nine steps with slide transitions and help text. Drafts are kept in the browser per account, so a half-finished character survives a reload. The leave warning appears only when text has not yet been saved.
+- **Mind Palace check**: a dialog from the Mind Palace window that lists orphaned entries (no hit in the last 200 messages and none in 14 days), over-firing entries (keys in at least half of the last 50 messages) and possible dead references (capitalised names that appear nowhere else in the lore). Entries can be marked core memory, turned off or deleted.
+- **Core memory**: a core entry is exempt from the Mind Palace check's orphan flag and from automatic forgetting.
+- **Theme music** for characters: up to three tracks, played in the character's chat and while its card is open.
+- **Theme music** for accounts: up to three tracks, played while the account's profile page is open.
+- Theme music fades in on start, fades out before a switch, and fades out when the reader leaves. A button in the corner mutes it, and the choice is remembered in the browser.
+- Uploaded tracks that are already a browser format at 160 kbps or lower are kept as they are. Other tracks are converted to Opus at 160 kbps, with an AAC copy at 192 kbps for Safari.
+
+### Changed
+- The wizard's draft autosave waits 500 ms after the last change, up from 400 ms.
+- The character editor no longer contains the creation-only draft and import controls. Creating a character happens in the wizard.
+- The relationship line on character cards and in the chat shows only the descriptors, for example "Easy company · Open · Fond", without the words "trust" and "affection".
+- The (i) button on gallery cards is a true circle with the letter centred.
+
+### Known issues
+- Theme music is not played in group chats or novels.
+- Closing the browser tab stops the music at once, without a fade.
+- The Mind Palace check's dead-reference flag is a guess from capital letters and can flag names that are not references.
+
+## 1.6.0-beta-3 - 2026-10-29
+
+A beta built on 1.6.0-beta-2. The terminal client is 1.6.0-beta-3.
+
+### Added
+- **Story Bible** (click a character's icon or name in the chat): a wiki page of the story so far, with an overview, the characters met, places visited, items acquired, open questions and key events. It is read-only and rebuilt from everything the character remembers -- the memory bank, pinned facts, Mind Palace entries, the running summary, story threads and recorded events -- plus the first and last 30 messages of the chat.
+- **Rebuild with dreams**: an account switch on the bible page. When it is on, the bible is rebuilt after every dream, from the memories the dream just tidied. With no dreams scheduled for the character, or the switch off, the page's Regenerate button rebuilds the bible by hand. A dream-night rebuild counts against the server's dream cap; a manual rebuild counts as the reader's own requests.
+- **Build memory from a document** (Memory panel and the bible page): upload a backstory, novel excerpt or setting document (text, Markdown, Word, PDF, or a picture to OCR) and the server mines it once into candidate Mind Palace entries and short memory-bank facts for review. Nothing is saved until entries are picked on the page; picked palace entries join Mind Palace as the reader's own entries, never scored or dream-dropped, and picked facts become memory bank lines under their section.
+
+## 1.6.0-beta-2 - 2026-10-29
+
+A refinement beta built on 1.6.0-beta-1. The terminal client is 1.6.0-beta-2.
+
+### Added
+- **Relationship speed sliders** (character editor): trust and affection are set with sliders from 1.00 to 6.00 in steps of 0.01, with an exact number field beside each slider.
+- **Auto-save**: an existing character's relationship speed saves as the slider is moved, with a short debounce, without needing the character form's Save button. A new character keeps the values until it is created.
+- **Relationship type tag**: the character's relationship type is now the first tag on the home card and in the character card pop-up.
+- **Relationship filters** (home page): filter characters by relationship type, trust category or affection category, alone or together with the existing tag filter.
+
+### Changed
+- The default trust speed is 3.00 and the default affection speed is 2.00. A character with no saved relationship file therefore reads Open and Fond, which is Easy company.
+- The relationship type for Cautious and Devoted is now Tsundere, and the type for Heart of gold and Fond is now Heart of gold.
+- Relationship values are stored to two decimal places. Older whole-number files are read as their decimal value.
+
+## 1.6.0-beta-1 - 2026-10-29
+
+A first beta of off-screen life, author's notes and a settings tidy-up, built on 1.5.2. The terminal client is 1.6.0-beta-1. The server's data layout adds two columns and one table, which are created on first start.
+
+### Added
+- **Off-screen life** (Settings, Story & memory, Off-screen life; a quick switch in Character): a daily director writes one or two short moments about what a character did between sessions, and sometimes a twist card. The newest moments join the prompt near the end. Nothing runs until an admin turns it on for the server and the chat turns it on too. Write now asks for a pass on demand. The calls count against the server's off-screen daily cap, not the user's requests or tokens. Characters only.
+- **Author's note** (character editor): an optional `author_note.md`, up to 4,000 characters, sent near the end of every prompt and kept separate from the card, so an admin can steer pacing or tone without rewriting the character. It travels in the character export and import zips.
+- **See what it dreamed** (Dreams panel): the last dream's work shown as draggable bubbles, one per learned, corrected, forgotten, linked or dropped memory, event, change of outlook or note. Click a bubble to read the full line.
+- **Check-in and dream frequency**: a character can send check-ins and dream every 1, 2, 3 or 7 days. The server's dream interval acts as a floor, so a character set to 2 days still waits when the server is on 3.
+- **Admin settings** for the off-screen switch and the server's daily off-screen call cap, next to the dream limit.
+- **Reasoning levels** (Model & thinking): when thinking is on, a level picker appears beside the switch. Free and lite get low, standard gets low or medium, and pro gets low, medium or high. DeepSeek stays on low unless the account is pro or has no tier. Gemini models use their own low, medium and high thinking levels; DeepSeek sends the same level as its reasoning effort.
+- **Relationship speed** (character editor): a creator sets trust and affection speed on a scale of 1 to 6, where 2 is the normal rate, 1 is half and 6 is five times. Positive changes are scaled; unkindness and trust decay are not. Users see only the category, never the number: Cautious, Open, Trusting or Heart of gold for trust; Fond, Attached, Devoted or Soulmate for affection. The pair gives one of sixteen relationship types, such as Hard to get for Cautious and Fond or Destined lover for Open and Soulmate, shown in Settings, Relationship and on the character card.
+
+### Changed
+- **Settings**: a Memory panel now holds the memory bank, pinned facts, memory retention, Mind Palace and dreams. Pinned facts no longer has its own card. Quench long chats moved to Chat history. Story & memory links Worlds, Memory and Off-screen life, and the Relationship card now holds both mood and relationship.
+- **Mood and affection** move more slowly: an exchange adds about a third as much affinity, fading starts after seven days apart and costs half a point a day, and a cuddle, a rest or a sleep in the chat restores a little energy.
+- **Relationship** scores cool down over nine exchanges instead of three, and trust starts to ease after five exchanges without a bonding event.
+- **Chat scrolling** follows new text only while the reader is at the bottom, so scrolling back through history is not interrupted. The reply reveal repaints a few times a second rather than on every frame.
+- **Animated backgrounds** can now be up to 100 MB. An animated GIF, WebP or APNG from a character, group or account background is stored exactly as uploaded and served with its own type, so it keeps moving. Still pictures stay at 10 MB and are still downsized to PNG. Nothing is re-encoded, so the loop is kept exactly as uploaded.
+- Markdown emphasis, date formatting and card art cost less on long chats and home pages. Card art cycles only while a card is on screen.
+- The model picker keeps a saved model that the current tier no longer lists, instead of resetting.
+- A new message refreshes the sidebar only when this chat's place there can change.
+
+### Fixed
+- Escape no longer closes the settings sheet while a dialog is open.
+- A dream record now keeps items for the bubble view, including dropped palace entries, events, changes of outlook and the note.
+- The character export and import zips carry the author's note.
+
+### Known issues
+- Beta: the off-screen director can write generic moments on chats with little history.
+- Off-screen passes spend model calls outside any user's budget, so set the server cap to what you are willing to spend.
+- Groups and novels have no off-screen life.
+
 ## 1.5.2 - 2026-10-28
 
 A read-aloud, search and settings cleanup release, built on 1.5.1. The server's endpoints and data layout are the same as 1.5.1, and the terminal client is 1.5.2 with the same code.

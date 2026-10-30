@@ -16,6 +16,7 @@ import json
 import math
 import os
 import queue
+import random
 import re
 import shutil
 import sys
@@ -31,11 +32,11 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 
 from google import genai
-from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_TEMPERATURE, GROUP_TEMPERATURE
+from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_TEMPERATURE, GROUP_TEMPERATURE, REASONING_LEVELS
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude, novels, worlds, tensions, passwords, scenarios, search
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_audit, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude, novels, worlds, tensions, passwords, scenarios, search, offscreen, relationship, story_bible, docextract, memory_bank, music
 import pytz
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, TIERS, TIER_MONTHLY_TOKENS, budget_days, recent_days, verify_password, needs_rehash, ADMIN_NAME
 
@@ -201,12 +202,12 @@ def _bubble_pref(store, uid):
 
 
 def _default_art():
-    # Default backgrounds for characters with none: <look>-N.jpg/png/webp in static/defaults (look = moon, folio, classic).
+    # Default backgrounds for characters with none: <look>-N.jpg/png/webp in static/defaults (look = moon, lantern, classic).
     # The pages keep only the set for the look the reader is using, and pick one at random from it.
     d = os.path.join(HERE, "static", "defaults")
     if not os.path.isdir(d):
         return []
-    names = sorted(f for f in os.listdir(d) if re.match(r"^(moon|folio|classic)-[\w-]+\.(jpe?g|png|webp)$", f))
+    names = sorted(f for f in os.listdir(d) if re.match(r"^(moon|lantern|classic)-[\w-]+\.(jpe?g|png|webp)$", f))
     return ["/static/defaults/" + f for f in names]
 
 
@@ -232,6 +233,30 @@ def _has_icon(root, name):
 
 def _thinking_on(st, user):
     return st.store.get_pref(user["id"], "thinking") == "1"
+
+
+def _reasoning_levels(st, user, model):
+    # The reasoning levels this tier may pick for a model. Free and lite get low only. Standard gets low
+    # and medium, except DeepSeek, which stays low. Pro, and an account with no tier, gets every level.
+    tier = _tier_of(user)
+    if tier is None:
+        return list(REASONING_LEVELS)
+    if tier in ("free", "lite"):
+        return ["low"]
+    if tier == "standard":
+        return ["low"] if provider_of(model) == "deepseek" else ["low", "medium"]
+    return list(REASONING_LEVELS)
+
+
+def _reasoning_for(st, user, model):
+    # The saved level, or the first one the tier allows when the saved level no longer fits.
+    levels = _reasoning_levels(st, user, model)
+    level = st.store.get_pref(user["id"], "reasoning") or "low"
+    return level if level in levels else levels[0]
+
+
+def _reasoning_view(st, user, model):
+    return {"level": _reasoning_for(st, user, model), "levels": _reasoning_levels(st, user, model)}
 
 
 def _extra_models(st):
@@ -649,6 +674,8 @@ def _background_ids_for(st, user, solo, groups):
 DREAM_TICK_SECONDS = 300
 # How often the mood thread checks for lonely characters, in seconds.
 MOOD_TICK_SECONDS = 600
+# How often the off-screen director checks for chats whose day has not been written yet, in seconds.
+OFFSCREEN_TICK_SECONDS = 600
 
 
 # The dream settings as the page shows them, with the last dream's record when there is one.
@@ -660,7 +687,8 @@ def _dream_view(st, uid, folder, row):
     return {"enabled": bool(row.get("enabled")), "start": hhmm(row.get("start_min", dreams.DEFAULT_START)),
             "end": hhmm(row.get("end_min", dreams.DEFAULT_END)), "tz": row.get("tz") or "",
             "server_on": st.store.get_setting("dreams_enabled") == "1", "last": last or None,
-            "every_days": int(st.store.get_setting("dream_every_days"))}
+            "every_days": max(1, int(row.get("every_days") or 1)),
+            "floor_days": int(st.store.get_setting("dream_every_days"))}
 
 
 def _read_json_file(path):
@@ -712,6 +740,14 @@ def _dream_fire(st, uid, name):
     try:
         record = slot.engine.dream()
         calls = slot.engine.dream_calls
+        if record is not None and st.store.get_pref(uid, "story_bible") == "1":
+            # An account that keeps the story bible on gets it rebuilt from the memories the dream tidies.
+            # Its calls go into the same dream cap, so no new server switch is needed.
+            try:
+                slot.engine.write_story_bible(count_requests=False)
+                calls += slot.engine.bible_calls
+            except Exception as err:   # a failed bible rebuild leaves the dream's own work saved
+                log(f"story bible for {name} (user {uid}) failed: {err}")
     finally:
         slot.lock.release()
     if calls:
@@ -720,6 +756,92 @@ def _dream_fire(st, uid, name):
         log(f"dream for {name} (user {uid}): {record['added']} added, {record['updated']} updated, "
             f"{record['removed']} removed, {record['dropped']} palace entries dropped")
     return record is not None
+
+
+# The main folder for a chat's off-screen record. Branches keep their own history but share this life.
+def _offscreen_folder(st, uid, name):
+    return os.path.join(st.data_dir, "users", str(uid), name)
+
+
+# Puts the newest off-screen fragments and twist in the prompt for the next reply, when the chat's switch is on.
+def _offscreen_start(st, uid, name, slot):
+    row = st.store.director_get(uid, name)
+    if not row or not row["enabled"]:
+        slot.engine.offscreen_text = ""
+        return
+    block = offscreen.prompt_block(offscreen.load(_offscreen_folder(st, uid, name)))
+    slot.engine.offscreen_text = ("\n\n" + block) if block else ""
+
+
+# The off-screen settings and recent moments as the page shows them.
+def _offscreen_view(st, uid, name):
+    row = st.store.director_get(uid, name) or {}
+    record = offscreen.load(_offscreen_folder(st, uid, name))
+    return {"enabled": bool(row.get("enabled")), "server_on": st.store.get_setting("offscreen_enabled") == "1",
+            "last_day": row.get("last_day") or "", "fragments": record["fragments"], "twists": record["twists"]}
+
+
+# Runs one off-screen pass for an account's character. It holds the chat's lock, so it never overlaps a reply,
+# and it is counted against the server's director cap, not the user's requests or tokens. Returns True when
+# something was written.
+def _offscreen_fire(st, uid, name):
+    if st.store.get_setting("offscreen_enabled") != "1":
+        return False
+    row = st.store.director_get(uid, name)
+    if not row or not row["enabled"]:
+        return False
+    today = datetime.date.today().isoformat()
+    key = "offscreen_calls:" + today
+    used = int(st.store.get_state(key) or 0)
+    if used >= int(st.store.get_setting("offscreen_daily_cap")):
+        log(f"off-screen pass for {name} (user {uid}) skipped: the server's cap is used up for today")
+        return False
+    if st.store.global_requests_today() >= int(st.store.get_setting("global_daily_cap")):
+        log(f"off-screen pass for {name} (user {uid}) skipped: the server's daily budget is used up")
+        return False
+    user = st.store.get_user(uid)
+    if user is None or user["disabled"] or user["must_change"]:
+        return False
+    slot = _slot(st, user, name, False)
+    if not slot.lock.acquire(timeout=60):
+        return False   # a reply has held the chat for a minute: leave the pass for the next tick
+    try:
+        record = offscreen.load(_offscreen_folder(st, uid, name))
+        fragments, twists = slot.engine.director(record)
+        calls = slot.engine.director_calls
+    except Exception as err:
+        log(f"off-screen pass for {name} (user {uid}) failed: {err}")
+        return False
+    finally:
+        slot.lock.release()
+    if calls:
+        st.store.set_setting(key, used + calls)
+    if not fragments and not twists:
+        log(f"off-screen pass for {name} (user {uid}) wrote nothing")
+        return False
+    offscreen.apply(record, fragments, twists, today)
+    offscreen.save(_offscreen_folder(st, uid, name), record)
+    log(f"off-screen pass for {name} (user {uid}): {len(fragments)} fragment(s), {len(twists)} twist(s)")
+    return True
+
+
+# Walks every chat with off-screen life on and writes the day once. The day is marked before the pass, so a
+# failed pass is not retried all day.
+def _offscreen_tick(st):
+    if st.store.get_setting("offscreen_enabled") != "1":
+        return
+    today = datetime.date.today().isoformat()
+    rows = st.store.director_enabled_rows()
+    random.shuffle(rows)   # no chat is always last when the server's cap runs out
+    for row in rows:
+        if row["last_day"] == today:
+            continue
+        uid, name = row["user_id"], row["character"]
+        st.store.director_update(uid, name, last_day=today)
+        try:
+            _offscreen_fire(st, uid, name)
+        except Exception as err:   # one failed pass must not stop the others
+            log(f"off-screen pass for {name} (user {uid}) failed: {err}")
 
 
 # Moves a character's state to now and puts it in the prompt for the next reply. Not saved here: the exchange is
@@ -740,29 +862,41 @@ def _lite_allowance(st):
 
 # Counts one exchange after a reply. It loads the stored state again rather than using the one from the start of the
 # turn, so a lonely check-in or another write made meanwhile is kept.
-def _mood_settle(st, uid, name):
+def _mood_settle(st, uid, name, text=""):
     now = time.time()
-    state = mood.on_exchange(mood.load(st.store.mood_get(uid, name), now), now, _lite_allowance(st))
+    state = mood.on_exchange(mood.load(st.store.mood_get(uid, name), now), now, _lite_allowance(st), text)
     st.store.mood_save(uid, name, state)
 
 
 # Reads the user's message for attitude events and puts the relationship block in the prompt for the reply. The
 # scores are saved only once the reply is in, by _att_settle.
+def _att_multipliers(st, name):
+    values = relationship.read(os.path.join(st.char_root, name))
+    return relationship.multiplier(values["trust"]), relationship.multiplier(values["affection"])
+
+
 def _att_start(st, uid, name, slot, text):
-    state, result = attitude.apply(attitude.load(st.store.attitude_get(uid, name)), text)
+    trust_mult, affection_mult = _att_multipliers(st, name)
+    state, result = attitude.apply(attitude.load(st.store.attitude_get(uid, name)), text,
+                                   affection_multiplier=affection_mult, trust_multiplier=trust_mult)
     slot.engine.attitude_text = "\n\n" + attitude.describe(state, result)
 
 
 # Applies the same message to the stored scores after a reply. It loads the row again, as _mood_settle does.
 def _att_settle(st, uid, name, text):
-    state, _result = attitude.apply(attitude.load(st.store.attitude_get(uid, name)), text)
+    trust_mult, affection_mult = _att_multipliers(st, name)
+    state, _result = attitude.apply(attitude.load(st.store.attitude_get(uid, name)), text,
+                                    affection_multiplier=affection_mult, trust_multiplier=trust_mult)
     st.store.attitude_save(uid, name, attitude.to_row(state))
 
 
 # What the settings page gets for a character's relationship. Shared by the read and the admin edit.
-def _attitude_view(enabled, state):
-    return {"enabled": bool(enabled), "level": state["level"], "affection": round(state["affection"]),
-            "trust": round(state["trust"]), "tone": attitude.TONE[state["level"]]}
+def _attitude_view(enabled, state, rel=None):
+    out = {"enabled": bool(enabled), "level": state["level"], "affection": round(state["affection"]),
+           "trust": round(state["trust"]), "tone": attitude.TONE[state["level"]]}
+    if rel is not None:
+        out["relationship"] = rel
+    return out
 
 
 # What the settings page gets for a character's mood. Shared by the read and the admin edit.
@@ -896,11 +1030,14 @@ def _card_for(st, folder):
     prof = profiles.read_profile(os.path.join(st.char_root, folder))
     name = display_for(folder)
     creator = editor.creator_of(os.path.join(st.char_root, folder))
+    rel = relationship.labels(os.path.join(st.char_root, folder))
     return {"name": name, "headline": prof["headline"] if prof else "", "info": prof["info"] if prof else "",
             "tags": prof["tags"] if prof else [], "has_profile": prof is not None,
+            "relationship": rel,
             "pending": folder in st.profiles.pending(), "has_icon": _has_icon(st.char_root, name),
             "has_background": _has_background(st.char_root, name), "backgrounds": editor.background_ids(st.char_root, name), "default_backgrounds": _default_art(),
             "background_meta": editor.background_meta(st.char_root, name),
+            "music": music.character_tracks(st.char_root, name),
             "color": colour_of(st.char_root, folder) or NEUTRAL_HEX,
             "creator": creator, "creator_profile": _creator_linkable(st, creator)}
 
@@ -976,7 +1113,8 @@ def _account_view(st, viewer, target):
     is_self = viewer["id"] == target["id"]
     view = {"username": target["username"], "created_at": target["created_at"],
             "is_self": is_self, "characters": _created_cards(st, viewer, target["username"]),
-            **_account_profile_meta(st, target["id"])}
+            **_account_profile_meta(st, target["id"]),
+            "music": music.account_tracks(account_profiles.root_for(st.data_dir, target["id"]), target["username"])}
     # Liked characters are private unless the account turns sharing on. The owner always sees their own.
     view["liked"] = _liked_cards(st, viewer, target["id"]) if (is_self or view["likes_visible"]) else None
     return view
@@ -1100,7 +1238,7 @@ def _apply_chat_settings(st, user, name, engine):
 
 
 SWITCHES = ("memory_enabled", "palace_enabled", "episodes_enabled", "dreams_enabled", "mood_enabled", "attitude_enabled",
-            "event_memory_enabled", "memory_policy_enabled", "dreams_in_novels")
+            "event_memory_enabled", "memory_policy_enabled", "dreams_in_novels", "offscreen_enabled")
 
 
 def _apply_switches(st, engine):
@@ -1115,10 +1253,15 @@ def _apply_switches(st, engine):
 def _slot(st, user, name, is_group):
     persona = _persona_for(st, user)
     thinking = _thinking_on(st, user)
-    key = (user["id"], name, persona, thinking)
+    chosen = st.store.get_pref(user["id"], "model") or ""
+    reasoning = _reasoning_for(st, user, chosen)
+    reasoning_levels = _reasoning_levels(st, user, chosen)
+    key = (user["id"], name, persona, thinking, reasoning)
     with st.slots_lock:
         slot = st.slots.get(key)
     if slot is not None:
+        slot.engine.reasoning = reasoning
+        slot.engine.reasoning_levels = reasoning_levels
         _apply_switches(st, slot.engine)
         _apply_chat_settings(st, user, name, slot.engine)
         return slot
@@ -1152,6 +1295,8 @@ def _slot(st, user, name, is_group):
     engine.discover_models()
     engine.extra_models = [m for m in engine.extra_models if _model_allowed(st, user, m)]
     engine.thinking = thinking
+    engine.reasoning = reasoning
+    engine.reasoning_levels = reasoning_levels
     engine.window_override = _pref_int(st.store.get_pref(uid, "window"))
     # Solo chats quench only once the account turns it on. Group chats are quenched by default; an account that has
     # switched it off (stored as "0") keeps it off everywhere.
@@ -1161,7 +1306,6 @@ def _slot(st, user, name, is_group):
     engine.clip_enabled = st.store.get_pref(uid, "clip") != "0"
     engine.temperature_override = _pref_float(st.store.get_pref(uid, "temp:" + name))
     engine.reply_length_override = _reply_target(st, uid)
-    chosen = st.store.get_pref(user["id"], "model") or ""
     if chosen and (chosen in engine.fallback_models or chosen in engine.extra_models):
         engine.pin_model(chosen)   # a saved model choice applies to every chat until changed
     engine.load_profile()
@@ -1416,6 +1560,21 @@ def _write_summary(path, text):
     _write_text(path, json.dumps({"text": text, "covered": covered}, ensure_ascii=False, indent=2))
 
 
+def _bible_path(st, user, name):
+    # The story bible lives beside memory.md, in the folder of the branch that is open.
+    return os.path.join(branches.active_dir(os.path.join(st.data_dir, "users", str(user["id"]), name)), story_bible.FILE)
+
+
+def _bible_view(st, user, name):
+    # The page's whole view of one story bible: the last generation, the account's switch and whether the
+    # character's own dreams are on, so the page can say when the next rebuild happens.
+    row = st.store.dream_get(user["id"], name)
+    dream_switch = "dreams_in_novels" if novels.is_novel(name) else "dreams_enabled"
+    return {"bible": _read_json_file(_bible_path(st, user, name)),
+            "on": st.store.get_pref(user["id"], "story_bible") == "1",
+            "dream_on": bool(row and row["enabled"]) and st.store.get_setting(dream_switch) == "1"}
+
+
 def _pref_int(value):
     try:
         return int(value) if value not in (None, "") else None
@@ -1536,6 +1695,11 @@ def _run_turn(st, user, name, slot, message, regen=False):
                         slot.engine.attitude_text = ""
                     elif not regen:
                         _att_start(st, user["id"], name, slot, processed)
+                    off_on = st.store.get_setting("offscreen_enabled") == "1" and not slot.engine.is_group
+                    if not off_on:
+                        slot.engine.offscreen_text = ""
+                    elif not regen:
+                        _offscreen_start(st, user["id"], name, slot)
                     result = slot.engine.send(processed, on_delta=on_delta, on_think=on_think)
                     if regen and result.ok:
                         slot.engine.finish_regenerate()
@@ -1553,11 +1717,17 @@ def _run_turn(st, user, name, slot, message, regen=False):
                     events.put(("error", {"code": "model_failed", "message": f"No model answered: {detail}"}))
                     return
                 if mood_on and result.replies and not regen:
-                    _mood_settle(st, user["id"], name)
+                    _mood_settle(st, user["id"], name, processed)
                 if att_on and result.replies and not regen:
                     _att_settle(st, user["id"], name, processed)
                 if result.replies and not regen:   # a new user message was accepted: count it for the character
                     _count_character_message(st, user, name)
+                if result.replies and not regen and slot.engine.palace_enabled and slot.engine.palace_dir:
+                    # Usage counts for the Mind Palace check. Bookkeeping only: a failed write never fails the reply.
+                    try:
+                        palace_audit.record_turn(slot.engine.palace_dir, slot.engine.palace_fired)
+                    except Exception as err:
+                        log(f"palace usage counts not saved for {name}: {err}")
                 if result.replies:   # the user's message and each reply, for the stats page
                     st.store.add_usage(user["id"], messages=(0 if regen else 1) + len(result.replies),
                                        provider=provider_of(model_used), model=model_used)
@@ -1908,6 +2078,11 @@ def make_app(client=None, data_dir=None, char_root=None):
     def create_group_page():
         return page("maker.html")
 
+    # The character wizard: a new character is made one step at a time here. Changes to one that exists stay in the editor.
+    @app.get("/create/character")
+    def create_character_page():
+        return page("create.html")
+
     @app.get("/api/admin/sandboxes/{name}")
     def admin_sandbox_accounts(name: str, request: Request):
         # Every account's sandbox for one character: files and bytes held. Admin only.
@@ -2145,6 +2320,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             info["clip"] = store.get_pref(user["id"], "clip") != "0"
             info["models"] = {"gemini": "auto", "extra": [m for m in _extra_models(st) if _model_allowed(st, user, m)]}
             info["model"] = store.get_pref(user["id"], "model") or ""   # the saved choice, so the picker reloads it
+            info["reasoning"] = _reasoning_view(st, user, info["model"])
             info["personas"] = _persona_list(st, user)
             if _has_account_page(user):
                 info["profile"] = _account_profile_meta(st, user["id"])
@@ -2291,6 +2467,59 @@ def make_app(client=None, data_dir=None, char_root=None):
         if path is None:
             raise HTTPException(404, "No poster frame.")
         return FileResponse(path, media_type="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=300"})
+
+    # ---- theme music on an account's profile page: up to three tracks, played while that page is open.
+    def _account_music_root(user):
+        if not _has_account_page(user):
+            raise HTTPException(403, "This account does not have a profile page.")
+        return account_profiles.root_for(st.data_dir, user["id"])
+
+    def _account_music_meta(user):
+        return music.account_tracks(account_profiles.root_for(st.data_dir, user["id"]), user["username"])
+
+    @app.post("/api/account/music")
+    async def account_music_add(request: Request, title: str = ""):
+        _csrf(request)
+        user = require(request)
+        root = _account_music_root(user)
+        try:
+            await run_in_threadpool(music.add, root, await request.body(), title)
+        except music.MusicError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "music": _account_music_meta(user)}
+
+    @app.put("/api/account/music/order")
+    async def account_music_order(request: Request):
+        _csrf(request)
+        user = require(request)
+        root = _account_music_root(user)
+        body = _read_body(await request.json())
+        try:
+            music.reorder(root, body.get("ids"))
+        except music.MusicError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "music": _account_music_meta(user)}
+
+    @app.delete("/api/account/music/{tid}")
+    def account_music_remove(tid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        root = _account_music_root(user)
+        try:
+            music.remove(root, tid)
+        except music.MusicError as err:
+            raise HTTPException(404, str(err))
+        return {"ok": True, "music": _account_music_meta(user)}
+
+    @app.get("/api/account-music/{username}/file/{fname}")
+    def account_music_file(username: str, fname: str, request: Request):
+        require(request)
+        target = _account_target(st, username)
+        path = music.file_path(account_profiles.root_for(st.data_dir, target["id"]), fname)
+        if path is None:
+            raise HTTPException(404, "No such track.")
+        return FileResponse(path, media_type=music.SERVED[os.path.splitext(fname)[1]],
                             headers={"Cache-Control": "private, max-age=300"})
 
     @app.get("/api/account/{username}")
@@ -2963,6 +3192,118 @@ def make_app(client=None, data_dir=None, char_root=None):
         await run_in_threadpool(save_now)
         return {"memory": memory, "pinned": pinned, "summary": _read_summary(sum_path)}
 
+    @app.get("/api/story-bible")
+    def story_bible_get(request: Request, character: str):
+        # This chat's story bible: the last generation, or None before the first one.
+        user = require(request)
+        name, _ = _resolve_profile(st, character, user)
+        return _bible_view(st, user, name)
+
+    @app.post("/api/story-bible/regenerate")
+    async def story_bible_regen(request: Request):
+        # Rebuild the story bible now, from every memory source plus the first and last 30 messages.
+        # The generation is counted like the reader's own requests. Nothing else changes.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
+        _check_caps(st, user)
+
+        def work():
+            slot = _slot(st, user, name, is_group)
+            if not slot.lock.acquire(timeout=10):
+                raise HTTPException(409, "Wait for the current reply to finish before rebuilding the bible.")
+            try:
+                slot.engine.write_story_bible(count_requests=True)
+            finally:
+                slot.lock.release()
+            return _bible_view(st, user, name)
+        return await run_in_threadpool(work)
+
+    @app.post("/api/memory/import-doc")
+    async def memory_import_doc(request: Request, character: str):
+        # Upload a backstory, novel or setting document; nothing is saved here. The text is mined once
+        # into candidate Mind Palace entries and character facts, shown on the page for review.
+        from urllib.parse import unquote
+        _csrf(request)
+        user = require(request)
+        name, is_group = _resolve_profile(st, character, user)
+        if int(request.headers.get("content-length") or 0) > ocr.MAX_BYTES + 4096:
+            raise HTTPException(413, "Files can be up to 10 MB.")
+        _check_caps(st, user)
+        data = await request.body()
+        filename = unquote(request.headers.get("x-filename", ""))
+        try:
+            text, notes = await run_in_threadpool(ocr.extract, filename, data)
+        except ocr.OCRError as err:
+            raise HTTPException(400, str(err))
+
+        def work():
+            slot = _slot(st, user, name, is_group)
+            return slot.engine.import_doc(text)
+        try:
+            mined = await run_in_threadpool(work)
+        except RuntimeError as err:
+            raise HTTPException(502, f"Mining failed: {err}")
+        mined["notes"] = notes
+        return mined
+
+    @app.post("/api/memory/import-doc/apply")
+    async def memory_import_doc_apply(request: Request):
+        # Save the reviewed candidates: approved facts become memory bank lines, approved entries join the
+        # Mind Palace as the reader's own entries (never scored, never dream-dropped). Capped counts.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
+        entries = body.get("entries") if isinstance(body.get("entries"), list) else []
+        facts = body.get("facts") if isinstance(body.get("facts"), list) else []
+        if len(entries) > min(20, docextract.PALACE_CANDIDATES):
+            raise HTTPException(400, "At most 12 entries can be saved at once.")
+        if len(facts) > min(60, docextract.FACT_CANDIDATES):
+            raise HTTPException(400, "At most 40 facts can be saved at once.")
+
+        def work():
+            # A reply streaming on this chat keeps its own engine; it must not save over the merge below.
+            with st.slots_lock:
+                mine = [k for k in st.slots if k[0] == user["id"] and k[1] == name]
+                if any(st.slots[k].lock.locked() for k in mine):
+                    raise HTTPException(409, "Wait for the current reply to finish before saving.")
+            pdir = os.path.join(st.data_dir, "users", str(user["id"]), name)
+            palace.copy_starting(os.path.join(st.char_root, name), pdir)
+            existing, cfg = palace.load_all(pdir)
+            if len(existing) + len(entries) > palace.MAX_ENTRIES:
+                raise HTTPException(400, "The Mind Palace is full: remove an entry or two first.")
+            for raw in entries:
+                if not isinstance(raw, dict):
+                    raise HTTPException(400, "Each entry needs a title, keys and content.")
+                raw["id"] = palace.new_id()
+                raw["auto"] = False
+            if entries:
+                try:
+                    palace.save(pdir, (existing or []) + entries,
+                                {"recursive": cfg["recursive"], "budget": cfg["budget"], "auto": cfg["auto"],
+                                 "episodes": cfg["episodes"]})
+                except palace.PalaceError as err:
+                    raise HTTPException(400, str(err))
+            mem_path, _pin_path = _memory_files(st, user, name)
+            current = _read_or_empty(mem_path)
+            added = 0
+            if facts:
+                lines = []
+                for fact in facts:
+                    section = str((fact or {}).get("section") or "Key Facts").strip()
+                    text_fact = " ".join(str((fact or {}).get("text") or "").split()).lstrip("-*+ ")
+                    if text_fact:
+                        lines.append(f"ADD: [{section}] {text_fact}")
+                merged, counts = memory_bank.apply(current, "\n".join(lines))
+                _write_text(mem_path, merged)
+                added = counts["added"]
+            _drop_slot(st, user, name)
+            return {"palace_added": len(entries), "facts_added": added,
+                    "entries": palace.load_all(pdir)[0]}
+        return await run_in_threadpool(work)
+
     @app.post("/api/persona")
     async def set_persona(request: Request):
         _csrf(request)
@@ -3096,9 +3437,19 @@ def make_app(client=None, data_dir=None, char_root=None):
             if choice and choice not in _extra_models(st):
                 raise HTTPException(400, "That model is not set up on this server.")
             store.set_pref(user["id"], "model", choice)
+            # A model change can narrow the levels (standard plus DeepSeek is low only), so keep the saved one valid.
+            levels = _reasoning_levels(st, user, choice)
+            if (store.get_pref(user["id"], "reasoning") or "low") not in levels:
+                store.set_pref(user["id"], "reasoning", levels[0])
             with st.slots_lock:
                 for k in [k for k in st.slots if k[0] == user["id"]]:
                     st.slots.pop(k, None)
+        if "reasoning" in body:
+            level = str(body["reasoning"] or "low").lower()
+            levels = _reasoning_levels(st, user, store.get_pref(user["id"], "model") or "")
+            if level not in levels:
+                raise HTTPException(400, "That reasoning level is not available on your tier for this model.")
+            store.set_pref(user["id"], "reasoning", level)
         if "reply_length" in body:
             raw = body["reply_length"]
             if raw in (None, ""):
@@ -3140,17 +3491,23 @@ def make_app(client=None, data_dir=None, char_root=None):
             store.set_pref(user["id"], "quench", "1" if body["quench"] else "0")
         if "clip" in body:
             store.set_pref(user["id"], "clip", "1" if body["clip"] else "0")
+        if "story_bible" in body:
+            # The story bible: rebuilt on every dream when this is on, or by hand from the bible page.
+            store.set_pref(user["id"], "story_bible", "1" if body["story_bible"] else "0")
         # cached engines hold the old settings; drop them so the next turn picks up the new ones
         with st.slots_lock:
             for k in [k for k in st.slots if k[0] == user["id"]]:
                 st.slots.pop(k, None)
-        return {"thinking": _thinking_on(st, user), "model": store.get_pref(user["id"], "model") or "",
+        saved_model = store.get_pref(user["id"], "model") or ""
+        return {"thinking": _thinking_on(st, user), "model": saved_model,
+                "reasoning": _reasoning_view(st, user, saved_model),
                 "window": _pref_int(store.get_pref(user["id"], "window")),
                 "reply_length": _reply_target(st, user["id"]),
                 "avatar_shape": _avatar_shape(store, user["id"]),
                 "bg_shade": _shade_pref(store, user["id"]), "bubble_opacity": _bubble_pref(store, user["id"]),
                 "quench": store.get_pref(user["id"], "quench") == "1",
-                "clip": store.get_pref(user["id"], "clip") != "0"}
+                "clip": store.get_pref(user["id"], "clip") != "0",
+                "story_bible": store.get_pref(user["id"], "story_bible") == "1"}
 
     @app.get("/api/character-settings")
     async def character_settings_get(request: Request, character: str):
@@ -3544,9 +3901,11 @@ def make_app(client=None, data_dir=None, char_root=None):
     def editor_read(name: str, request: Request):
         _require_editor(require(request), name)
         try:
-            return editor.read_card(st.char_root, name)
+            out = editor.read_card(st.char_root, name)
         except editor.EditorError as err:
             raise HTTPException(404, str(err))
+        out["music"] = music.character_tracks(st.char_root, name)
+        return out
 
     @app.post("/api/admin/characters")
     async def editor_create(request: Request):
@@ -3557,7 +3916,8 @@ def make_app(client=None, data_dir=None, char_root=None):
             out = editor.write_card(st.char_root, str(body.get("name", "")), body.get("card", ""),
                                     body.get("context", ""), body.get("colour", ""), creating=True,
                                     sandbox_on=(bool(body["sandbox"]) if ("sandbox" in body and user["is_admin"]) else None),
-                                    profile=body.get("profile"), example_messages=body.get("examples"))
+                                    profile=body.get("profile"), example_messages=body.get("examples"),
+                                    author_note=body.get("author_note"), relationship_settings=body.get("relationship"))
             editor.record_creator(editor.folder_of(st.char_root, str(body.get("name", ""))), user["username"])
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
@@ -3573,13 +3933,32 @@ def make_app(client=None, data_dir=None, char_root=None):
             out = editor.write_card(st.char_root, name, body.get("card", ""),
                                     body.get("context", ""), body.get("colour", ""), creating=False,
                                     sandbox_on=(bool(body["sandbox"]) if ("sandbox" in body and user["is_admin"]) else None),
-                                    profile=body.get("profile"), example_messages=body.get("examples"))
+                                    profile=body.get("profile"), example_messages=body.get("examples"),
+                                    author_note=body.get("author_note"), relationship_settings=body.get("relationship"))
         except editor.EditorError as err:
             raise HTTPException(400, str(err))
         with st.slots_lock:
             for k in [k for k in st.slots if k[1] == folder_for(name)]:
                 st.slots.pop(k, None)   # cached engines hold the old card
         return out
+
+    @app.put("/api/admin/characters/{name}/relationship")
+    async def editor_relationship(name: str, request: Request):
+        # Auto-save from the editor's sliders. Only relationship.json changes; the rest of the card is untouched.
+        _csrf(request)
+        user = require(request)
+        _require_editor(user, name)
+        body = _read_body(await request.json())
+        try:
+            values = relationship.checked(body)
+        except ValueError as err:
+            raise HTTPException(400, str(err))
+        folder = editor.folder_of(st.char_root, name)
+        relationship.save(folder, values)
+        with st.slots_lock:
+            for k in [k for k in st.slots if k[1] == folder_for(name)]:
+                st.slots.pop(k, None)   # the cached engines hold the old multipliers
+        return {"relationship": relationship.labels(folder), "settings": values}
 
     @app.post("/api/admin/characters/{name}/icon")
     async def editor_icon(name: str, request: Request):
@@ -3688,6 +4067,59 @@ def make_app(client=None, data_dir=None, char_root=None):
         except editor.EditorError as err:
             raise HTTPException(404, str(err))
         return {"ok": True, "backgrounds": editor.background_ids(st.char_root, name)}
+
+    # ---- theme music on a character: up to three tracks, played in its chat and on its card.
+    def _character_folder(name):
+        try:
+            return editor.folder_of(st.char_root, name)
+        except editor.EditorError as err:
+            raise HTTPException(404, str(err))
+
+    @app.post("/api/admin/characters/{name}/music")
+    async def editor_music_add(name: str, request: Request, title: str = ""):
+        _csrf(request)
+        _require_editor(require(request), name)
+        folder = _character_folder(name)
+        try:
+            await run_in_threadpool(music.add, folder, await request.body(), title)
+        except music.MusicError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "music": music.character_tracks(st.char_root, name)}
+
+    @app.put("/api/admin/characters/{name}/music/order")
+    async def editor_music_order(name: str, request: Request):
+        _csrf(request)
+        _require_editor(require(request), name)
+        folder = _character_folder(name)
+        body = _read_body(await request.json())
+        try:
+            music.reorder(folder, body.get("ids"))
+        except music.MusicError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "music": music.character_tracks(st.char_root, name)}
+
+    @app.delete("/api/admin/characters/{name}/music/{tid}")
+    def editor_music_remove(name: str, tid: str, request: Request):
+        _csrf(request)
+        _require_editor(require(request), name)
+        folder = _character_folder(name)
+        try:
+            music.remove(folder, tid)
+        except music.MusicError as err:
+            raise HTTPException(404, str(err))
+        return {"ok": True, "music": music.character_tracks(st.char_root, name)}
+
+    @app.get("/api/character-music/{name}/file/{fname}")
+    def character_music_file(name: str, fname: str, request: Request):
+        require(request)
+        try:
+            path = music.file_path(editor.folder_of(st.char_root, name), fname)
+        except editor.EditorError:
+            path = None
+        if path is None:
+            raise HTTPException(404, "No such track.")
+        return FileResponse(path, media_type=music.SERVED[os.path.splitext(fname)[1]],
+                            headers={"Cache-Control": "private, max-age=300"})
 
     @app.get("/api/background/{name}")
     def character_background(name: str, request: Request, b: str = ""):
@@ -3899,6 +4331,83 @@ def make_app(client=None, data_dir=None, char_root=None):
         return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"], "auto": cfg["auto"],
                 "episodes": cfg["episodes"]}
 
+    def _lore_texts(user, folder):
+        # Text the account's lore already holds, so a name found there is not reported as a dead reference: every
+        # character and group name, the account's personas and worlds, and this character's own card and context.
+        texts = []
+        solo, groups = scan_characters(st.char_root)
+        texts += [display_for(n) for n in solo] + [display_for(g) for g in groups]
+        for persona in user_personas.list_for(st.data_dir, user["id"]):
+            texts += [persona["name"], persona["description"]]
+        for item in worlds.load(_worlds_path(st, user["id"]))["items"]:
+            texts += [item["name"], item["summary"]]
+            for section in item["sections"].values():
+                texts += section
+        try:
+            card = editor.read_card(st.char_root, folder)
+            texts += [card["card"], card["context"]]
+        except editor.EditorError:
+            pass
+        return texts
+
+    # The upkeep view for this account's palace: orphaned, over-firing and dead-reference entries (palace_audit.py).
+    @app.get("/api/character-palace/audit")
+    def my_palace_audit(request: Request, character: str):
+        user = require(request)
+        folder = _palace_folder(user, character)
+        pdir = _account_palace_dir(user["id"], folder)
+        palace.copy_starting(os.path.join(st.char_root, folder), pdir)
+        entries, _cfg = palace.load_all(pdir)
+        return palace_audit.audit(pdir, entries, _lore_texts(user, folder))
+
+    # Marks or unmarks one entry as core memory. Core memory is never reported as orphaned or forgotten.
+    @app.post("/api/character-palace/core")
+    async def my_palace_core(request: Request, character: str):
+        _csrf(request)
+        user = require(request)
+        folder = _palace_folder(user, character)
+        body = _read_body(await request.json())
+        pdir = _account_palace_dir(user["id"], folder)
+        key = body.get("key")
+        entries, _cfg = palace.load_all(pdir)
+        if key not in {palace.palace_key(e) for e in entries}:
+            raise HTTPException(404, "That entry is not in this palace.")
+        try:
+            palace_audit.set_core(pdir, key, body.get("core"))
+        except palace_audit.AuditError as err:
+            raise HTTPException(400, str(err))
+        return {"key": key, "core": key in palace_audit.core_keys(pdir)}
+
+    # Turns one entry off, or deletes it, from the upkeep view. The whole list is saved as the palace editor saves it.
+    @app.post("/api/character-palace/entry")
+    async def my_palace_entry(request: Request, character: str):
+        _csrf(request)
+        user = require(request)
+        folder = _palace_folder(user, character)
+        body = _read_body(await request.json())
+        action = body.get("action")
+        if action not in ("off", "delete"):
+            raise HTTPException(400, "Choose turn off or delete.")
+        pdir = _account_palace_dir(user["id"], folder)
+        entries, cfg = palace.load_all(pdir)
+        key = body.get("key")
+        if key not in {palace.palace_key(e) for e in entries}:
+            raise HTTPException(404, "That entry is not in this palace.")
+        raw = []
+        for entry in entries:
+            if palace.palace_key(entry) == key:
+                if action == "delete":
+                    continue
+                entry = dict(entry, enabled=False)
+            raw.append(entry)
+        settings = {"recursive": cfg["recursive"], "budget": cfg["budget"], "auto": cfg["auto"],
+                    "episodes": cfg["episodes"]}
+        try:
+            saved, _cfg = palace.save(pdir, raw, settings)
+        except palace.PalaceError as err:
+            raise HTTPException(400, str(err))
+        return {"entries": saved}
+
     # Reads a SillyTavern-style card (JSON, or PNG with the card in a text chunk). Nothing is saved here: the
     # result fills the new-character form, and the picture and lorebook are kept until Create.
     @app.post("/api/admin/character-import")
@@ -4071,8 +4580,14 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(400, "Give the time as HH:MM.")
         if mode == "random" and (times["start"] is None or times["end"] is None or times["start"] > times["end"]):
             raise HTTPException(400, "Give a random range as two HH:MM times, the start not after the end.")
+        try:
+            every_days = int(body.get("every_days", 1))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The check-in interval must be a whole number of days.")
+        if not 1 <= every_days <= 30:
+            raise HTTPException(400, "The check-in interval must be between 1 and 30 days.")
         checkins.save_settings(st.store, user["id"], name, body.get("enabled"), mode,
-                               times["at"] or 0, times["start"] or 0, times["end"] or 0, tz)
+                               times["at"] or 0, times["start"] or 0, times["end"] or 0, tz, every_days)
         row = st.store.checkin_get(user["id"], name)
         return checkins.view(row, unread=row["unread"])
 
@@ -4097,9 +4612,42 @@ def make_app(client=None, data_dir=None, char_root=None):
         tz = str(body.get("tz") or "")
         if tz and tz not in pytz.all_timezones_set:
             raise HTTPException(400, "Unknown time zone.")
-        st.store.dream_update(user["id"], name, enabled=int(bool(body.get("enabled"))), start_min=start,
-                              end_min=end, tz=tz)
+        try:
+            every_days = int(body.get("every_days", 1))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The dream interval must be a whole number of days.")
+        if not 1 <= every_days <= 30:
+            raise HTTPException(400, "The dream interval must be between 1 and 30 days.")
+        st.store.dream_update(user["id"], name, enabled=int(bool(body.get("enabled"))), every_days=every_days,
+                              start_min=start, end_min=end, tz=tz)
         return _dream_view(st, user["id"], name, st.store.dream_get(user["id"], name))
+
+    # Off-screen life: whether this chat lets a daily director write what the character did between sessions,
+    # and the newest moments. A manual write is an explicit pass, counted against the server's cap.
+    @app.get("/api/offscreen")
+    def offscreen_get(request: Request, character: str):
+        user = require(request)
+        name, is_group = _resolve_profile(st, character, user)
+        if is_group:
+            raise HTTPException(400, "Only characters have an off-screen life.")
+        return _offscreen_view(st, user["id"], name)
+
+    @app.post("/api/offscreen")
+    async def offscreen_set(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
+        if is_group:
+            raise HTTPException(400, "Only characters have an off-screen life.")
+        if body.get("enabled") is not None:
+            st.store.director_update(user["id"], name, enabled=int(bool(body.get("enabled"))))
+        if body.get("write"):
+            if st.store.get_setting("offscreen_enabled") != "1":
+                raise HTTPException(400, "An admin has not turned off-screen life on for this server.")
+            if not await run_in_threadpool(_offscreen_fire, st, user["id"], name):
+                raise HTTPException(400, "The off-screen pass wrote nothing. Check the server log and try again.")
+        return _offscreen_view(st, user["id"], name)
 
     # A character's relationship with the user as the settings page shows it. Read only.
     @app.get("/api/character-attitude")
@@ -4109,7 +4657,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         if is_group:
             raise HTTPException(400, "Only characters have a relationship.")
         state = attitude.load(st.store.attitude_get(user["id"], name))
-        return _attitude_view(st.store.get_setting("attitude_enabled") == "1", state)
+        rel = relationship.labels(os.path.join(st.char_root, name))
+        return _attitude_view(st.store.get_setting("attitude_enabled") == "1", state, rel)
 
     # An admin setting affection or trust by hand. The level is read from the new scores, and the simulation carries
     # on from there, so the next exchange moves them as usual. Every other account gets 403.
@@ -4134,7 +4683,8 @@ def make_app(client=None, data_dir=None, char_root=None):
             state[key] = value
         state["level"] = attitude.level_for(state["level"], state["affection"], state["trust"])
         st.store.attitude_save(user["id"], name, attitude.to_row(state))
-        return _attitude_view(st.store.get_setting("attitude_enabled") == "1", state)
+        rel = relationship.labels(os.path.join(st.char_root, name))
+        return _attitude_view(st.store.get_setting("attitude_enabled") == "1", state, rel)
 
     # A character's mood as the settings page shows it. Read only: the state is moved to now, but not saved.
     @app.get("/api/character-state")
@@ -4230,6 +4780,17 @@ def make_app(client=None, data_dir=None, char_root=None):
             time.sleep(DREAM_TICK_SECONDS)
 
     threading.Thread(target=_dream_loop, name="dreams", daemon=True).start()
+
+    # The thread that writes off-screen life. It looks every few minutes; each chat gets one pass a day.
+    def _offscreen_loop():
+        while True:
+            try:
+                _offscreen_tick(st)
+            except Exception as err:
+                log(f"off-screen scheduler error: {err}")
+            time.sleep(OFFSCREEN_TICK_SECONDS)
+
+    threading.Thread(target=_offscreen_loop, name="offscreen", daemon=True).start()
 
     # The thread that moves character moods along and sends lonely check-ins. It looks every few minutes.
     def _mood_loop():
