@@ -120,6 +120,13 @@ def _read_pdf(data, notes):
                 parts.append(text)
                 continue
             # No text layer, so the page is a picture of text: render it and OCR it.
+            # Guard against decompression bombs: skip pages that would render to an oversized pixmap.
+            rect = page.rect
+            px_w = int(rect.width * PAGE_DPI / 72)
+            px_h = int(rect.height * PAGE_DPI / 72)
+            if px_w * px_h > 25_000_000:
+                notes.append(f"Page {index + 1} is too large to render for OCR and was skipped.")
+                continue
             scanned += 1
             parts.append(_ocr_or_note(page.get_pixmap(dpi=PAGE_DPI).tobytes("png"), ".png", notes))
         if scanned:
