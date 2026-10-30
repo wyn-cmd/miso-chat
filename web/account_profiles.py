@@ -15,6 +15,7 @@ AVATAR_FILES = ("avatar.webp", "avatar.gif")
 BACKGROUND = "background.png"
 BACKGROUND_JPEG = "background.jpg"   # a picture saved before backgrounds were stored as PNG; still read
 BACKGROUND_GIF = "background.gif"    # an animated GIF, kept as uploaded
+BACKGROUND_WEBP = "background.webp"  # an animated WebP, kept as uploaded
 BACKGROUND_VIDEO = "background.webm"
 BACKGROUND_FALLBACK = "background.mp4"   # H.264 copy, for phones that cannot play VP9
 BACKGROUND_POSTER = "background.poster.jpg"
@@ -116,7 +117,7 @@ def remove_avatar(data_dir, uid):
 
 
 def background_path(data_dir, uid):
-    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF):
+    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_WEBP):
         path = os.path.join(root_for(data_dir, uid), name)
         if os.path.isfile(path):
             return path
@@ -152,7 +153,7 @@ def save_background(data_dir, uid, data):
     os.makedirs(root, exist_ok=True)
     if editor._video_kind(data) is not None:
         webm, mp4, still = editor.transcode_video(data)
-        for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_POSTER):
+        for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_WEBP, BACKGROUND_POSTER):
             p = os.path.join(root, name)
             if os.path.isfile(p):
                 os.remove(p)
@@ -161,8 +162,8 @@ def save_background(data_dir, uid, data):
         _write_bytes(os.path.join(root, BACKGROUND_POSTER), still)
         return
     encoded, ext = editor.background_bytes(data)
-    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_VIDEO, BACKGROUND_FALLBACK,
-                 BACKGROUND_POSTER):
+    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_WEBP, BACKGROUND_VIDEO,
+                 BACKGROUND_FALLBACK, BACKGROUND_POSTER):
         p = os.path.join(root, name)
         if os.path.isfile(p):
             os.remove(p)
@@ -170,8 +171,8 @@ def save_background(data_dir, uid, data):
 
 
 def remove_background(data_dir, uid):
-    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_VIDEO, BACKGROUND_FALLBACK,
-                 BACKGROUND_POSTER):
+    for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_WEBP, BACKGROUND_VIDEO,
+                 BACKGROUND_FALLBACK, BACKGROUND_POSTER):
         path = os.path.join(root_for(data_dir, uid), name)
         if os.path.isfile(path):
             os.remove(path)

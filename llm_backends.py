@@ -31,14 +31,18 @@ class BackendError(RuntimeError):
 
 
 def read_config(config):
-    # (system_text, temperature, thinking_on) from a genai-style GenerateContentConfig, or defaults.
+    # (system_text, temperature, thinking_on, reasoning_level) from a genai-style GenerateContentConfig.
     system = getattr(config, "system_instruction", None) if config is not None else None
     if system is not None and not isinstance(system, str):
         system = "".join(getattr(p, "text", "") or "" for p in (getattr(system, "parts", None) or []))
     temperature = getattr(config, "temperature", None) if config is not None else None
     tc = getattr(config, "thinking_config", None) if config is not None else None
     thinking = bool(getattr(tc, "include_thoughts", False)) if tc is not None else False
-    return (system or None), temperature, thinking
+    level = getattr(tc, "thinking_level", None) if tc is not None else None
+    reasoning = str(getattr(level, "value", level) or "").lower()
+    if reasoning not in ("low", "medium", "high"):
+        reasoning = "low"
+    return (system or None), temperature, thinking, reasoning
 
 
 def contents_to_messages(contents):
@@ -140,11 +144,11 @@ class OpenAIStyleClient:
             h["Authorization"] = "Bearer " + self.api_key
         return h
 
-    def thinking_fields(self, enabled):
+    def thinking_fields(self, enabled, reasoning="low"):
         if self.style == "deepseek":
             fields = {"thinking": {"type": "enabled" if enabled else "disabled"}}
             if enabled:
-                fields["reasoning_effort"] = "high"
+                fields["reasoning_effort"] = reasoning if reasoning in ("low", "medium", "high") else "low"
             return fields
         return {"chat_template_kwargs": {"enable_thinking": bool(enabled)}}
 
@@ -182,7 +186,7 @@ class OpenAIStyleChat:
     def __init__(self, client, model, history, config):
         self.client = client
         self.model = model
-        self.system, self.temperature, self.thinking = read_config(config)
+        self.system, self.temperature, self.thinking, self.reasoning = read_config(config)
         self.history = contents_to_messages(history)
 
     def _body(self, text, stream):
@@ -191,7 +195,7 @@ class OpenAIStyleChat:
         body = {"model": self.model, "messages": msgs, "stream": stream}
         if self.temperature is not None:
             body["temperature"] = self.temperature
-        body.update(self.client.thinking_fields(self.thinking))
+        body.update(self.client.thinking_fields(self.thinking, self.reasoning))
         if stream:
             body["stream_options"] = {"include_usage": True}
         return body
@@ -293,7 +297,7 @@ class ClaudeCodeChat:
     def __init__(self, client, model, history, config):
         self.client = client
         self.model = model
-        self.system, self.temperature, self.thinking = read_config(config)
+        self.system, self.temperature, self.thinking, self.reasoning = read_config(config)
         self.history = contents_to_messages(history)
 
     def _prompt(self, text):

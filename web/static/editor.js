@@ -1,6 +1,7 @@
-// Character editor (admin): create and edit character cards, colours, context and icons.
-// Every value goes into fields with .value or textContent, never innerHTML.
-let editing = null;      // name of the character being edited, or null for a new one
+// Character editor: changes a character that already exists (card, colours, context, icon, backgrounds, Mind Palace).
+// A new character is made on the wizard page (create.js). Every value goes into fields with .value or textContent,
+// never innerHTML.
+let editing = null;      // name of the character being edited
 let loadedColour = ""; // colour as it was loaded (may be a name such as 'Crimson')
 
 function showEditor(show) {
@@ -18,63 +19,127 @@ function syncColour(from) {
   if (from === "text") $("edColourText").classList.toggle("invalid", !ok);
 }
 
+// Relationship speed: the editor shows the categories for the chosen scales, never the raw rate to users.
+const REL_BANDS = {
+  trust: [[2, "Cautious"], [4, "Open"], [5, "Trusting"], [6, "Heart of gold"]],
+  affection: [[2, "Fond"], [4, "Attached"], [5, "Devoted"], [6, "Soulmate"]],
+};
+const REL_FIELDS = {
+  trust: { range: "edTrustScale", number: "edTrustScaleNum", fallback: 3, bands: REL_BANDS.trust },
+  affection: { range: "edAffectionScale", number: "edAffectionScaleNum", fallback: 2, bands: REL_BANDS.affection },
+};
+let relSaveTimer = null;
+
+function relationshipCategory(scale, bands) {
+  let n = Number(scale);
+  if (!Number.isFinite(n)) n = 2;
+  n = Math.max(1, Math.min(6, n));
+  for (const [top, label] of bands) if (n <= top) return label;
+  return bands[bands.length - 1][1];
+}
+
+function relationshipValue(key) {
+  const field = REL_FIELDS[key];
+  let n = Number($(field.range).value);
+  if (!Number.isFinite(n)) n = field.fallback;
+  return Math.max(1, Math.min(6, n));
+}
+
+function setRelationshipValue(key, value) {
+  const field = REL_FIELDS[key];
+  const n = Math.max(1, Math.min(6, Number(value) || field.fallback));
+  const text = n.toFixed(2);
+  $(field.range).value = text;
+  $(field.number).value = text;
+}
+
+function setRelationshipScales(values) {
+  for (const key of Object.keys(REL_FIELDS)) {
+    const raw = values && values[key];
+    setRelationshipValue(key, raw === undefined || raw === null ? REL_FIELDS[key].fallback : raw);
+  }
+}
+
+function updateRelationshipPreview() {
+  const trust = relationshipCategory(relationshipValue("trust"), REL_BANDS.trust);
+  const affection = relationshipCategory(relationshipValue("affection"), REL_BANDS.affection);
+  $("edRelationshipPreview").textContent = tr("Trust: {trust} · Affection: {affection}", {
+    trust: tr(trust), affection: tr(affection),
+  });
+}
+
+async function saveRelationshipScales() {
+  clearTimeout(relSaveTimer);
+  relSaveTimer = null;
+  const name = editing;
+  $("edRelationshipMsg").textContent = tr("Saving...");
+  try {
+    await api("PUT", "/api/admin/characters/" + encodeURIComponent(name) + "/relationship", {
+      trust: relationshipValue("trust"), affection: relationshipValue("affection"),
+    });
+    if (editing === name) $("edRelationshipMsg").textContent = tr("Saved.");
+  } catch (err) {
+    if (editing === name) $("edRelationshipMsg").textContent = err.message;
+  }
+}
+
+function scheduleRelationshipSave() {
+  updateRelationshipPreview();
+  clearTimeout(relSaveTimer);
+  relSaveTimer = setTimeout(saveRelationshipScales, 350);
+}
+
+function syncRelationshipInput(key, from) {
+  const field = REL_FIELDS[key];
+  if (from === "range") {
+    setRelationshipValue(key, $(field.range).value);
+  } else {
+    const raw = $(field.number).value;
+    if (raw === "") return;   // waiting for a typed value
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 1 || n > 6) return;
+    $(field.range).value = Math.max(1, Math.min(6, n)).toFixed(2);   // leave the typed text alone
+  }
+  scheduleRelationshipSave();
+}
+
 async function openEditor(name) {
   editing = name;
+  clearTimeout(relSaveTimer);
+  $("edRelationshipMsg").textContent = "";
   $("edErr").textContent = "";
   $("edOk").textContent = "";
   $("edIconErr").textContent = "";
   $("edIconSave").disabled = true;
-  $("edImportBox").hidden = !!name;   // importing only creates new characters
-  $("edBgBox").hidden = false;   // a new character can take a background too; it is sent once created
-  $("edExportBox").hidden = !name;
-  $("edDraftBox").hidden = !!name;   // drafting only fills the new-character form
-  $("edPalaceBox").hidden = !name;   // the Mind Palace is saved beside the character, so it needs one
-  if (name) {
-    loadPalace(name, "");
-    fillPalaceWho();
-  } else {
-    palaceEntries = [];
-    renderPalace();
-  }
+  loadPalace(name, "");
+  fillPalaceWho();
   $("edBgErr").textContent = "";
   $("edBgSave").disabled = true;
-  pendingBgs = [];
-  pendingIcon = null;
-  pendingPalace = [];
-  $("edImportMsg").textContent = "";
   $("edBgNote").textContent = "";
+  $("edMusicErr").textContent = "";
+  $("edMusicSave").disabled = true;
+  $("edMusicFile").value = "";
   $("edExportErr").textContent = "";
-  if (name) {
-    $("editorTitle").textContent = tr("Edit {name}", { name: name });
-    const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(name));
-    $("edName").value = data.name;
-    $("edName").readOnly = true;
-    $("edCard").value = data.card;
-    $("edContext").value = data.context;
-    loadedColour = data.colour || "";
-    $("edColourText").value = loadedColour;
-    $("edColour").value = /^#[0-9a-fA-F]{6}$/.test(data.colour || "") ? data.colour.toLowerCase() : "#808080";
-    $("edSandbox").checked = !!data.sandbox;
-    setProfileFields(data.profile);
-    renderExamples(data.examples);
-    setIconPreview(name, data.has_icon);
-    setBgPreview(name, data.backgrounds || []);
-  } else {
-    $("editorTitle").textContent = tr("New character");
-    $("edName").value = "";
-    $("edName").readOnly = false;
-    $("edCard").value = "";
-    $("edContext").value = "";
-    $("edColour").value = "#808080";
-    $("edColourText").value = "#808080";
-    $("edSandbox").checked = false;
-    setProfileFields(null);
-    renderExamples([]);
-    setIconPreview(null, false);
-    resetBgPreview();
-  }
+  $("editorTitle").textContent = tr("Edit {name}", { name: name });
+  const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(name));
+  $("edName").value = data.name;
+  $("edName").readOnly = true;
+  $("edCard").value = data.card;
+  $("edContext").value = data.context;
+  $("edAuthorNote").value = data.author_note || "";
+  setRelationshipScales(data.relationship);
+  loadedColour = data.colour || "";
+  $("edColourText").value = loadedColour;
+  $("edColour").value = /^#[0-9a-fA-F]{6}$/.test(data.colour || "") ? data.colour.toLowerCase() : "#808080";
+  $("edSandbox").checked = !!data.sandbox;
+  setProfileFields(data.profile);
+  renderExamples(data.examples);
+  setIconPreview(name, data.has_icon);
+  setBgPreview(name, data.backgrounds || []);
+  setMusicPreview(name, data.music || []);
   $("edColourText").classList.remove("invalid");
   $("edSandbox").closest("label").hidden = !(me && me.is_admin);   // sandboxes are an admin feature
+  updateRelationshipPreview();
   showEditor(true);
 }
 
@@ -206,75 +271,22 @@ async function saveCharacter(ev) {
   $("edErr").textContent = "";
   $("edOk").textContent = "";
   const typed = $("edColourText").value.trim();
-  if (editing && typed !== loadedColour && !/^#[0-9a-fA-F]{6}$/.test(typed)) {
+  if (typed !== loadedColour && !/^#[0-9a-fA-F]{6}$/.test(typed)) {
     $("edErr").textContent = tr("Colour must be a hex code such as #c0392b.");
     return;
   }
   const body = {
     card: $("edCard").value,
     context: $("edContext").value,
+    author_note: $("edAuthorNote").value,
+    relationship: { trust: relationshipValue("trust"), affection: relationshipValue("affection") },
     colour: typed || $("edColour").value,
     sandbox: $("edSandbox").checked,
     profile: profileFromForm(),
     examples: readExamples(),
   };
   try {
-    let saved;
-    if (editing) {
-      saved = await api("PUT", "/api/admin/characters/" + encodeURIComponent(editing), body);
-    } else {
-      body.name = $("edName").value.trim();
-      saved = await api("POST", "/api/admin/characters", body);
-      editing = saved.name;
-      // An imported card's picture and lorebook are saved now that the character folder exists.
-      if (pendingIcon) {
-        try {
-          const r = await fetch("/api/admin/characters/" + encodeURIComponent(saved.name) + "/icon", {
-            method: "POST",
-            headers: { "X-Requested-With": "roleplay", "Content-Type": "application/octet-stream" },
-            credentials: "same-origin",
-            body: await pendingIcon.arrayBuffer(),
-          });
-          if (!r.ok) throw new Error("the picture was not saved");
-        } catch (err) {
-          $("edErr").textContent = tr("Created {name}, but {error}.", { name: saved.name, error: err.message });
-        }
-        pendingIcon = null;
-        $("edImportFile").value = "";
-      }
-      if (pendingPalace.length) {
-        palaceEntries = pendingPalace;
-        pendingPalace = [];
-        renderPalace();
-        try {
-          await savePalace();
-        } catch (err) {
-          $("edErr").textContent = tr("Created {name}, but the lorebook was not saved: {error}", { name: saved.name, error: err.message });
-        }
-      }
-      if (pendingBgs.length) {
-        // The folder exists now, so the queued backgrounds are sent in the order chosen.
-        let failed = "";
-        for (const file of pendingBgs) {
-          try {
-            await sendBackground(saved.name, file);
-          } catch (err) {
-            failed = err.message;
-            break;
-          }
-        }
-        if (failed) $("edErr").textContent = tr("Created {name}, but a background did not upload: {error}", { name: saved.name, error: failed });
-        pendingBgs = [];
-        $("edBgFile").value = "";
-        try {
-          const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(saved.name));
-          setBgPreview(saved.name, data.backgrounds || []);
-        } catch (err) {
-          $("edErr").textContent = err.message;
-        }
-      }
-    }
-    $("edName").readOnly = true;
+    const saved = await api("PUT", "/api/admin/characters/" + encodeURIComponent(editing), body);
     setProfileFields(saved.profile);
     renderExamples(saved.examples);   // the saved list, so half-typed rows do not linger
     $("edOk").textContent = tr("Saved {name}. Chats pick up the change on their next message.", { name: saved.name });
@@ -314,21 +326,6 @@ function renderTags() {
     chip.appendChild(x);
     box.insertBefore(chip, input);
   }
-}
-
-// Same rule as fold_accents in web/profiles.py: accents go from Latin letters only.
-function foldAccents(text) {
-  let out = "";
-  let latin = false;
-  for (const c of text.normalize("NFD")) {
-    if (/\p{M}/u.test(c)) {
-      if (latin) continue;
-    } else {
-      latin = /^\p{Script=Latin}/u.test(c);
-    }
-    out += c;
-  }
-  return out.normalize("NFC");
 }
 
 // Returns false when the tag was refused; the text stays in the box so it can be shortened.
@@ -450,30 +447,24 @@ async function uploadIcon() {
   }
 }
 
-// ---- Backgrounds: several per character. A new character queues its files until it exists.
+// ---- Backgrounds: several per character, each saved as it is added.
 const BG_MAX = 10;
 let bgItems = [];      // saved backgrounds: { id }
-let pendingBgs = [];   // files queued on the new-character form
 
 function setBgPreview(name, ids) {
   bgItems = (ids || []).map((id) => ({ id }));
   renderBgList();
 }
 
-function resetBgPreview() {
-  bgItems = [];
-  renderBgList();
-}
-
 function renderBgList() {
   const box = $("edBgList");
   box.textContent = "";
-  const items = [...bgItems, ...pendingBgs.map((file) => ({ file }))];
+  const items = bgItems;
   if (!items.length) box.appendChild(el("p", tr("No backgrounds yet."), "muted"));
   for (const item of items) {
     const thumb = el("div", "", "bg-thumb");
-    const src = item.file ? URL.createObjectURL(item.file) : "/api/background/" + encodeURIComponent(editing) + "?b=" + encodeURIComponent(item.id);
-    const isVid = item.file ? /^video\//.test(item.file.type) : isVideoArt(item.id);
+    const src = "/api/background/" + encodeURIComponent(editing) + "?b=" + encodeURIComponent(item.id);
+    const isVid = isVideoArt(item.id);
     let media;
     if (isVid) {
       // A video background previews as itself, muted, so the list shows what the page will loop. Its still
@@ -487,8 +478,8 @@ function renderBgList() {
       media.setAttribute("playsinline", "");
       media.setAttribute("webkit-playsinline", "");
       media.setAttribute("aria-hidden", "true");
-      if (!item.file) media.poster = "/api/background/" + encodeURIComponent(editing) + "?b=" + encodeURIComponent(posterFor(item.id));
-      setArtSources(media, src, item.file ? null : artFallbackUrl(editing, item.id));
+      media.poster = "/api/background/" + encodeURIComponent(editing) + "?b=" + encodeURIComponent(posterFor(item.id));
+      setArtSources(media, src, artFallbackUrl(editing, item.id));
     } else {
       media = document.createElement("img");
       media.alt = "";
@@ -505,11 +496,6 @@ function renderBgList() {
 }
 
 async function removeBackground(item) {
-  if (item.file) {
-    pendingBgs = pendingBgs.filter((f) => f !== item.file);
-    renderBgList();
-    return;
-  }
   $("edBgErr").textContent = "";
   try {
     await api("DELETE", "/api/admin/characters/" + encodeURIComponent(editing) + "/backgrounds/" + encodeURIComponent(item.id));
@@ -518,99 +504,6 @@ async function removeBackground(item) {
     await loadCharacters();
   } catch (err) {
     $("edBgErr").textContent = err.message;
-  }
-}
-
-// ---- Import a character card (SillyTavern JSON or PNG). The picture and lorebook wait for Create.
-let pendingIcon = null;    // the imported PNG, saved as the character's picture once it exists
-let pendingPalace = [];    // the imported lorebook, saved as Mind Palace entries once it exists
-
-async function importCard() {
-  const file = $("edImportFile").files[0];
-  if (!file) {
-    $("edImportMsg").textContent = tr("Choose a .json or .png card first.");
-    return;
-  }
-  $("edImportMsg").textContent = tr("Reading the card.");
-  $("edImportBtn").disabled = true;
-  try {
-    const r = await fetch("/api/admin/character-import", {
-      method: "POST",
-      headers: {
-        "X-Requested-With": "roleplay",
-        "Content-Type": file.type || "application/octet-stream",
-        "X-Filename": encodeURIComponent(file.name),
-      },
-      credentials: "same-origin",
-      body: file,
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.detail || tr("The card could not be imported."));
-    const hasText = $("edCard").value.trim() || $("edHeadline").value.trim() || $("edInfo").value.trim();
-    if (hasText && !confirm(tr("Replace the card, context, headline, summary and tags with the imported card? A name you typed is kept."))) {
-      $("edImportMsg").textContent = tr("Kept your text. Nothing was changed.");
-      return;
-    }
-    if (data.name && !$("edName").value.trim()) $("edName").value = data.name;
-    $("edCard").value = data.character;
-    $("edContext").value = data.context;
-    if (data.examples) renderExamples(data.examples);
-    $("edHeadline").value = data.headline;
-    $("edInfo").value = data.info;
-    setTags(data.tags);
-    pendingIcon = data.icon ? file : null;
-    pendingPalace = data.palace || [];
-    const parts = [tr("Card imported. Check it, then Create.")];
-    if (pendingIcon) parts.push(tr("The PNG will be the picture."));
-    if (pendingPalace.length) parts.push(tr("{n} lorebook entries will be saved to the Mind Palace.", { n: pendingPalace.length }));
-    $("edImportMsg").textContent = parts.concat(data.notes || []).join(" ");
-  } catch (err) {
-    $("edImportMsg").textContent = err.message;
-  } finally {
-    $("edImportBtn").disabled = false;
-  }
-}
-
-$("edImportBtn").addEventListener("click", importCard);
-
-// ---- Draft from a file: fills the new-character form for review. Nothing is saved until Create.
-async function draftFromFile() {
-  const file = $("edDraftFile").files[0];
-  if (!file) {
-    $("edDraftMsg").textContent = tr("Choose a file first.");
-    return;
-  }
-  $("edDraftMsg").textContent = tr("Reading the file and drafting. This can take a minute.");
-  $("edDraftBtn").disabled = true;
-  try {
-    const r = await fetch("/api/admin/character-draft", {
-      method: "POST",
-      headers: {
-        "X-Requested-With": "roleplay",
-        "Content-Type": file.type || "application/octet-stream",
-        "X-Filename": encodeURIComponent(file.name),
-      },
-      credentials: "same-origin",
-      body: file,
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.detail || tr("The draft failed."));
-    const hasText = $("edCard").value.trim() || $("edHeadline").value.trim() || $("edInfo").value.trim();
-    if (hasText && !confirm(tr("Replace the card, headline, summary and tags with the draft? A name you typed is kept."))) {
-      $("edDraftMsg").textContent = tr("Kept your text. Nothing was changed.");
-      return;
-    }
-    if (data.name && !$("edName").value.trim()) $("edName").value = data.name;
-    $("edCard").value = data.character;
-    if (data.examples) renderExamples(data.examples);
-    $("edHeadline").value = data.headline;
-    $("edInfo").value = data.info;
-    setTags(data.tags);
-    $("edDraftMsg").textContent = [tr("Draft ready. Check it, then Create.")].concat(data.notes || []).join(" ");
-  } catch (err) {
-    $("edDraftMsg").textContent = err.message;
-  } finally {
-    $("edDraftBtn").disabled = false;
   }
 }
 
@@ -826,32 +719,104 @@ async function uploadBackground() {
   await loadCharacters();
 }
 
-// A background chosen on the new-character form waits until the character exists. A picture may be up to
-// 10 MB and a video up to 50 MB, so the queue accepts the larger figure and the server checks the rest.
-const NEW_BG_MAX = 50 * 1024 * 1024;
+// A still picture may be up to 10 MB, an animated one up to 100 MB and a video up to 50 MB. The client checks the
+// largest of these figures; the server checks the rest.
+const BG_IMAGE_MAX = 100 * 1024 * 1024;
+const BG_VIDEO_MAX = 50 * 1024 * 1024;
 
-
-function queueNewBackground(files) {
-  // New characters hold their backgrounds until Create; the list shows what is queued.
-  const tooBig = files.some((f) => f.size > NEW_BG_MAX);
-  const room = BG_MAX - pendingBgs.length;
-  pendingBgs = pendingBgs.concat(tooBig ? [] : files.slice(0, Math.max(0, room)));
-  $("edBgErr").textContent = tooBig ? tr("Background uploads can be up to 50 MB.") : files.length > room ? tr("Only {n} more fit (up to 10).", { n: Math.max(0, room) }) : "";
-  $("edBgFile").value = "";
-  renderBgList();
+function backgroundTooBig(file) {
+  return file.size > (String(file.type || "").startsWith("video/") ? BG_VIDEO_MAX : BG_IMAGE_MAX);
 }
 
 function onBgFilesChosen() {
   const files = Array.from($("edBgFile").files || []);
   if (!files.length) return;
-  if (!editing) {
-    queueNewBackground(files);
+  const tooBig = files.some(backgroundTooBig);
+  const over = bgItems.length + files.length > BG_MAX;
+  $("edBgErr").textContent = tooBig ? tr("A background video can be up to 50 MB, and an animated picture up to 100 MB.") : over ? tr("A character can have up to 10 backgrounds. Remove one first.") : "";
+  $("edBgSave").disabled = tooBig || over;
+}
+
+// ---- Theme music: up to three tracks per character. They play in its chat and while its card is open.
+const MUSIC_MAX = 3;
+const MUSIC_UPLOAD_MAX = 60 * 1024 * 1024;
+let musicItems = [];   // saved tracks: { id, title, duration }
+
+function setMusicPreview(name, items) {
+  musicItems = items || [];
+  renderMusicList();
+}
+
+function renderMusicList() {
+  themeMusic.renderList($("edMusicList"), musicItems, { onMove: moveMusic, onRemove: removeMusic });
+  $("edMusicNote").textContent = tr("{n} of {max} tracks.", { n: musicItems.length, max: MUSIC_MAX });
+  $("edMusicFile").disabled = musicItems.length >= MUSIC_MAX;
+  if (musicItems.length >= MUSIC_MAX) $("edMusicSave").disabled = true;
+}
+
+async function refreshMusic() {
+  const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(editing));
+  setMusicPreview(editing, data.music || []);
+  await loadCharacters(false);
+}
+
+function musicBase() {
+  return "/api/admin/characters/" + encodeURIComponent(editing) + "/music";
+}
+
+function onMusicFileChosen() {
+  const file = $("edMusicFile").files[0];
+  $("edMusicErr").textContent = "";
+  if (!file) { $("edMusicSave").disabled = true; return; }
+  if (file.size > MUSIC_UPLOAD_MAX) {
+    $("edMusicErr").textContent = tr("A track can be up to 60 MB.");
+    $("edMusicSave").disabled = true;
     return;
   }
-  const tooBig = files.some((f) => f.size > NEW_BG_MAX);
-  const over = bgItems.length + files.length > BG_MAX;
-  $("edBgErr").textContent = tooBig ? tr("Background uploads can be up to 50 MB.") : over ? tr("A character can have up to 10 backgrounds. Remove one first.") : "";
-  $("edBgSave").disabled = tooBig || over;
+  $("edMusicSave").disabled = musicItems.length >= MUSIC_MAX;
+}
+
+async function uploadMusic() {
+  const file = $("edMusicFile").files[0];
+  if (!file || !editing) return;
+  $("edMusicErr").textContent = "";
+  try {
+    await themeMusic.upload(musicBase(), file, file.name.replace(/\.[^.]+$/, ""));
+  } catch (err) {
+    $("edMusicErr").textContent = err.message;
+  }
+  $("edMusicFile").value = "";
+  $("edMusicSave").disabled = true;
+  try {
+    await refreshMusic();
+  } catch (err) {
+    $("edMusicErr").textContent = err.message;
+  }
+}
+
+async function moveMusic(id, direction) {
+  const ids = musicItems.map((t) => t.id);
+  const at = ids.indexOf(id);
+  const to = at + direction;
+  if (to < 0 || to >= ids.length) return;
+  [ids[at], ids[to]] = [ids[to], ids[at]];
+  $("edMusicErr").textContent = "";
+  try {
+    await api("PUT", musicBase() + "/order", { ids: ids });
+    await refreshMusic();
+  } catch (err) {
+    $("edMusicErr").textContent = err.message;
+  }
+}
+
+async function removeMusic(id) {
+  $("edMusicErr").textContent = "";
+  try {
+    await api("DELETE", musicBase() + "/" + encodeURIComponent(id));
+    await refreshMusic();
+  } catch (err) {
+    $("edMusicErr").textContent = err.message;
+  }
 }
 
 // Export downloads the zip through fetch, so a failure shows here instead of as a blank page.
@@ -879,34 +844,6 @@ async function exportCharacter() {
   }
 }
 
-async function importCharacter() {
-  const file = $("impFile").files[0];
-  if (!file) return;
-  $("impMsg").textContent = tr("Importing...");
-  try {
-    const r = await fetch("/api/admin/characters/import", {
-      method: "POST",
-      headers: { "X-Requested-With": "roleplay", "Content-Type": "application/zip" },
-      credentials: "same-origin",
-      body: file,
-    });
-    if (!r.ok) {
-      let detail = tr("Import failed.");
-      try { detail = (await r.json()).detail || detail; } catch (e) { /* not json */ }
-      throw new Error(typeof detail === "string" ? detail : tr("Import failed."));
-    }
-    const out = await r.json();
-    $("impFile").value = "";
-    $("impBtn").disabled = true;
-    $("impMsg").textContent = out.history_restored
-      ? tr("Imported {name}, with your history.", { name: out.name })
-      : tr("Imported {name}.", { name: out.name });
-    await loadCharacters();
-  } catch (err) {
-    $("impMsg").textContent = err.message;
-  }
-}
-
 $("editorForm").addEventListener("submit", saveCharacter);
 $("editorBack").addEventListener("click", () => { showEditor(false); showChat(); renderUsage(); });
 $("edExample").addEventListener("click", () => loadExample().catch((e) => { $("edErr").textContent = e.message; }));
@@ -919,11 +856,24 @@ $("edIconFile").addEventListener("change", () => {
   $("edIconSave").disabled = !f || !editing || tooBig;
 });
 $("edIconSave").addEventListener("click", uploadIcon);
-$("edDraftBtn").addEventListener("click", draftFromFile);
+for (const [key, field] of Object.entries(REL_FIELDS)) {
+  $(field.range).addEventListener("input", () => syncRelationshipInput(key, "range"));
+  $(field.range).addEventListener("change", () => { syncRelationshipInput(key, "range"); saveRelationshipScales(); });
+  $(field.number).addEventListener("input", () => syncRelationshipInput(key, "number"));
+  $(field.number).addEventListener("change", () => {
+    const raw = $(field.number).value;
+    const n = raw === "" ? REL_FIELDS[key].fallback : Number(raw);
+    setRelationshipValue(key, Number.isFinite(n) ? n : REL_FIELDS[key].fallback);   // clamps the typed value
+    syncRelationshipInput(key, "number");
+    saveRelationshipScales();
+  });
+}
 $("edPalaceAdd").addEventListener("click", addPalaceEntry);
 $("edPalaceSave").addEventListener("click", savePalace);
 $("edBgSave").addEventListener("click", uploadBackground);
 $("edBgFile").addEventListener("change", onBgFilesChosen);
+$("edMusicSave").addEventListener("click", uploadMusic);
+$("edMusicFile").addEventListener("change", onMusicFileChosen);
 $("edPalaceWho").addEventListener("change", () => { if (editing) loadPalace(editing, $("edPalaceWho").value); });
 
 // ---- Settings: the account's own Mind Palace for the open character. Each account has its own copy.
@@ -986,11 +936,4 @@ $("palAdd").addEventListener("click", addMyPalaceEntry);
 $("palSave").addEventListener("click", saveMyPalace);
 $("palClose").addEventListener("click", () => $("palaceDlg").close());
 $("edExport").addEventListener("click", exportCharacter);
-$("impFile").addEventListener("change", () => {
-  const f = $("impFile").files[0];
-  const tooBig = !!f && f.size > 60 * 1024 * 1024;
-  $("impMsg").textContent = tooBig ? tr("Archives can be up to 60 MB.") : "";
-  $("impBtn").disabled = !f || tooBig;
-});
-$("impBtn").addEventListener("click", importCharacter);
 $("edProfileAuto").addEventListener("click", autoFillProfile);

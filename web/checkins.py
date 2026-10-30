@@ -45,6 +45,14 @@ def tick(store, fire, now=None, log=lambda m: None):
         uid, name = row["user_id"], row["character"]
         tz = zone_for(row["tz"])
         local = now.astimezone(tz)
+        every = max(1, int(row.get("every_days") or 1))
+        if row["fired_day"]:
+            try:
+                last = datetime.date.fromisoformat(row["fired_day"])
+            except ValueError:
+                last = None
+            if last and (local.date() - last).days < every:
+                continue
         today = local.strftime("%Y-%m-%d")
         if row["target_day"] != today:
             minute = pick_minute(row)
@@ -67,11 +75,13 @@ def tick(store, fire, now=None, log=lambda m: None):
             log(f"check-in for {name} (user {uid}) failed: {err}")
 
 
-# Sets the schedule for a check-in from the settings page. The day's target and fired mark are cleared, so the
-# new time applies from today on, and a time still to come today is not blocked by an earlier skip.
-def save_settings(store, uid, name, enabled, mode, at_min, start_min, end_min, tz):
-    store.checkin_update(uid, name, enabled=int(bool(enabled)), mode=mode, at_min=at_min, start_min=start_min,
-                         end_min=end_min, tz=tz, target_day="", target_min=-1, fired_day="")
+# Sets the schedule for a check-in from the settings page. The day's target is cleared, so the new time applies from
+# today on. The fired mark is kept, so changing the schedule does not send a second check-in on a day that already
+# had one (or was skipped).
+def save_settings(store, uid, name, enabled, mode, at_min, start_min, end_min, tz, every_days=1):
+    every_days = max(1, min(30, int(every_days or 1)))
+    store.checkin_update(uid, name, enabled=int(bool(enabled)), every_days=every_days, mode=mode, at_min=at_min,
+                         start_min=start_min, end_min=end_min, tz=tz, target_day="", target_min=-1)
 
 
 # The settings as the page shows them: times as HH:MM, and the next target when there is one today.
@@ -80,10 +90,11 @@ def view(row, unread=0):
         return f"{m // 60:02d}:{m % 60:02d}"
     if row is None:
         return {"enabled": False, "mode": "at", "at": "20:00", "start": "09:00", "end": "19:00", "tz": "",
-                "unread": 0, "next": None}
+                "unread": 0, "next": None, "every_days": 1}
     return {"enabled": bool(row["enabled"]), "mode": row["mode"], "at": hhmm(row["at_min"]),
             "start": hhmm(row["start_min"]), "end": hhmm(row["end_min"]), "tz": row["tz"], "unread": unread,
-            "next": hhmm(row["target_min"]) if row["target_day"] and row["target_min"] >= 0 else None}
+            "next": hhmm(row["target_min"]) if row["target_day"] and row["target_min"] >= 0 else None,
+            "every_days": max(1, int(row.get("every_days") or 1))}
 
 
 # Reads "HH:MM" into minutes after midnight, or None when it is not a time.

@@ -89,6 +89,12 @@ def new_id():
     return secrets.token_hex(4)
 
 
+# The id a legacy entry (one saved before ids) gets on its first save: the same ten characters its content hash already
+# gives it in palace_key, so its usage counts and core mark carry over the save.
+def _legacy_id(entry):
+    return hashlib.sha1(str(entry.get("content") or "").encode("utf-8")).hexdigest()[:10]
+
+
 def validate(raw):
     # Strict: the editor shows these messages. Raises PalaceError for the first problem found.
     if not isinstance(raw, list):
@@ -112,7 +118,7 @@ def validate(raw):
         logic = item.get("logic") or "and_any"
         if logic not in LOGICS:
             raise PalaceError(f"'{label}' logic must be one of: {', '.join(LOGICS)}.")
-        entry_id = item.get("id") if isinstance(item.get("id"), str) and re.fullmatch(r"[0-9a-f]{8}", item.get("id")) else ""
+        entry_id = item.get("id") if isinstance(item.get("id"), str) and re.fullmatch(r"[0-9a-f]{8,10}", item.get("id")) else ""
         out.append({
             "id": entry_id,
             "auto": _flag(item.get("auto"), False, f"'{label}' automatic"),
@@ -193,6 +199,17 @@ def copy_starting(src_folder, dst_folder):
 
 def save(folder, raw, settings=None):
     entries = validate(raw)
+    # Every saved entry has an id, so its usage counts (palace_audit.py) survive edits to its text.
+    taken = {e["id"] for e in entries if e["id"]}
+    for e in entries:
+        if not e["id"]:
+            candidate = _legacy_id(e)
+            if candidate in taken:
+                candidate = new_id()
+                while candidate in taken:
+                    candidate = new_id()
+            e["id"] = candidate
+            taken.add(candidate)
     cfg = validate_settings(settings, base=load_all(folder)[1])
     path = os.path.join(folder, FILE)
     tmp = path + ".tmp"
@@ -295,7 +312,9 @@ def block_for(entry):
 
 # The entries a turn's prompt keeps, so the caller can score them. weights maps an entry's retention key to a rank
 # multiplier; an entry with no weight is ranked exactly as before. The user's own entries are never weighted here.
-def match_entries(entries, texts, budget=DEFAULT_BUDGET, recursive=False, weights=None):
+# fired, when a list is given, receives every entry whose keys matched this turn, before the budget cut, so the usage
+# counts can tell a trigger from a reply that actually used the entry.
+def match_entries(entries, texts, budget=DEFAULT_BUDGET, recursive=False, weights=None, fired=None):
     texts = [str(t) for t in texts if t]
     scans = {}
 
@@ -316,6 +335,8 @@ def match_entries(entries, texts, budget=DEFAULT_BUDGET, recursive=False, weight
             chosen += new
             chosen_ids.update(id(e) for e in new)
             pool = "\n".join(_norm(e["content"]) for e in new)
+    if fired is not None:
+        fired.extend(chosen)
 
     # Highest order first, so the budget keeps the most important entries. A weight scales the order, so a memory
     # that has proved useful keeps its place against one that has not. A weight is never applied to an entry the

@@ -5,6 +5,20 @@ const CARD_ART_SPREAD_MS = 3000;
 const cardArtRuns = new Map();
 const CARD_REDUCE_MOTION = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
+// Cards cycle their art only while on screen. An off-screen card parks its timer until the observer sees it again.
+const cardCycleEdge = typeof IntersectionObserver === "function" ? new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    const stack = entry.target;
+    if (!stack.isConnected) { cardCycleEdge.unobserve(stack); continue; }
+    stack.__inView = entry.isIntersecting;
+    if (entry.isIntersecting && stack.__wake) {
+      const wake = stack.__wake;
+      stack.__wake = null;
+      wake();
+    }
+  }
+}) : null;
+
 function cardById(id) { return document.getElementById(id); }
 
 function otherId(ids, current) {
@@ -52,6 +66,8 @@ function buildArt(host, name, ids, container, meta) {
   host.prepend(stack);
 
   const cycle = ids.length > 1 && !CARD_REDUCE_MOTION;
+  stack.__wake = null;
+  if (cycle && cardCycleEdge) cardCycleEdge.observe(stack);
   let current = ids[Math.floor(Math.random() * ids.length)];
   let front = 0;
   let timer = null;
@@ -86,6 +102,7 @@ function buildArt(host, name, ids, container, meta) {
   function advance() {
     if (stopped || !stack.isConnected) return;
     if (document.hidden) { timer = setTimeout(advance, 1000); return; }
+    if (stack.__inView === false) { timer = null; stack.__wake = advance; return; }
     cancelPending();
     const next = otherId(ids, current);
     if (isVideoArt(next) || (meta[next] || {}).kind === "gif") { swap(next); return; }
@@ -109,7 +126,11 @@ function buildArt(host, name, ids, container, meta) {
     watch(filled);
   }
 
-  const stop = () => { stopped = true; cancelPending(); };
+  const stop = () => {
+    stopped = true;
+    cancelPending();
+    if (cardCycleEdge) cardCycleEdge.unobserve(stack);
+  };
   if (!cardArtRuns.has(container)) cardArtRuns.set(container, []);
   cardArtRuns.get(container).push(stop);
 
@@ -180,7 +201,9 @@ function renderCard(card, container, opts) {
   const messages = tn("{n} message", "{n} messages", card.messages || 0);
   text.appendChild(el("span", t("\u2605 {stars}  \u00b7  {messages}", { stars: card.stars || 0, messages: messages }), "home-stats"));
   const tags = el("span", "", "home-tags");
-  for (const tag of card.tags || []) tags.appendChild(el("span", tag, "home-tag"));
+  const relType = card.relationship && card.relationship.type;
+  if (relType) tags.appendChild(el("span", t(relType), "home-tag home-tag-rel"));
+  for (const tag of card.tags || []) if (tag !== relType) tags.appendChild(el("span", tag, "home-tag"));
   text.appendChild(tags);
   open.appendChild(text);
   wrap.appendChild(open);
@@ -208,22 +231,36 @@ function showInfo(card) {
   const ids = (card.backgrounds || []).length ? card.backgrounds : lookDefaults(card.default_backgrounds);
   dlg.classList.toggle("has-art", ids.length > 0);
   if (ids.length) buildArt(dlg, card.name, ids, dlg, card.background_meta);
-  dlg.addEventListener("close", () => stopArt(dlg), { once: true });
+  dlg.addEventListener("close", () => { stopArt(dlg); themeMusic.hide(); }, { once: true });
   cardById("infoTitle").textContent = card.name;
   cardById("infoHeadline").textContent = card.headline || "";
   const infoCreator = cardById("infoCreator");
   infoCreator.textContent = t("Created by") + " ";
   infoCreator.appendChild(creatorHandle(card.creator, card.creator_profile));
+  const rel = card.relationship || null;
+  const relLine = cardById("infoRelationship");
+  if (relLine) {
+    relLine.textContent = rel
+      ? t("{type} \u00b7 {trust} \u00b7 {affection}", {
+          type: t(rel.type), trust: t(rel.trust), affection: t(rel.affection),
+        })
+      : "";
+  }
   const tags = cardById("infoTags");
   tags.textContent = "";
-  for (const tag of card.tags || []) tags.appendChild(el("span", tag, "home-tag"));
+  const relType = rel && rel.type;
+  if (relType) tags.appendChild(el("span", t(relType), "home-tag home-tag-rel"));
+  for (const tag of card.tags || []) if (tag !== relType) tags.appendChild(el("span", tag, "home-tag"));
   cardById("infoBody").textContent = card.info || (card.pending ? t("This character's profile is still being written.") : t("No profile yet. An admin can add one."));
   cardById("infoStart").onclick = () => openChat(card.name);
+  // The character's theme music plays while its card is open; closing the card hands the page back its own music.
+  themeMusic.show("char:" + card.name, card.music || null);
   dlg.showModal();
 }
 
 function openChat(name) {
-  location.href = "/chat?c=" + encodeURIComponent(name);
+  // The music fades out before the chat opens, so it does not stop with a cut.
+  themeMusic.leave(() => { location.href = "/chat?c=" + encodeURIComponent(name); });
 }
 
 const infoCloseBtn = cardById("infoClose");

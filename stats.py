@@ -37,7 +37,7 @@ def get_stats():
                     history_len = len(history)
                     full_text = "".join([entry.get("text", "") for entry in history])
                     hist_tokens = estimate_tokens(full_text)
-            except:
+            except Exception:
                 pass
         
         mem_tokens = 0
@@ -79,7 +79,7 @@ def get_stats():
                     with open(cfg_file, "r", encoding="utf-8") as f:
                         cfg = json.load(f)
                         members = cfg.get("members", [])
-                except:
+                except Exception:
                     pass
             
             history_len = 0
@@ -102,7 +102,7 @@ def get_stats():
                             
                             speaker_counts[speaker] = speaker_counts.get(speaker, 0) + 1
                             speaker_tokens[speaker] = speaker_tokens.get(speaker, 0) + toks
-                except:
+                except Exception:
                     pass
 
             group_mem_tokens = 0

@@ -52,15 +52,15 @@ em { color: var(--color-ink-2); }
 hr { border: 0; border-top: 1px solid var(--color-rule); margin: var(--space-md) 0; }
 
 /* ---- 2. controls: a pink pill and an outlined pill, nothing else ---- */
-:root:not([data-theme="light"]) button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn),
-[data-theme="light"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn) {
+:root:not([data-theme="light"]) button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):not(.home-info),
+[data-theme="light"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):not(.home-info) {
   background: var(--color-accent); color: var(--color-accent-ink);
   border: 0; border-radius: var(--radius-pill); padding: var(--space-xs) var(--space-md);
   font-family: var(--font-body); font-weight: 600; font-size: var(--text-sm); line-height: 1.3;
   box-shadow: none; transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
 }
-:root:not([data-theme="light"]) button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):hover,
-[data-theme="light"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):hover { background: var(--color-accent-2); }
+:root:not([data-theme="light"]) button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):not(.home-info):hover,
+[data-theme="light"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):not(.home-info):hover { background: var(--color-accent-2); }
 :root:not([data-theme="light"]) button:not(.ghost):disabled,
 [data-theme="light"] button:not(.ghost):disabled {
   background: var(--color-paper-3); color: var(--color-muted); box-shadow: inset 0 0 0 1.5px var(--color-rule); cursor: not-allowed;
@@ -200,7 +200,7 @@ header::after { content: ""; position: absolute; inset: 0; pointer-events: none;
 .set-panel .metric { margin: var(--space-md) 0; }
 .set-panel .metric + .metric { margin-top: var(--space-sm); }
 /* one recipe per role: a filled band for import and export, a hairline for lists, a rule for the palace */
-.import-box, .export-box { background: var(--color-paper-3); border: 0; border-radius: var(--radius-card); box-shadow: none; }
+.export-box { background: var(--color-paper-3); border: 0; border-radius: var(--radius-card); box-shadow: none; }
 .tag-panel, .sandbox-list, .tree { background: transparent; border: 0; border-radius: var(--radius-card); box-shadow: inset 0 0 0 1px var(--color-rule); }
 .palace-box { background: transparent; border: 0; border-top: 1px solid var(--color-rule); border-radius: 0; box-shadow: none; }
 .example-row { background: color-mix(in oklab, var(--color-paper-2) 72%, transparent); border: 0; border-radius: var(--radius-card); box-shadow: none; }
@@ -241,6 +241,12 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-paper) 78%, trans
 :root:not([data-theme="light"]) .home-card .home-open:hover { background: none; color: inherit; }
 :root:not([data-theme="light"]) .home-card .home-info { background: color-mix(in oklab, var(--color-paper) 88%, transparent); }
 .home-card.has-art .home-info { color: var(--color-ink); }
+/* the (i) button: a true circle with the letter centred; the pill rule for buttons above would otherwise squeeze it into an oval */
+:root .home-card button.home-info {
+  box-sizing: border-box; width: 30px; height: 30px; min-width: 30px; padding: 0; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; line-height: 1; font-size: 15px; font-style: normal; text-align: center;
+}
 :root:not([data-theme="light"]) .home-card .home-info { background: var(--color-paper-2); color: var(--color-ink-2); }
 /* over the art the card keeps the theme ink and a warm paper scrim, not a blue-black one */
 .home-card.has-art { background: linear-gradient(var(--color-paper), var(--color-paper)) padding-box, linear-gradient(135deg, var(--color-accent), var(--color-accent-2)) border-box; }

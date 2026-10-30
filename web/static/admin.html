@@ -11,7 +11,7 @@
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","folio","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
@@ -68,10 +68,13 @@
       <label class="inline"><input id="s_attitude_enabled" type="checkbox"> Relationship with the user (affection, trust, five levels) (off by default)</label>
       <label class="inline"><input id="s_event_memory_enabled" type="checkbox"> Event memory graph, written in quiet hours by dreams (off by default)</label>
       <label class="inline"><input id="s_memory_policy_enabled" type="checkbox"> Learned memory retention: score self-written memories by how useful they proved (off by default)</label>
+      <label class="inline"><input id="s_offscreen_enabled" type="checkbox"> Off-screen life: a daily director writes what characters did between sessions (off by default)</label>
       <label>Dream every how many days <input id="s_dream_every_days" type="number" min="1" max="30" required></label>
       <label>Dream model calls across the server per day <input id="s_dream_daily_cap" type="number" min="1" required></label>
       <p class="muted">Dreams tidy each character's memory during its quiet hours. Their model calls are not counted against any user's requests or tokens, so this cap is the only limit on them. Set it to what you are willing to spend per day.</p>
       <p class="muted">Both are on by default. Turning one off stops it being read, refreshed and shown to users.</p>
+      <label>Off-screen director model calls across the server per day <input id="s_offscreen_daily_cap" type="number" min="1" required></label>
+      <p class="muted">Off-screen life writes one short pass per chat each day, and a user can ask for another pass from the chat's settings. These calls are not counted against any user's requests or tokens, so this cap is the only limit on them.</p>
       <label>Budget alert webhook (optional) <input id="s_budget_webhook_url" type="url" maxlength="500" placeholder="https://hooks.example.com/..."></label>
       <p class="muted">Posted as JSON when a user's daily, weekly or monthly token budget reaches 80% and again at 100%. Leave empty to turn it off.</p>
         <button type="submit">Save limits</button>

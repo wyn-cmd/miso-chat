@@ -11,7 +11,7 @@
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","folio","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="folio"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
@@ -51,12 +51,36 @@
     <div class="home-search">
       <input id="homeSearch" type="search" placeholder="Search name, creator, headline or summary" aria-label="Search characters" autocomplete="off">
       <button id="favOnly" class="ghost small fav-only" type="button" aria-pressed="false" aria-label="Show only your favourites" title="Show only your favourites">&#9733;</button>
-      <button id="tagFilterBtn" class="icon-btn" type="button" aria-label="Filter by tags" aria-expanded="false" aria-controls="tagPanel" title="Filter by tags">
+      <button id="tagFilterBtn" class="icon-btn" type="button" aria-label="Filters" aria-expanded="false" aria-controls="tagPanel" title="Filters">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
       </button>
     </div>
     <section id="tagPanel" class="tag-panel" hidden>
-      <div class="tag-panel-head"><span id="tagPanelNote" class="muted"></span><button id="tagClear" class="ghost small" type="button">Clear tags</button></div>
+      <div class="tag-panel-head"><span id="tagPanelNote" class="muted"></span><button id="tagClear" class="ghost small" type="button">Clear filters</button></div>
+      <div class="relation-filters">
+        <label>Relationship type
+          <select id="relTypeFilter"><option value="">All types</option></select>
+        </label>
+        <label>Trust
+          <select id="relTrustFilter">
+            <option value="">Any trust</option>
+            <option value="Cautious">Cautious</option>
+            <option value="Open">Open</option>
+            <option value="Trusting">Trusting</option>
+            <option value="Heart of gold">Heart of gold</option>
+          </select>
+        </label>
+        <label>Affection
+          <select id="relAffectionFilter">
+            <option value="">Any affection</option>
+            <option value="Fond">Fond</option>
+            <option value="Attached">Attached</option>
+            <option value="Devoted">Devoted</option>
+            <option value="Soulmate">Soulmate</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted">Tags</p>
       <div id="tagChips" class="tag-chips"></div>
     </section>
     <p id="homeCount" class="muted"></p>
@@ -73,7 +97,7 @@
       <button id="pageNext" class="ghost" type="button">Next</button>
     </nav>
     <p id="homeEmpty" class="muted" hidden>No characters yet. An admin can add one.</p>
-    <p id="homeNoMatch" class="muted" hidden>Nothing matches. Try fewer words or clear a tag.</p>
+    <p id="homeNoMatch" class="muted" hidden>Nothing matches. Try fewer words or clear a filter.</p>
   </main>
   </div>
   <dialog id="infoDialog" class="home-dialog" aria-labelledby="infoTitle">
@@ -83,6 +107,7 @@
     </div>
     <p id="infoHeadline" class="home-headline"></p>
     <p id="infoCreator" class="muted"></p>
+    <p id="infoRelationship" class="muted"></p>
     <div id="infoTags" class="home-tags"></div>
     <p id="infoBody" class="home-info-body"></p>
     <div class="row">
@@ -91,6 +116,7 @@
     </div>
   </dialog>
   <script src="/static/common.js"></script>
+  <script src="/static/theme_music.js"></script>
   <script src="/static/cards.js"></script>
   <script src="/static/search.js"></script>
   <script src="/static/home.js"></script>
