@@ -10,6 +10,8 @@ MIN_NEW = 6              # messages since the last dream before another one is w
 EPISODES_READ = 8        # most recent episodes shown to the dream
 DEFAULT_START = 120      # 02:00, in minutes after midnight
 DEFAULT_END = 360        # 06:00
+ITEM_MAX = 400           # longest text kept for one item in the dream record
+MAX_ITEMS = 40           # most items kept in one dream record
 
 SYSTEM = (
     "You are reflecting in a quiet hour, away from the user, as this character or group chat. You are given the memory bank, the "
@@ -81,7 +83,9 @@ def parse(text):
     return "\n".join(changes), drops, note
 
 
-# Whether a row is due now: enabled, inside its window in its own time zone, and not already dreamt today.
+# Whether a row is due now: enabled, inside its window in its own time zone, and not already dreamt today. The
+# character's own every_days sets its pace; the server's dream_every_days acts as a floor, so a server set to 3 days
+# keeps a character that chose 2 days on 3.
 def due(row, local_now, every_days=1):
     # Due in the quiet hours, once every_days days at the least since the last dream.
     minute = local_now.hour * 60 + local_now.minute
@@ -89,8 +93,9 @@ def due(row, local_now, every_days=1):
         return False
     if not row["last_day"]:
         return True
+    every = max(1, int(every_days or 1), int(row.get("every_days") or 1))
     last = datetime.date.fromisoformat(row["last_day"])
-    return (local_now.date() - last).days >= every_days
+    return (local_now.date() - last).days >= every
 
 
 # Walks every enabled dream. Each one is marked for the day before it runs, so a failed dream is not retried

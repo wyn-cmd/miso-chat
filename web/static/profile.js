@@ -136,6 +136,8 @@ function render(data) {
   $("loading").hidden = true;
   $("profileErr").textContent = "";
   document.title = "@" + data.username + " - Miso Chat";
+  // The account's theme music plays while its page is open, for whoever is viewing it.
+  themeMusic.setPage("acct:" + data.username, data.music || []);
 
   const hero = $("profileCard");
   hero.hidden = false;
@@ -252,6 +254,64 @@ function renderEditForm() {
   }
   $("peBgRemove").hidden = !p.has_background;
   $("peLikes").checked = !!p.likes_visible;
+  renderAccountMusic(account ? account.music || [] : []);
+}
+
+// ---- Theme music on this account's page: up to three tracks. The owner adds, orders and removes them here.
+const ACCOUNT_MUSIC_MAX = 3;
+const ACCOUNT_MUSIC_UPLOAD_MAX = 60 * 1024 * 1024;
+
+function renderAccountMusic(items) {
+  themeMusic.renderList($("peMusicList"), items, { onMove: moveAccountMusic, onRemove: removeAccountMusic });
+  $("peMusicNote").textContent = tr("{n} of {max} tracks.", { n: items.length, max: ACCOUNT_MUSIC_MAX });
+  $("peMusicFile").disabled = items.length >= ACCOUNT_MUSIC_MAX;
+  $("peMusicBox").hidden = !(account && account.is_self);
+}
+
+// Reloads the account and redraws the page and the track list after a change to the tracks.
+async function afterAccountMusicChange() {
+  await refreshAccount();
+  renderAccountMusic(account ? account.music || [] : []);
+}
+
+async function uploadAccountMusic(file) {
+  if (!file) return;
+  $("peMusicErr").textContent = "";
+  if (file.size > ACCOUNT_MUSIC_UPLOAD_MAX) {
+    $("peMusicErr").textContent = tr("A track can be up to 60 MB.");
+    return;
+  }
+  try {
+    await themeMusic.upload("/api/account/music", file, file.name.replace(/\.[^.]+$/, ""));
+  } catch (err) {
+    $("peMusicErr").textContent = err.message;
+  }
+  await afterAccountMusicChange();
+}
+
+async function moveAccountMusic(id, direction) {
+  const ids = (account.music || []).map((t) => t.id);
+  const at = ids.indexOf(id);
+  const to = at + direction;
+  if (to < 0 || to >= ids.length) return;
+  [ids[at], ids[to]] = [ids[to], ids[at]];
+  $("peMusicErr").textContent = "";
+  try {
+    await api("PUT", "/api/account/music/order", { ids: ids });
+  } catch (err) {
+    $("peMusicErr").textContent = err.message;
+  }
+  await afterAccountMusicChange();
+}
+
+async function removeAccountMusic(id) {
+  $("peMusicErr").textContent = "";
+  try {
+    await api("DELETE", "/api/account/music/" + encodeURIComponent(id));
+  } catch (err) {
+    $("peMusicErr").textContent = err.message;
+  }
+  await afterAccountMusicChange();
 }
 
 function updateEditCount() {
@@ -339,6 +399,7 @@ $("pePic").addEventListener("change", (e) => { const file = e.target.files[0]; e
 $("peBgPick").addEventListener("change", (e) => { const file = e.target.files[0]; e.target.value = ""; uploadEditImage("background", file); });
 $("pePicRemove").addEventListener("click", () => removeEditImage("avatar"));
 $("peBgRemove").addEventListener("click", () => removeEditImage("background"));
+$("peMusicFile").addEventListener("change", (e) => { const file = e.target.files[0]; e.target.value = ""; uploadAccountMusic(file); });
 
 init();
 refreshUnread();

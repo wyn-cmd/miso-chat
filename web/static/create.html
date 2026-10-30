@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Miso Chat">
+  <meta name="apple-mobile-web-app-title" content="Miso Chat">
+  <title>New character - Miso Chat</title>
+  <script src="/static/theme-init.js"></script>
+  <script src="/static/locales/en.js"></script>
+  <script src="/static/i18n.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <link rel="stylesheet" href="/static/create.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#0f0a06">
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">Miso Chat</a>
+    <span id="who" class="muted"></span>
+    <span class="spacer"></span>
+    <a id="adminLink" href="/admin" hidden>Admin</a>
+    <a href="/chat">Back to chat</a>
+    <button id="logoutBtn" class="ghost" type="button">Log out</button>
+    <button id="themeBtn" class="icon-btn" type="button" aria-label="Switch to light theme"></button>
+  </header>
+  <main class="wz-main">
+    <p id="loading" class="muted">Loading…</p>
+    <p id="pageErr" class="error" role="alert"></p>
+    <section id="wizard" class="wz" hidden>
+      <div id="wzHead">
+        <h1 class="chat-title">New character</h1>
+        <p class="muted">Make a character one step at a time. Nothing is saved until the last step.</p>
+        <div class="wz-progress" aria-hidden="true"><div id="wzBar" class="wz-bar"></div></div>
+        <p id="wzCount" class="muted wz-count" aria-live="polite"></p>
+        <ol id="wzSteps" class="wz-steps" aria-label="Steps"></ol>
+        <div id="wzDraftNotice" class="wz-notice" role="status" hidden>
+          <span id="wzDraftNoticeText"></span>
+          <button id="wzDiscard" class="ghost small" type="button">Discard draft</button>
+        </div>
+      </div>
+
+      <form id="wzForm" class="wz-form editor-form" novalidate autocomplete="off">
+        <div class="wz-viewport">
+
+          <section class="wz-step" data-step="start" data-short="Start" hidden>
+            <h2 class="wz-title">How do you want to start?</h2>
+            <p class="wz-help">Pick a way to begin. A file fills in the steps for you to check, and you can change anything before you create the character.</p>
+            <div class="wz-routes" role="group" aria-label="How to start">
+              <button type="button" class="wz-route" data-route="scratch" aria-pressed="false">
+                <span class="wz-route-name">Start from scratch</span>
+                <span class="muted">Fill in each step yourself.</span>
+              </button>
+              <button type="button" class="wz-route" data-route="draft" aria-pressed="false">
+                <span class="wz-route-name">Draft from a file</span>
+                <span class="muted">A .txt, .md, .docx, .pdf or screenshot that describes the character.</span>
+              </button>
+              <button type="button" class="wz-route" data-route="import" aria-pressed="false">
+                <span class="wz-route-name">Import</span>
+                <span class="muted">A SillyTavern card (.json or .png), or a .zip exported from Miso Chat.</span>
+              </button>
+            </div>
+
+            <div id="wzDraftPanel" class="wz-panel stack" hidden>
+              <p class="muted">Text is read directly, and pictures and scanned pages go through OCR. Pictures are never used as the profile or background picture.</p>
+              <label>File <input id="wzDraftFile" type="file" accept=".txt,.md,.docx,.pdf,.png,.jpg,.jpeg,.webp"></label>
+              <div class="row"><button id="wzDraftBtn" class="ghost" type="button">Read and draft</button></div>
+              <p id="wzDraftMsg" class="muted" aria-live="polite"></p>
+            </div>
+
+            <div id="wzImportPanel" class="wz-panel stack" hidden>
+              <p class="muted">A card fills the steps for you to check. Its picture and lorebook are kept until you create the character.</p>
+              <label>Card <input id="wzImportFile" type="file" accept=".json,.png,application/json,image/png"></label>
+              <div class="row"><button id="wzImportBtn" class="ghost" type="button">Read card</button></div>
+              <p id="wzImportMsg" class="muted" aria-live="polite"></p>
+              <hr>
+              <p class="muted">A .zip exported from Miso Chat is created straight away, with its history if it has one. The steps are not used for it.</p>
+              <label>Zip <input id="wzZipFile" type="file" accept=".zip,application/zip"></label>
+              <div class="row"><button id="wzZipBtn" class="ghost small" type="button" disabled>Import zip</button></div>
+              <p id="wzZipMsg" class="muted" aria-live="polite"></p>
+            </div>
+          </section>
+
+          <section class="wz-step" data-step="name" data-short="Name" hidden>
+            <h2 class="wz-title">Name and colour</h2>
+            <p class="wz-help">The name is how the character appears in the list and in chats. It is also the character's folder name, so it cannot be changed later. The colour is used for the placeholder picture and the chat bubble.</p>
+            <div class="stack">
+              <label>Name <input id="wzName" maxlength="40" autocomplete="off"></label>
+              <div class="row">
+                <label class="grow">Colour (hex code or pick)
+                  <span class="row"><input id="wzColourText" placeholder="#c0392b" maxlength="7"><input id="wzColour" type="color" value="#808080" aria-label="Colour picker"></span>
+                </label>
+              </div>
+              <label id="wzSandboxRow" class="check-row" hidden><input id="wzSandbox" type="checkbox"> Give this character a private sandbox: a folder of notes and files it can keep and manage. Off by default.</label>
+            </div>
+          </section>
+
+          <section class="wz-step" data-step="card" data-short="Card" hidden>
+            <h2 class="wz-title">Write the character</h2>
+            <p class="wz-help">The card is the character's persona: who they are, how they speak, what they want. The model reads it on every reply. Keep a <code>Colour:</code> line if the card has one; the colour on the name step updates it.</p>
+            <div class="stack">
+              <label>Character card <textarea id="wzCard" rows="14" maxlength="20000"></textarea></label>
+              <div class="row"><button id="wzExample" class="ghost" type="button">Load example card</button></div>
+            </div>
+          </section>
+
+          <section class="wz-step" data-step="profile" data-short="Profile" hidden>
+            <h2 class="wz-title">Profile card</h2>
+            <p class="wz-help">This is what people see on the home page: a headline, a short summary and a few tags so the character is easy to find. It is never sent to the model. Auto-fill drafts all three from your card.</p>
+            <div class="stack">
+              <label>Headline <span class="muted">one sentence, 120 characters at most</span>
+                <input id="wzHeadline" maxlength="120" autocomplete="off">
+              </label>
+              <label>Summary <span class="muted">shown behind the i button; plain prose</span>
+                <textarea id="wzInfo" rows="5" maxlength="2000"></textarea>
+              </label>
+              <label>Tags <span class="muted">Enter or comma adds one; reuse a tag to group characters; up to 8</span>
+                <div id="wzTagBox" class="tag-input"><input id="wzTagText" list="wzTagSuggest" maxlength="24" autocomplete="off" placeholder="Type a tag" aria-label="Add a tag"></div>
+                <datalist id="wzTagSuggest"></datalist>
+              </label>
+              <div class="row">
+                <button id="wzAuto" class="ghost" type="button">Auto-fill from card</button>
+                <span id="wzAutoNote" class="muted" aria-live="polite"></span>
+              </div>
+              <p id="wzProfileErr" class="error" role="alert"></p>
+            </div>
+          </section>
+
+          <section class="wz-step" data-step="examples" data-short="Examples" hidden>
+            <h2 class="wz-title">Example messages</h2>
+            <p class="wz-help">Short exchanges that show how the character talks: the shape of its sentences, its nicknames, its habits. They are reference only and never appear in the chat. Optional, up to 12.</p>
+            <div class="stack">
+              <div id="wzExamplesList" class="example-list"></div>
+              <div class="row">
+                <button id="wzExampleAdd" class="ghost" type="button">Add an exchange</button>
+                <span id="wzExampleCount" class="muted"></span>
+              </div>
+              <p id="wzExamplesErr" class="error" role="alert"></p>
+            </div>
+          </section>
+
+          <section class="wz-step" data-step="context" data-short="Context" hidden>
+            <h2 class="wz-title">Context and author's note</h2>
+            <p class="wz-help">Context holds the memories, places and situations the character knows. The author's note is a short instruction sent near the end of every prompt, such as pacing or tone, without rewriting the character. Both are optional.</p>
+            <div class="stack">
+              <label>Context: memories, locations, situations
+                <textarea id="wzContext" rows="8" maxlength="20000" placeholder="Memories, places, and situations to add to this character."></textarea>
+              </label>
+              <label>Author's note <span class="muted">optional, sent near the end of every prompt</span>
+                <textarea id="wzAuthorNote" rows="4" maxlength="4000" placeholder="A short instruction for the chat, such as pacing or tone."></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="wz-step" data-step="speed" data-short="Speed" hidden>
+            <h2 class="wz-title">Relationship speed</h2>
+            <p class="wz-help">How quickly trust and affection grow, from 1.00 to 6.00. 2.00 is the normal rate, 1.00 is half and 6.00 is five times. The defaults are 3.00 for trust and 2.00 for affection. Users see only the category, never the number. If unsure, keep the defaults.</p>
+            <div class="stack">
+              <div class="row">
+                <label class="grow">Trust
+                  <span class="slider-ctl"><input id="wzTrust" type="range" min="1" max="6" step="0.01" value="3" aria-label="Trust speed"><input id="wzTrustNum" type="number" min="1" max="6" step="0.01" value="3.00" class="scale-num" aria-label="Trust speed, exact value"></span>
+                </label>
+                <label class="grow">Affection
+                  <span class="slider-ctl"><input id="wzAffection" type="range" min="1" max="6" step="0.01" value="2" aria-label="Affection speed"><input id="wzAffectionNum" type="number" min="1" max="6" step="0.01" value="2.00" class="scale-num" aria-label="Affection speed, exact value"></span>
+                </label>
+              </div>
+              <p id="wzSpeedPreview" class="muted" role="status"></p>
+            </div>
+          </section>
+
+          <section class="wz-step" data-step="pictures" data-short="Pictures" hidden>
+            <h2 class="wz-title">Picture and backgrounds</h2>
+            <p class="wz-help">The picture shows beside the character in the list. Backgrounds show behind its chat, one picked at random each time it opens. Both are optional and are saved when you create the character.</p>
+            <div class="stack">
+              <div class="icon-box wz-art">
+                <div id="wzIconPreview" class="icon-preview placeholder"></div>
+                <div class="stack">
+                  <label>Picture <input id="wzIconFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label>
+                  <p class="muted">PNG, JPEG, WebP or GIF, up to 10 MB. A still picture is cropped to a square and reduced to under 512 KB. Without one, a placeholder initial is shown.</p>
+                  <div class="row"><button id="wzIconClear" class="ghost small" type="button" hidden>Remove picture</button></div>
+                  <p id="wzIconErr" class="error" role="alert"></p>
+                </div>
+              </div>
+              <div class="stack">
+                <div id="wzBgList" class="bg-list"></div>
+                <label>Backgrounds <input id="wzBgFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime" multiple></label>
+                <p class="muted">Up to 10. A still picture can be PNG, JPEG, WebP or GIF up to 10 MB. An animated GIF, WebP or APNG keeps moving and can be up to 100 MB. A video can be MP4 or MOV up to 50 MB, at least 720p and up to 60 seconds; it is converted to a silent loop.</p>
+                <p id="wzBgErr" class="error" role="alert"></p>
+                <p id="wzBgNote" class="muted"></p>
+              </div>
+            </div>
+          </section>
+
+          <section class="wz-step" data-step="review" data-short="Create" hidden>
+            <h2 class="wz-title">Check and create</h2>
+            <p class="wz-help">Check each part. Change takes you back to that step. Create saves the character, and chats pick it up on their next message.</p>
+            <ul id="wzSummary" class="wz-summary"></ul>
+          </section>
+
+        </div>
+
+        <p id="wzErr" class="error" role="alert"></p>
+        <div class="wz-nav">
+          <button id="wzBack" class="ghost" type="button" hidden>Back</button>
+          <span class="spacer"></span>
+          <a id="wzCancel" class="button-link" href="/chat">Cancel</a>
+          <button id="wzNext" type="submit">Next</button>
+        </div>
+      </form>
+
+      <section id="wzDone" class="wz-done" hidden aria-live="polite">
+        <svg class="wz-check" viewBox="0 0 52 52" aria-hidden="true" focusable="false"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg>
+        <h2 id="wzDoneTitle" class="wz-title"></h2>
+        <ul id="wzDoneNotes" class="wz-notes muted"></ul>
+        <div class="row">
+          <a id="wzDoneEdit" class="button-link" href="/chat" hidden>Edit the character</a>
+          <a class="button-link" href="/chat">Back to chat</a>
+          <button id="wzAgain" class="ghost" type="button">Make another</button>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script src="/static/common.js"></script>
+  <script src="/static/create.js"></script>
+</body>
+</html>

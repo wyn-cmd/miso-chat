@@ -6,6 +6,9 @@ let polls = 0;
 let favOnly = false;             // search shows only favourited characters when on
 let allCards = [];          // every solo card from the last load; search and tag filters work on these
 let allRecs = [];
+let relTypeFilter = "";
+let relTrustFilter = "";
+let relAffectionFilter = "";
 const selectedTags = new Set();
 const PAGE_SIZE = 50;        // search results shown at a time; Next and Previous move through the rest
 let page = 1;
@@ -40,6 +43,7 @@ async function loadCards() {
   allCards = data.cards || [];
   allRecs = data.recommended || [];
   renderTagFilter();
+  renderRelationshipFilters();
   applyFilters();
   // Profiles are written in the background; check back while any are still pending.
   if (allCards.some((c) => c.pending) && polls < POLL_LIMIT) {
@@ -141,11 +145,19 @@ function matchesSearch(card, terms) {
   return terms.every((t) => hay.includes(t));
 }
 
-// A card must match every search word and carry every selected tag.
+// A card must match every search word, carry every selected tag, and match the relationship filters.
 function visibleCards() {
   const terms = norm($("homeSearch").value).trim().split(/\s+/).filter(Boolean);
-  return allCards.filter((c) => matchesSearch(c, terms) && [...selectedTags].every((t) => (c.tags || []).includes(t))
-    && (!favOnly || !!c.favourite));
+  return allCards.filter((c) => {
+    if (!matchesSearch(c, terms)) return false;
+    if (![...selectedTags].every((t) => (c.tags || []).includes(t))) return false;
+    if (favOnly && !c.favourite) return false;
+    const rel = c.relationship || {};
+    if (relTypeFilter && rel.type !== relTypeFilter) return false;
+    if (relTrustFilter && rel.trust !== relTrustFilter) return false;
+    if (relAffectionFilter && rel.affection !== relAffectionFilter) return false;
+    return true;
+  });
 }
 
 function applyFilters() {
@@ -155,7 +167,8 @@ function applyFilters() {
   const start = (page - 1) * PAGE_SIZE;
   renderCards(cards.slice(start, start + PAGE_SIZE));
   renderRecommended(allRecs, cards);
-  const filtering = $("homeSearch").value.trim() !== "" || selectedTags.size > 0 || favOnly;
+  const filtering = $("homeSearch").value.trim() !== "" || selectedTags.size > 0 || favOnly
+    || !!relTypeFilter || !!relTrustFilter || !!relAffectionFilter;
   $("homeCount").textContent = filtering ? t("Showing {shown} of {total} characters", { shown: cards.length, total: allCards.length }) : "";
   $("homeEmpty").hidden = allCards.length > 0;
   $("homeNoMatch").hidden = !(allCards.length > 0 && cards.length === 0);
@@ -194,11 +207,39 @@ function renderTagFilter() {
     });
     box.appendChild(b);
   }
+  const relActive = !!(relTypeFilter || relTrustFilter || relAffectionFilter);
   $("tagPanelNote").textContent = selectedTags.size
     ? t("{n} selected. A character must have all of them.", { n: selectedTags.size })
-    : t("Pick tags to narrow the list.");
-  $("tagClear").disabled = selectedTags.size === 0;
+    : relActive ? t("Relationship filters applied.") : t("Pick tags or relationship filters to narrow the list.");
+  $("tagClear").disabled = selectedTags.size === 0 && !relActive;
 }
+
+// Relationship filters: the type list follows the cards on this page; trust and affection use their categories.
+function renderRelationshipFilters() {
+  const counts = new Map();
+  for (const c of allCards) {
+    const type = c.relationship && c.relationship.type;
+    if (type) counts.set(type, (counts.get(type) || 0) + 1);
+  }
+  if (relTypeFilter && !counts.has(relTypeFilter)) relTypeFilter = "";
+  const sel = $("relTypeFilter");
+  sel.textContent = "";
+  const all = el("option", t("All types"), null);
+  all.value = "";
+  sel.appendChild(all);
+  for (const type of [...counts.keys()].sort((a, b) => a.localeCompare(b))) {
+    const opt = el("option", `${t(type)} \u00b7 ${counts.get(type)}`, null);
+    opt.value = type;
+    sel.appendChild(opt);
+  }
+  sel.value = relTypeFilter;
+  $("relTrustFilter").value = relTrustFilter;
+  $("relAffectionFilter").value = relAffectionFilter;
+}
+
+$("relTypeFilter").addEventListener("change", (e) => { relTypeFilter = e.target.value; page = 1; renderTagFilter(); applyFilters(); });
+$("relTrustFilter").addEventListener("change", (e) => { relTrustFilter = e.target.value; page = 1; renderTagFilter(); applyFilters(); });
+$("relAffectionFilter").addEventListener("change", (e) => { relAffectionFilter = e.target.value; page = 1; renderTagFilter(); applyFilters(); });
 
 $("homeSearch").addEventListener("input", () => { page = 1; applyFilters(); });
 $("favOnly").addEventListener("click", () => {
@@ -214,6 +255,7 @@ async function refreshAll() {
   const data = await api("GET", "/api/characters");
   allCards = data.cards || [];
   renderSidebar(data);
+  renderRelationshipFilters();
   applyFilters();
 }
 $("tagFilterBtn").addEventListener("click", () => {
@@ -223,8 +265,12 @@ $("tagFilterBtn").addEventListener("click", () => {
 });
 $("tagClear").addEventListener("click", () => {
   selectedTags.clear();
+  relTypeFilter = "";
+  relTrustFilter = "";
+  relAffectionFilter = "";
   page = 1;
   renderTagFilter();
+  renderRelationshipFilters();
   applyFilters();
 });
 $("pagePrev").addEventListener("click", () => { page -= 1; applyFilters(); $("homeGrid").scrollIntoView({ block: "start" }); });

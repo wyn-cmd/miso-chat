@@ -1,0 +1,144 @@
+/* Lantern: a look lit from within. Deep soot rooms with an amber lamp overhead: the ground is warm charcoal, your
+   own lines carry the lamp's amber edge, and the ambient field drifts in lantern glow. At home in the light theme it
+   becomes washi paper in the day, with the amber deepened to a tea colour that holds contrast. It loads over
+   redesign.css, like Moonlit and Dusk, so the layout, ids and behaviour are Spore's and this sheet changes the
+   surface only: the primary action stays an inverted pill (ink on the ground), colour stays with the data and the
+   reader's own marks. The sheet is applied by the data-look="lantern" attribute that common.js and the page's
+   head script set on <html>. The display face is Young Serif, already bundled. */
+/* Lantern v2: an editorial reading room. Sharper corners, a serif chat, a lamp's glow in the corner, and ruled
+   lines instead of bubbles, so the page reads like a ledger kept under a single lamp. */
+
+:root[data-look="lantern"] {
+  --font-display: "Young Serif", Georgia, serif;
+  --font-body: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --chat-font: "Young Serif", Georgia, serif;
+  --display-weight: 400;
+  --tracking-display: -0.005em;
+  --grain: 0.12;
+  --radius-card: 6px;
+  --radius-field: 6px;
+  --shadow-card: none;
+  --color-error: #f2927f;
+  color-scheme: dark;
+  /* dark, the lamp: warm soot with cards a step of lightness above it, cream ink, amber light for your own lines */
+  --color-paper: #191410; --color-paper-2: #231c15; --color-paper-3: #2f2419;
+  --color-ink: #f4ecdd; --color-ink-2: #decfb9; --color-muted: #9f9485;
+  --color-rule: #3f3428;
+  --color-accent: #e9b25a; --color-accent-2: #f3c988; --color-accent-ink: #241a0d; --color-focus: #f3c988;
+  --color-jade: #e0b368; --color-jade-ink: #241a0d;
+  --meta-theme: #191410;
+}
+
+/* light, washi by day: paper warm as hand-made stock, the amber deepened to hold 4.5:1 on it */
+:root[data-look="lantern"][data-theme="light"] {
+  color-scheme: light;
+  --grain: 0.05;
+  --color-paper: #f5eedf; --color-paper-2: #fbf7ec; --color-paper-3: #ecdfc8;
+  --color-ink: #241a10; --color-ink-2: #4c3d29; --color-muted: #776951;
+  --color-rule: #dbcfb7;
+  --color-accent: #8a5f16; --color-accent-2: #6f4b10; --color-accent-ink: #fbf7ec; --color-focus: #8a5f16;
+  --color-jade: #96630f; --color-jade-ink: #fbf7ec;
+  --meta-theme: #f5eedf;
+  --color-error: #b3341f;
+}
+
+/* The lamp's glow: a warm radial pooling in the corner, stronger than the shared wash. */
+:root[data-look="lantern"] body {
+  background-image:
+    radial-gradient(900px 560px at 8% -8%, color-mix(in oklab, var(--color-accent) 22%, transparent), transparent 64%),
+    radial-gradient(700px 420px at 100% 0%, color-mix(in oklab, var(--color-jade) 10%, transparent), transparent 60%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+
+/* Sharper, editorial corners on everything but the true circles. */
+:root[data-look="lantern"] button:not(.home-info):not(.fav-star),
+:root[data-look="lantern"] input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=file]):not([type=range]),
+:root[data-look="lantern"] select,
+:root[data-look="lantern"] textarea,
+:root[data-look="lantern"] .card, :root[data-look="lantern"] .set-card, :root[data-look="lantern"] .home-card,
+:root[data-look="lantern"] dialog, :root[data-look="lantern"] .sheet, :root[data-look="lantern"] .sheet-card {
+  border-radius: var(--radius-field);
+}
+
+/* The primary action is the room's own ink turned into a block: a cream block with a soot label in the dark look, the
+   reverse on washi. Squared corners, not a pill. */
+:root[data-look="lantern"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):not(.home-info) {
+  background: var(--color-ink); color: var(--color-paper); border-radius: var(--radius-field);
+}
+:root[data-look="lantern"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):not(.home-info):hover {
+  background: var(--color-ink-2);
+}
+:root[data-look="lantern"] button:not(.ghost):disabled {
+  background: var(--color-paper-3); color: var(--color-muted); box-shadow: none;
+}
+:root[data-look="lantern"] button.ghost {
+  border-radius: var(--radius-field);
+}
+
+/* Navigation recedes: the active character is marked by its label going to full ink and italic, not by a filled row. */
+:root[data-look="lantern"] .char-item {
+  background: transparent; border-color: transparent; box-shadow: none;
+}
+:root[data-look="lantern"] .char-item .char-name { color: var(--color-muted); }
+:root[data-look="lantern"] .char-item:hover:not(:disabled) { background: var(--color-paper-2); }
+:root[data-look="lantern"] .char-item.active { background: transparent; border-color: transparent; box-shadow: none; }
+:root[data-look="lantern"] .char-item.active .char-name { color: var(--color-ink); font-style: italic; }
+:root[data-look="lantern"] .char-item.active { box-shadow: inset 2px 0 0 var(--color-accent); }
+
+/* Chat: a ruled ledger, not bubbles. Your own lines carry the lamp's amber edge; notes and events a rule edge. */
+:root[data-look="lantern"] .line {
+  background: transparent; border: 0; box-shadow: none; border-radius: 0;
+  border-left: 1px solid var(--color-rule); padding-left: var(--space-md);
+  font-family: var(--chat-font); line-height: 1.7;
+}
+:root[data-look="lantern"] .line.mine, :root[data-look="lantern"] .line.mine:not(.note) {
+  background: transparent; margin-left: auto; margin-right: 0; width: fit-content; max-width: 82%;
+  box-shadow: none; border-left: 2px solid var(--color-accent); padding-left: var(--space-md);
+}
+:root[data-look="lantern"] .line.note, :root[data-look="lantern"] .line.event {
+  background: transparent; box-shadow: none; border-left: 1px solid var(--color-rule);
+}
+:root[data-look="lantern"] .line .text { font-family: var(--chat-font); }
+
+/* Cards and panels: a hairline rule, not a tone step. */
+:root[data-look="lantern"] .set-card, :root[data-look="lantern"] .home-card {
+  box-shadow: none; border: 1px solid var(--color-rule); background: var(--color-paper-2);
+}
+:root[data-look="lantern"] .home-card:hover { background: var(--color-paper-3); border-color: var(--color-muted); }
+
+/* Muted labels read as a second ink, not as disabled text. */
+:root[data-look="lantern"] .muted { color: var(--color-muted); }
+
+/* Chat art: a character's picture sits behind the page under a scrim in the ground's colour. */
+:root[data-look="lantern"] { --lantern-scrim: color-mix(in oklab, var(--color-paper) 74%, transparent); }
+:root[data-look="lantern"] body.page-art {
+  background: linear-gradient(var(--lantern-scrim), var(--lantern-scrim)), linear-gradient(var(--shade-overlay), var(--shade-overlay)), var(--chat-art) center / cover no-repeat fixed; /* taste-skill-ignore: a flat neutral scrim over a photograph */
+}
+:root[data-look="lantern"] #chatSection.has-art .log {
+  background: color-mix(in oklab, var(--color-paper-2) 62%, transparent);
+}
+
+/* Composer: a ruled writing line, not a boxed well. */
+:root[data-look="lantern"] .msg-wrap {
+  background: transparent; box-shadow: none; border: 0; border-bottom: 1px solid var(--color-rule); border-radius: 0;
+}
+:root[data-look="lantern"] .msg-wrap:focus-within { box-shadow: none; border-bottom-color: var(--color-accent); }
+:root[data-look="lantern"] #msg, :root[data-look="lantern"] .msg-wrap textarea { font-family: var(--chat-font); }
+:root[data-look="lantern"] #sendBtn { border-radius: var(--radius-field); }
+
+/* Header: the brand leans on the serif, the chat title a step larger. */
+:root[data-look="lantern"] .brand { font-style: italic; }
+:root[data-look="lantern"] .chat-title { font-size: var(--text-xl); }
+
+/* Phone header: the chat's name is squeezed to a sliver beside the wordmark, which is wider here in Young Serif,
+   so it hides at the same width where Spore shows it as one letter. */
+@media (max-width: 760px) {
+  :root[data-look="lantern"] #headerChat .chat-title { display: none; }
+  :root[data-look="lantern"] .home-title {
+    display: flex; flex-wrap: wrap; align-items: baseline;
+    column-gap: var(--space-3xs); row-gap: var(--space-4xs);
+    padding-right: var(--space-2xl);
+  }
+  :root[data-look="lantern"] .home-title .char-badge { margin: 0; }
+}

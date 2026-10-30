@@ -10,14 +10,14 @@ This is a personal project. It is built for use on one machine or a private netw
 
 The pictures use seven made-up characters and made-up chats. They show no real account, character or data. The characters have no backgrounds of their own, so each picture shows the default backgrounds for its look.
 
-Miso Chat has four looks, chosen under Settings, Appearance, Theme: Moonlit (the default), Soft Shadows, Dusk and Hyacinth (1.4.1). The pictures show every look on desktop and on a phone.
+Miso Chat has four looks, chosen under Settings, Appearance, Theme: Moonlit (the default), Lantern, Dusk and Hyacinth (1.4.1). The pictures show every look on desktop and on a phone.
 
 Desktop, home page, all four looks:
 
 <table>
   <tr>
     <td align="center"><img src="docs/screenshots/moonlit-desktop-home.png" alt="Moonlit (default): home on desktop" width="480"><br>Moonlit (default): home</td>
-    <td align="center"><img src="docs/screenshots/soft-shadows-desktop-home.png" alt="Soft Shadows: home on desktop" width="480"><br>Soft Shadows: home</td>
+    <td align="center"><img src="docs/screenshots/lantern-desktop-home.png" alt="Lantern: home on desktop" width="480"><br>Lantern: home</td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/dusk-desktop-home.png" alt="Dusk: home on desktop" width="480"><br>Dusk: home</td>
@@ -30,7 +30,7 @@ Desktop, a chat, all four looks:
 <table>
   <tr>
     <td align="center"><img src="docs/screenshots/moonlit-desktop-chat.png" alt="Moonlit (default): a chat on desktop" width="480"><br>Moonlit (default): a chat</td>
-    <td align="center"><img src="docs/screenshots/soft-shadows-desktop-chat.png" alt="Soft Shadows: a chat on desktop" width="480"><br>Soft Shadows: a chat</td>
+    <td align="center"><img src="docs/screenshots/lantern-desktop-chat.png" alt="Lantern: a chat on desktop" width="480"><br>Lantern: a chat</td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/dusk-desktop-chat.png" alt="Dusk: a chat on desktop" width="480"><br>Dusk: a chat</td>
@@ -38,12 +38,12 @@ Desktop, a chat, all four looks:
   </tr>
 </table>
 
-Phone, home, all four looks (left to right: Moonlit, Soft Shadows, Dusk, Hyacinth):
+Phone, home, all four looks (left to right: Moonlit, Lantern, Dusk, Hyacinth):
 
 <table>
   <tr>
     <td align="center"><img src="docs/screenshots/moonlit-phone-home.png" alt="Moonlit (default): home on a phone" width="200"><br>Moonlit (default): home</td>
-    <td align="center"><img src="docs/screenshots/soft-shadows-phone-home.png" alt="Soft Shadows: home on a phone" width="200"><br>Soft Shadows: home</td>
+    <td align="center"><img src="docs/screenshots/lantern-phone-home.png" alt="Lantern: home on a phone" width="200"><br>Lantern: home</td>
     <td align="center"><img src="docs/screenshots/dusk-phone-home.png" alt="Dusk: home on a phone" width="200"><br>Dusk: home</td>
     <td align="center"><img src="docs/screenshots/hyacinth-phone-home.png" alt="Hyacinth (1.4.1): home on a phone" width="200"><br>Hyacinth (1.4.1): home</td>
   </tr>
@@ -54,7 +54,7 @@ Phone, a chat, all four looks (same order):
 <table>
   <tr>
     <td align="center"><img src="docs/screenshots/moonlit-phone-chat.png" alt="Moonlit (default): a chat on a phone" width="200"><br>Moonlit (default): chat</td>
-    <td align="center"><img src="docs/screenshots/soft-shadows-phone-chat.png" alt="Soft Shadows: a chat on a phone" width="200"><br>Soft Shadows: chat</td>
+    <td align="center"><img src="docs/screenshots/lantern-phone-chat.png" alt="Lantern: a chat on a phone" width="200"><br>Lantern: chat</td>
     <td align="center"><img src="docs/screenshots/dusk-phone-chat.png" alt="Dusk: a chat on a phone" width="200"><br>Dusk: chat</td>
     <td align="center"><img src="docs/screenshots/hyacinth-phone-chat.png" alt="Hyacinth (1.4.1): a chat on a phone" width="200"><br>Hyacinth (1.4.1): chat</td>
   </tr>
@@ -149,7 +149,7 @@ The default fallback chain is set in `rp_core.py` (`ALLOWED_MODELS`, `DEFAULT_FA
 
 ## Drafting a character from a file
 
-In the new-character form, choose a file and select Read and draft. The app reads the text, sends it to the model with a standard drafting prompt, and fills in the name, card, headline, summary and tags. Nothing is saved until you press Create, so check the draft first.
+On the New character page (+ New character, then Draft from a file), choose a file and select Read and draft. The app reads the text, sends it to the model with a standard drafting prompt, and fills in the name, card, headline, summary and tags. The steps that follow show the draft for you to check. Nothing is saved until you press Create on the last step.
 
 Supported files:
 
@@ -227,7 +227,9 @@ Two optional layers give a solo chat a continuous sense of how it is going. Both
 
 Mood holds energy, affinity and an emotion that moves between calm, warm, tired and lonely. It has margins on the way back, so it does not flicker between two states. Energy only starts to fall once one unbroken stretch of talk passes the lite allowance, and it comes back only in silence, so free and lite accounts are never left exhausted. A character whose mood has gone quiet can send one check-in after a long silence.
 
-Relationship holds affection and trust, each from 0 to 100, across five levels: stranger, acquaintance, friend, partner and married. Bonding events move them, with a three-exchange cooldown and a cap of six points a turn. A long stretch with no bonding event eases trust back, counted in exchanges rather than in time. Married comes only from a proposal at partner level with affection at 85 and trust at 75.
+Relationship holds affection and trust, each from 0 to 100, across five levels: stranger, acquaintance, friend, partner and married. Bonding events move them, with a nine-exchange cooldown and a cap of six points a turn. A long stretch with no bonding event eases trust back, counted in exchanges rather than in time. Married comes only from a proposal at partner level with affection at 85 and trust at 75.
+
+A character's creator also sets a relationship speed for trust and for affection, with sliders from 1.00 to 6.00 in steps of 0.01. Scale 2.00 is the normal rate, 1.00 is half, and 6.00 is five times; the values between the whole numbers are interpolated, and positive changes only are scaled. The defaults are 3.00 for trust and 2.00 for affection, so a character with no saved file reads Open and Fond, which is Easy company. Users never see the number: they see the category each scale falls in, and a relationship type made from the pair. Trust reads Cautious, Open, Trusting or Heart of gold; affection reads Fond, Attached, Devoted or Soulmate. The pair gives one of sixteen types, such as Hard to get for Cautious and Fond, or Destined lover for Open and Soulmate. The type is the first tag on a character card, and the home page can filter by type, trust category and affection category.
 
 An admin can also set any of those five values by hand from the chat's Settings. The server checks for the admin flag on the request, so any other account is refused even if it calls the endpoint directly. This edits the admin's own row for that character.
 
@@ -235,7 +237,7 @@ Attitudes and moods are kept per character and account in the database. They are
 
 ## Home page
 
-The home page at `/` shows every character as a card. A search box at the top matches the name, creator, headline and summary, ignoring case and accents. The filter button beside it opens the tag list, most common tags first. Selected tags stay at the top of the list, and a character must have every selected tag to show.
+The home page at `/` shows every character as a card. A search box at the top matches the name, creator, headline and summary, ignoring case and accents. The filter button beside it opens the tag list, most common tags first. Selected tags stay at the top of the list, and a character must have every selected tag to show. The same panel filters by relationship type, trust category and affection category, and those filters combine with the tags.
 
 Once an account has chatted with characters, the home page shows up to four recommended characters that share tags with them. This uses message counts only and makes no model calls.
 
@@ -359,14 +361,20 @@ In the new-character form, the Import card section reads a SillyTavern-style car
 
 ## Chat backgrounds
 
-Admins add backgrounds to a character in the character editor. A character can have up to 10. Each file is a PNG, JPEG or WebP picture up to 10 MB, and the app resizes it to at most 1,280 pixels on its longest side. Remove one with its Remove button.
+Admins add backgrounds to a character in the character editor. A character can have up to 10. Each still picture is a PNG, JPEG or WebP up to 10 MB, and the app resizes it to at most 1,280 pixels on its longest side. An animated GIF, WebP or APNG is stored as it was uploaded, up to 100 MB, so it keeps moving. A video can be an MP4 or MOV up to 50 MB and at least 720p, up to 60 seconds; it is converted to WebM and MP4 with the sound removed. Remove one with its Remove button.
 
 - A chat picks one background at random each time it opens.
 - Home cards and the info card cycle through the backgrounds at random. Each change waits 5 to 8 seconds, then fades to the next picture. Reduced-motion settings keep one still picture.
-- A character with no backgrounds uses the default set for the look in use, in `web/static/defaults/`: blurred circles in each look's main colour (`moon-N` for Moonlit, `folio-N` for Soft Shadows, `classic-N` for Hyacinth; Dusk uses the full list). These cycle the same way.
+- A character with no backgrounds uses the default set for the look in use, in `web/static/defaults/`: blurred circles in each look's main colour (`moon-N` for Moonlit, `lantern-N` for Lantern, `classic-N` for Hyacinth; Dusk uses the full list). These cycle the same way.
 - Under Settings, Appearance, two sliders set the background brightness (darker or lighter) and the chat bubble opacity. Each account keeps its own values.
 
 A background is never read by OCR and is never used as the profile picture.
+
+## Theme music
+
+A character can have up to three tracks, played while someone chats with it or has its card open. An account can have up to three tracks, played while its profile page is open. Admins add a character's tracks in the character editor; each account adds its own on its profile page. Tracks play in order and start again at the top, and each one fades in and out. A button in the corner mutes the music, and the choice is remembered in the browser.
+
+A track up to 60 MB and 15 minutes long can be an MP3, AAC in M4A, Opus, WebM, Ogg or WAV file. A file already in a browser format at 160 kbps or lower is stored exactly as uploaded. Any other file is converted once to Opus at 160 kbps, with an AAC copy at 192 kbps beside it, because Safari does not reliably play Opus. Conversion needs ffmpeg on the server.
 
 ## Read aloud
 
@@ -376,7 +384,7 @@ These settings are kept in the browser, not the account. The server sends no aud
 
 ## Themes
 
-Four looks ship with this version. **Moonlit** is the default. **Soft Shadows** is a reading view that sets the chat as a written page. **Dusk** is the calm end of the day: a slate ground, warm bone text and a soft periwinkle accent. **Hyacinth** is the 1.4.1 look, unchanged.
+Four looks ship with this version. **Moonlit** is the default. **Lantern** is an editorial reading room: a warm soot ground, cream text, and an amber edge on your own lines, with squared corners, a serif chat and a single lamp's glow in the corner; the light theme is washi paper. **Dusk** is the calm end of the day: a slate ground, warm bone text and a soft periwinkle accent. **Hyacinth** is the 1.4.1 look, unchanged.
 
 Choose one under Settings, Appearance, Theme. The choice applies to every page, login included, and takes effect at once with no reload and no lost chat state. It is kept per browser, next to the light/dark setting, not per account: two accounts on one browser share it, and a different browser starts on Moonlit.
 

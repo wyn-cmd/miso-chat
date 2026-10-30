@@ -1,7 +1,8 @@
 # Character editor for the web app: create, read and update character folders, and manage icons.
 #
 # Admin only. A character is a folder under the character root with character.md (persona, with a
-# 'Colour:' line), optional context.md (memories, locations, situations) and optional icon.png.
+# 'Colour:' line), optional context.md (memories, locations, situations), optional author_note.md (an
+# instruction sent near the end of the prompt, separate from the card) and optional icon.png.
 # Names are restricted to one folder level so nothing can be written outside the character root.
 import io
 import json
@@ -17,15 +18,18 @@ from PIL import Image, ImageOps
 
 import sandbox
 from charname import check_display, folder_for
-from web import profiles, examples
+from web import profiles, examples, relationship
 
 COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-UPLOAD_MAX = 10 * 1024 * 1024         # largest file an admin may upload
+AUTHOR_NOTE_FILE = "author_note.md"
+AUTHOR_NOTE_MAX = 4000                # the author's note is a short steering instruction, not a second card
+UPLOAD_MAX = 10 * 1024 * 1024         # largest still picture or icon
 ICON_OUT_MAX = 512 * 1024             # the stored icon stays under this
-GIF_MAX_BYTES = 8 * 1024 * 1024       # an animated GIF is kept as uploaded, so it has its own cap
-GIF_MAX_FRAMES = 400                  # a longer loop is almost always a video converted by mistake
-# A character's picture, in the order they are looked for. The last one is an animated GIF, stored as
-# uploaded because re-encoding it would flatten it to a single frame.
+ANIMATED_MAX_BYTES = 100 * 1024 * 1024  # an animated picture is kept as uploaded, so it has its own cap
+ANIMATED_MAX_FRAMES = 2000              # a longer loop is almost always a video converted by mistake
+ANIMATED_EXTS = {"GIF": ".gif", "WEBP": ".webp", "PNG": ".png"}   # animated GIF, WebP and APNG keep their bytes
+# A character's picture, in the order they are looked for. An animated GIF or WebP is stored as uploaded,
+# because re-encoding it would flatten it to a single frame.
 ICON_FILES = ("icon.png", "icon.jpg", "icon.webp", "icon.gif")
 ICON_SIDES = (512, 384, 320, 256, 192, 128, 96)   # tried largest first; the first that fits is kept
 MAX_SOURCE_PIXELS = 40_000_000        # refuse huge images before decoding them
@@ -77,17 +81,25 @@ def read_card(root, name):
     if os.path.isfile(os.path.join(path, "context.md")):
         with open(os.path.join(path, "context.md"), encoding="utf-8", errors="replace") as f:
             context = f.read()
+    author_note = ""
+    if os.path.isfile(os.path.join(path, AUTHOR_NOTE_FILE)):
+        with open(os.path.join(path, AUTHOR_NOTE_FILE), encoding="utf-8", errors="replace") as f:
+            author_note = f.read()
     m = re.search(r"^\s*[-*]?\s*colou?r\s*:\s*(.+)$", card, re.I | re.M)
     colour = m.group(1).split("/")[0].strip() if m else ""
-    return {"name": name, "card": card, "context": context, "colour": colour,
+    return {"name": name, "card": card, "context": context, "colour": colour, "author_note": author_note,
+            "relationship": relationship.read(path),
             "has_icon": icon_path(root, name) is not None, "backgrounds": background_ids(root, name), "sandbox": sandbox.is_enabled(path),
             "profile": profiles.read_profile(path), "examples": examples.load(path)}
 
 
-def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None, profile=None, example_messages=None):
+def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None, profile=None, example_messages=None,
+               author_note=None, relationship_settings=None):
     # profile is the card's headline, info and tags. Blank headline and info leave the saved profile
     # alone, so the background writer can still fill it in later. example_messages is None when the caller does not
     # manage them, which leaves the saved list as it is; a list replaces it (an empty list removes the file).
+    # author_note is the same: None leaves the saved note alone, and a blank string removes it.
+    # relationship_settings holds the trust and affection scales (1-6); None leaves them alone.
     path = folder_of(root, name)
     if creating and os.path.exists(path):
         raise EditorError("A character with that name already exists.")
@@ -97,6 +109,16 @@ def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None,
         raise EditorError("The character card can't be empty.")
     if len(card) > 20000 or len(context or "") > 20000:
         raise EditorError("Keep the card and context under 20,000 characters each.")
+    if author_note is not None and not isinstance(author_note, str):
+        raise EditorError("The author's note must be text.")
+    if author_note is not None and len(author_note) > AUTHOR_NOTE_MAX:
+        raise EditorError(f"Keep the author's note under {AUTHOR_NOTE_MAX} characters.")
+    new_relationship = None
+    if relationship_settings is not None:
+        try:
+            new_relationship = relationship.checked(relationship_settings)
+        except ValueError as err:
+            raise EditorError(str(err)) from None
     new_profile = _checked_profile(profile)   # checked before anything is written
     # Checked before anything is written as well, so a bad example never leaves a half-saved card.
     try:
@@ -118,6 +140,14 @@ def write_card(root, name, card, context, colour_hex, creating, sandbox_on=None,
         _atomic_write(context_path, context.strip() + "\n")
     elif os.path.exists(context_path):
         os.remove(context_path)
+    if author_note is not None:
+        note_path = os.path.join(path, AUTHOR_NOTE_FILE)
+        if author_note.strip():
+            _atomic_write(note_path, author_note.strip() + "\n")
+        elif os.path.exists(note_path):
+            os.remove(note_path)
+    if new_relationship is not None:
+        relationship.save(path, new_relationship)
     if new_profile is not None:
         profiles.save_profile(path, new_profile, auto=False)
     if new_examples is not None:
@@ -179,10 +209,10 @@ def record_creator(path, username):
 
 
 BG_LEGACY = "background.jpg"         # the single background from before several were allowed; still served
-# A picture background is stored as PNG. Pictures saved before that are JPEG and are still read. An animated GIF
-# is kept as uploaded, because re-encoding it would flatten the loop to one frame.
+# A still picture background is stored as PNG. Pictures saved before that are JPEG and are still read. An
+# animated GIF, WebP or APNG is kept as uploaded, because re-encoding it would flatten the loop to one frame.
 BG_IMAGE_EXT = ".png"
-BG_IMAGE_EXTS = (".png", ".jpg", ".gif")
+BG_IMAGE_EXTS = (".png", ".jpg", ".gif", ".webp")
 BG_DIR = "backgrounds"               # one file per background, named by its id
 BG_MAX_SIDE = 1280                   # chat and card backgrounds are downsized to this
 MAX_BACKGROUNDS = 10                 # per character
@@ -396,29 +426,29 @@ def transcode_video(data):
 
 
 def _encode_background(data):
-    # Checks an upload and returns (bytes, extension). A picture is downsized to PNG with the page's colour look
-    # already applied; an animated GIF is kept exactly as uploaded so it keeps moving.
+    # Checks an upload and returns (bytes, extension). A still picture is downsized to PNG with the page's
+    # colour look already applied; an animated GIF, WebP or APNG is kept exactly as uploaded so it keeps moving.
     if not data:
         raise EditorError("Choose an image first.")
-    if len(data) > UPLOAD_MAX:
-        raise EditorError("Background uploads can be up to 10 MB.")
+    if len(data) > ANIMATED_MAX_BYTES:
+        raise EditorError(f"Background uploads can be up to {ANIMATED_MAX_BYTES // (1024 * 1024)} MB.")
     try:
         img = Image.open(io.BytesIO(data))
         if img.format not in ("PNG", "JPEG", "WEBP", "GIF"):
             raise EditorError("Background must be a PNG, JPEG, WebP or GIF image.")
-        fmt = img.format   # exif_transpose returns a copy, and the copy loses this
         if img.width * img.height > MAX_SOURCE_PIXELS:
             raise EditorError("That image is too large. Use one under 40 megapixels.")
+        animated, animated_ext = _animated_image(data, img)
+        if animated is not None:
+            return animated, animated_ext   # stored as uploaded: the colour look would flatten the loop
+        if len(data) > UPLOAD_MAX:
+            raise EditorError("A still background can be up to 10 MB. An animated one can be up to 100 MB.")
         img = ImageOps.exif_transpose(img)
         img.load()
     except EditorError:
         raise
     except (OSError, ValueError, Image.DecompressionBombError) as err:
         raise EditorError("Could not read that image. Use a PNG, JPEG, WebP or GIF.") from err
-    if fmt == "GIF":
-        animated = _animated_gif(data)
-        if animated is not None:
-            return animated, ".gif"   # stored as uploaded: the colour look would flatten the loop
     img = img.convert("RGB")
     img.thumbnail((BG_MAX_SIDE, BG_MAX_SIDE), Image.LANCZOS)   # never enlarges
     img = img.convert("RGB", PIL_LOOK)   # the colour look, baked in once so the page does not filter it live
@@ -428,7 +458,7 @@ def _encode_background(data):
 
 
 def background_bytes(data):
-    # Checked upload, downsized as PNG or kept as an animated GIF. Returns (bytes, extension).
+    # Checked upload, downsized as PNG or kept as an animated picture. Returns (bytes, extension).
     # Also used for account profile backgrounds.
     return _encode_background(data)
 
@@ -504,7 +534,7 @@ def background_meta(root, name):
             continue
         if ext == VIDEO_STORE_EXT:
             out[stem + ext] = {"kind": "video"}
-        elif ext == ".gif":
+        elif ext in (".gif", ".webp"):
             out[stem] = {"kind": "gif", "duration_ms": _gif_loop_ms(path)}
         elif ext in BG_IMAGE_EXTS:
             out[stem] = {"kind": "still"}
@@ -609,9 +639,12 @@ def add_background(root, name, data, poster=None, stored=False):
         raise EditorError("No such character.")
     fallback = None
     if stored:
-        if len(data) > VIDEO_MAX_BYTES:
-            raise EditorError(f"A background video can be up to {VIDEO_MAX_BYTES // (1024 * 1024)} MB.")
-        if _video_kind(data) == "webm":
+        kind = _video_kind(data)
+        limit = VIDEO_MAX_BYTES if kind == "webm" else ANIMATED_MAX_BYTES
+        if len(data) > limit:
+            what = "video" if kind == "webm" else "picture"
+            raise EditorError(f"A background {what} can be up to {limit // (1024 * 1024)} MB.")
+        if kind == "webm":
             payload, still, ext = data, poster, VIDEO_STORE_EXT
         elif data[:8] == b"\x89PNG\r\n\x1a\n":
             payload, still, ext = data, None, ".png"
@@ -619,8 +652,10 @@ def add_background(root, name, data, poster=None, stored=False):
             payload, still, ext = data, None, ".jpg"
         elif data[:6] in (b"GIF87a", b"GIF89a"):
             payload, still, ext = data, None, ".gif"
+        elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            payload, still, ext = data, None, ".webp"
         else:
-            raise EditorError("A stored background must be a WebM, PNG, JPEG or GIF file.")
+            raise EditorError("A stored background must be a WebM, PNG, JPEG, GIF or WebP file.")
     elif _video_kind(data) is not None:
         payload, fallback, still = transcode_video(data)
         ext = VIDEO_STORE_EXT
@@ -699,35 +734,37 @@ def _shrink_icon(data):
     raise EditorError("That picture is too detailed to fit under 512 KB. Try a simpler image.")
 
 
-def _animated_gif(data):
-    # Animated GIFs are kept exactly as uploaded: re-encoding to WebP would flatten the loop to one frame.
-    # Returns the original bytes, or None when the upload is not an animated GIF. Raises EditorError when it
-    # is one but cannot be stored as it is.
-    try:
-        img = Image.open(io.BytesIO(data))
-    except (OSError, ValueError, Image.DecompressionBombError):
-        return None
-    if img.format != "GIF" or getattr(img, "n_frames", 1) <= 1:
-        return None
-    if len(data) > GIF_MAX_BYTES:
-        raise EditorError(f"An animated GIF can be up to {GIF_MAX_BYTES // (1024 * 1024)} MB.")
+def _animated_image(data, img=None):
+    # An animated GIF, WebP or APNG is kept exactly as uploaded: re-encoding it would flatten the loop to one
+    # frame. Returns (bytes, extension), or (None, None) when the upload is not animated. Raises EditorError
+    # when it is animated but cannot be stored as it is.
+    if img is None:
+        try:
+            img = Image.open(io.BytesIO(data))
+        except (OSError, ValueError, Image.DecompressionBombError):
+            return None, None
+    ext = ANIMATED_EXTS.get(img.format)
+    if ext is None or getattr(img, "n_frames", 1) <= 1:
+        return None, None
+    if len(data) > ANIMATED_MAX_BYTES:
+        raise EditorError(f"An animated picture can be up to {ANIMATED_MAX_BYTES // (1024 * 1024)} MB.")
     if img.width * img.height > MAX_SOURCE_PIXELS:
         raise EditorError("That image is too large. Use one under 40 megapixels.")
-    if img.n_frames > GIF_MAX_FRAMES:
-        raise EditorError(f"An animated GIF can have up to {GIF_MAX_FRAMES} frames. Try a shorter loop.")
-    return data
+    if img.n_frames > ANIMATED_MAX_FRAMES:
+        raise EditorError(f"An animated picture can have up to {ANIMATED_MAX_FRAMES} frames. Try a shorter loop.")
+    return data, ext
 
 
 def portrait_bytes(data):
-    # Checked upload, cropped to a centred square and stored as WebP. An animated GIF is the exception: it is
-    # returned untouched so it keeps moving. Returns (bytes, extension). Account profile pictures use this too.
+    # Checked upload, cropped to a centred square and stored as WebP. An animated GIF or WebP is the exception:
+    # it is returned untouched so it keeps moving. Returns (bytes, extension). Account profile pictures use this too.
     if not data:
         raise EditorError("Choose an image first.")
     if len(data) > UPLOAD_MAX:
         raise EditorError("Picture uploads can be up to 10 MB.")
-    animated = _animated_gif(data)
-    if animated is not None:
-        return animated, "gif"
+    animated, ext = _animated_image(data)
+    if animated is not None and ext != ".png":   # APNG pictures are flattened for icons, which name no .apng file
+        return animated, ext.lstrip(".")
     return _shrink_icon(data)
 
 
