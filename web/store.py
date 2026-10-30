@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS users (
     must_change INTEGER NOT NULL DEFAULT 0,
     disabled INTEGER NOT NULL DEFAULT 0,
     daily_cap INTEGER,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    credit_tokens INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS login_throttle (
     username TEXT PRIMARY KEY,
@@ -63,6 +64,26 @@ CREATE TABLE IF NOT EXISTS login_ip_throttle (
     blocked INTEGER NOT NULL DEFAULT 0,
     last_fail REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (username, ip)
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    event TEXT NOT NULL,
+    actor TEXT,
+    ip TEXT,
+    detail TEXT,
+    prev_hash TEXT,
+    hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS credit_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    tokens INTEGER NOT NULL,
+    price_mcc REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at REAL NOT NULL,
+    decided_at REAL,
+    decided_by INTEGER
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
@@ -207,6 +228,7 @@ DEFAULT_SETTINGS = {
     "offscreen_enabled": "0",    # off-screen life: a daily director writes what characters did between sessions, 1 on, 0 off
     "offscreen_daily_cap": "20", # most model calls the off-screen director may make across the server each day
     "budget_webhook_url": "",    # where budget alerts (80% and 100% of a window) are posted as JSON; empty = off
+    "credits_auto_accept": "0",  # 1 = credit top-up requests are approved automatically
 }
 
 
@@ -275,6 +297,7 @@ class Store:
     def __init__(self, path):
         self.path = path
         self._throttle_lock = threading.Lock()
+        self._credit_lock = threading.Lock()
         self._pruned_at = 0.0
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with self._conn() as c:
@@ -288,6 +311,8 @@ class Store:
             for col in ("token_daily", "token_weekly", "token_monthly"):   # NULL = no budget
                 if col not in ucols:
                     c.execute(f"ALTER TABLE users ADD COLUMN {col} INTEGER")
+            if "credit_tokens" not in ucols:
+                c.execute("ALTER TABLE users ADD COLUMN credit_tokens INTEGER NOT NULL DEFAULT 0")
             if "tier" not in ucols:
                 # existing non-admin accounts start on lite, so the lite monthly cap applies to them
                 c.execute("ALTER TABLE users ADD COLUMN tier TEXT")
@@ -509,6 +534,49 @@ class Store:
         for r in self._run("SELECT username, ip FROM login_ip_throttle WHERE blocked = 1", fetch="all"):
             out.setdefault(r["username"], []).append(r["ip"])
         return out
+
+    def audit(self, event, actor=None, ip=None, detail=None):
+        now = time.time()
+        last = self._run("SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1", fetch="one")
+        prev = last["hash"] if last else "0" * 64
+        payload = f"{prev}|{now}|{event}|{actor or ''}|{ip or ''}|{detail or ''}"
+        h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        self._run("INSERT INTO audit_log (ts, event, actor, ip, detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                  (now, event, actor, ip, detail, prev, h))
+
+    # ---- prepaid credits (MCC)
+    def credit_balance(self, user_id):
+        row = self._run("SELECT credit_tokens FROM users WHERE id = ?", (user_id,), fetch="one")
+        return int(row["credit_tokens"]) if row else 0
+
+    def adjust_credit(self, user_id, delta):
+        self._run("UPDATE users SET credit_tokens = credit_tokens + ? WHERE id = ?", (int(delta), user_id))
+
+    def add_credit_request(self, user_id, tokens, price):
+        now = time.time()
+        return self._run("INSERT INTO credit_requests (user_id, tokens, price_mcc, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+                         (user_id, int(tokens), float(price), now))
+
+    def list_credit_requests(self, status=None):
+        if status:
+            return self._run("SELECT * FROM credit_requests WHERE status = ? ORDER BY created_at DESC", (status,), fetch="all")
+        return self._run("SELECT * FROM credit_requests ORDER BY created_at DESC", fetch="all")
+
+    def credit_requests_for_user(self, user_id):
+        return self._run("SELECT * FROM credit_requests WHERE user_id = ? ORDER BY created_at DESC", (user_id,), fetch="all")
+
+    def decide_credit_request(self, req_id, approve, admin_id):
+        with self._credit_lock:
+            row = self._run("SELECT * FROM credit_requests WHERE id = ?", (req_id,), fetch="one")
+            if row is None or row["status"] != "pending":
+                return False
+            now = time.time()
+            status = "approved" if approve else "rejected"
+            self._run("UPDATE credit_requests SET status = ?, decided_at = ?, decided_by = ? WHERE id = ?",
+                      (status, now, admin_id, req_id))
+            if approve:
+                self.adjust_credit(row["user_id"], row["tokens"])
+        return True
 
     def login_throttle_all(self):
         return {r["username"]: r for r in self._run("SELECT * FROM login_throttle", fetch="all")}

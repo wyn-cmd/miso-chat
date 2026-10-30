@@ -100,7 +100,7 @@ def avatar_path(data_dir, uid):
 def save_avatar(data_dir, uid, data):
     # A PNG, JPEG, WebP or GIF, cropped square and stored as WebP; an animated GIF is stored as uploaded.
     # Raises editor.EditorError for a bad upload.
-    encoded, ext = editor.portrait_bytes(data)
+    encoded, ext = editor.portrait_bytes(data)  # portrait_bytes already scans
     root = root_for(data_dir, uid)
     for name in AVATAR_FILES:
         path = os.path.join(root, name)
@@ -151,6 +151,7 @@ def save_background(data_dir, uid, data):
     # background at a time either way.
     root = root_for(data_dir, uid)
     os.makedirs(root, exist_ok=True)
+    editor._scan_bytes(data)
     if editor._video_kind(data) is not None:
         webm, mp4, still = editor.transcode_video(data)
         for name in (BACKGROUND, BACKGROUND_JPEG, BACKGROUND_GIF, BACKGROUND_WEBP, BACKGROUND_POSTER):
