@@ -52,6 +52,7 @@ function applyFont(name) {
 let colorMap = {};        // name -> "#rrggbb"
 let iconSet = new Set(); // characters that have an icon.png/jpg/webp on the server
 let bgIds = {};   // solo character -> ids of its backgrounds on the server
+let musicByName = new Map();   // solo character -> its theme music tracks (see theme_music.js)
 let defaultArt = [];   // shared default backgrounds, used when a character has none
 const BUBBLE_CHOICES = ["badge", "bubble"];
 
@@ -115,6 +116,7 @@ function showPassword(note) {
   document.body.classList.add("locked");
   $("chatSection").hidden = true;
   $("memSection").hidden = true;
+  $("bibleSection").hidden = true;
   $("pwSection").hidden = false;
   $("pwNote").textContent = note || "";
   $("backBtn").hidden = !!(me && me.must_change);
@@ -133,9 +135,9 @@ function windowShare(w) {
 }
 
 function renderUsage() {
-  // Memory is an admin switch; hide its button when it is off.
+  // Memory is an admin switch; hide its button and its Story & memory entry when it is off.
   $("memBtn").hidden = !!(me && me.features && me.features.memory === false);
-  $("pinCard").hidden = $("memBtn").hidden;   // pinned facts are part of the memory bank
+  $("memStoryLink").hidden = $("memBtn").hidden;
   if (!me || !me.usage) return;
   const u = me.usage;
   // two forms of the same line: the long one on desktop, a compact one for phones (CSS picks which shows)
@@ -275,12 +277,23 @@ async function openTokenUsage() {
 $("tokenUsageBtn").addEventListener("click", openTokenUsage);
 $("tokenUsageClose").addEventListener("click", () => $("tokenUsageDlg").close());
 
+// Follow new text only while the reader is at the bottom, so scrolling up to read history is not undone.
+function nearBottom(log) {
+  return log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+}
+
 function addLine(speaker, text, cls, time) {
   const box = el("div", null, "line " + (cls || ""));
   if (speaker) {
     const name = el("div", speaker, "speaker");
     box.appendChild(name);
-    if (cls && cls.includes("theirs")) colourLine(box, speaker);
+    if (cls && cls.includes("theirs")) {
+      colourLine(box, speaker);
+      // A character's name opens the story bible for this chat.
+      name.classList.add("bible-link");
+      name.title = tr("Open the story bible");
+      name.addEventListener("click", openStoryBible);
+    }
   }
   const body = el("div", null, "text");
   renderMarkdown(text, body);
@@ -290,8 +303,11 @@ function addLine(speaker, text, cls, time) {
     if (speak) box.appendChild(speak);
   }
   if (time) addStamp(box, time);
-  $("log").appendChild(box);
-  $("log").scrollTop = $("log").scrollHeight;
+  const log = $("log");
+  // A message the reader just sent always comes into view; other lines follow only when already at the bottom.
+  const follow = nearBottom(log) || (cls || "").includes("mine");
+  log.appendChild(box);
+  if (follow) log.scrollTop = log.scrollHeight;
   return box;
 }
 
@@ -412,8 +428,9 @@ async function loadScenarioDraft(name) {
   skip.title = tr("Hide this opening and write your own message");
   bar.append(start, skip);
   box.appendChild(bar);
+  const follow = nearBottom(log);
   log.appendChild(box);
-  log.scrollTop = log.scrollHeight;
+  if (follow) log.scrollTop = log.scrollHeight;
   start.addEventListener("click", () => {
     if (busy || name !== current) return;
     box.remove();
@@ -528,10 +545,11 @@ function loadCharSettings() {
   for (const n of document.querySelectorAll(".char-only")) n.hidden = !current;
   for (const n of document.querySelectorAll(".needs-char")) n.hidden = !!current;
   $("palaceRow").hidden = !current;
-  for (const id of ["tempSlider", "tempReset", "winSlider", "winReset", "exportMd", "exportTxt", "exportJson", "exportEpub", "exportPdf", "pinSave", "pinSettingText", "ciEnabled", "ciSave", "ciAt", "ciStart", "ciEnd", "dreamEnabled", "dreamSave", "dreamStart", "dreamEnd"]) $(id).disabled = !current;
+  for (const id of ["tempSlider", "tempReset", "winSlider", "winReset", "exportMd", "exportTxt", "exportJson", "exportEpub", "exportPdf", "pinSave", "pinSettingText", "ciEnabled", "ciEvery", "ciSave", "ciAt", "ciStart", "ciEnd", "dreamEnabled", "dreamEverySelect", "dreamSave", "dreamStart", "dreamEnd", "dreamBubblesBtn", "offEnabled", "offQuick", "offWrite"]) $(id).disabled = !current;
   $("charMsg").textContent = "";
   refreshStateCards();
   if (!current) return;
+  loadOffQuick();
   api("GET", "/api/character-settings?character=" + encodeURIComponent(current))
     .then((d) => applyCharSettings(d))
     .catch((err) => { $("charMsg").textContent = err.message; });
@@ -897,6 +915,22 @@ $("pfDelete").addEventListener("click", async () => {
 });
 
 // Settings: thinking on or off, and which model answers. Both apply from the next turn.
+// The reasoning levels the account's tier allows for the saved model. The row shows only with thinking on.
+function renderReasoning() {
+  const info = (me && me.reasoning) || {};
+  const levels = Array.isArray(info.levels) && info.levels.length ? info.levels : ["low"];
+  const sel = $("reasoningSelect");
+  sel.textContent = "";
+  for (const level of levels) {
+    const label = level.charAt(0).toUpperCase() + level.slice(1);
+    sel.appendChild(el("option", tr(label), null));
+    sel.options[sel.options.length - 1].value = level;
+  }
+  sel.value = levels.includes(info.level) ? info.level : levels[0];
+  sel.disabled = levels.length < 2;
+  $("reasoningRow").hidden = !(me && me.thinking);
+}
+
 function renderModels() {
   const sel = $("modelSelect");
   sel.textContent = "";
@@ -907,8 +941,16 @@ function renderModels() {
     o.value = name;
     sel.appendChild(o);
   }
-  sel.value = (me && me.model) || "";
+  const saved = (me && me.model) || "";
+  if (saved && ![...sel.options].some((o) => o.value === saved)) {
+    // The saved choice is kept even when the current tier no longer lists it, so the picker does not reset.
+    const o = el("option", saved, null);
+    o.value = saved;
+    sel.appendChild(o);
+  }
+  sel.value = saved;
   $("thinkToggle").checked = !!(me && me.thinking);
+  renderReasoning();
   if (me && me.avatar_shape) applyAvatarShape(me.avatar_shape);
   $("avatarShape").value = (me && me.avatar_shape) || "squircle";
   if (me) setLook(me.bg_shade || 0, me.bubble_opacity || 72);
@@ -1122,6 +1164,7 @@ async function saveSettings(patch) {
     const data = await api("POST", "/api/settings", patch);
     me.thinking = data.thinking;
     me.model = data.model;
+    if (data.reasoning) me.reasoning = data.reasoning;
     renderModels();
     $("settingsMsg").textContent = tr("Saved. Applies from your next message.");
   } catch (err) {
@@ -1161,6 +1204,7 @@ async function loadCharacters(choose = true) {
   colorMap = data.colors || {};
   iconSet = new Set(data.icons || []);
   bgIds = data.bg_ids || {};
+  musicByName = new Map((data.cards || []).map((card) => [card.name, card.music || []]));
   defaultArt = data.default_backgrounds || [];
   editableSet = new Set(data.editable || []);
   favSet = new Set(data.favourites || []);
@@ -1186,6 +1230,8 @@ async function loadCharacters(choose = true) {
   worldCache = { worlds: data.worlds || [], default: data.world_default || null };
   paintUnread();
   soloNames = data.solo || [];
+  groupNames = new Set((data.groups || []).map((g) => g.name));
+  novelIds = new Set((data.novels || []).map((n) => n.id));
   const all = [...data.solo, ...data.groups.map((g) => g.name), ...(data.novels || []).map((n) => n.id)];
   // A card on the home page sends the name as ?c=; that wins over the last character used.
   const asked = new URLSearchParams(location.search).get("c");
@@ -1317,8 +1363,11 @@ async function pickCharacter(name) {
   localStorage.setItem("rp_character", name);
   markActive();
   applyChatArt(name);
+  // A character's theme music plays while its chat is open. A group, a novel or a character with no tracks is silent.
+  themeMusic.set("char:" + name, musicByName.get(name) || null);
   closeSidebar();
   showMemory(false);
+  showBible(false);   // a bible open for the last chat is closed when another character opens
   $("chatErr").textContent = "";
   $("log").classList.toggle("novel", isNovelName(name));   // a novel's replies are drawn as prose
   refreshStory().catch(() => {});
@@ -1345,8 +1394,10 @@ async function loadHistory() {
 // behind, and it catches up quickly once the reply is complete. Thinking panels and saved history are not affected.
 function makeReveal(render) {
   const clock = () => performance.now();
+  // The reveal advances on every frame, but the markdown rebuild is heavy, so it runs a few times a second.
+  const PAINT_MS = 33;
   const st = { target: "", shown: 0, last: null, arrivals: [], rate: 120, raf: null, lastFrame: 0,
-               finishing: false, resolveDone: null, cancelled: false };
+               lastPaint: 0, finishing: false, resolveDone: null, cancelled: false };
   const paint = () => {
     if (st.cancelled) return;
     const text = st.target.slice(0, st.shown);
@@ -1369,7 +1420,10 @@ function makeReveal(render) {
       speed = Math.max(speed, backlog);                        // the backlog drains within about a second
       if (st.finishing) speed = Math.max(speed, backlog / 0.35); // the reply is complete: catch up
       st.shown = Math.min(st.target.length, st.shown + Math.max(1, Math.round(speed * dt)));
-      paint();
+      if (now - st.lastPaint >= PAINT_MS || st.shown >= st.target.length) {
+        st.lastPaint = now;
+        paint();
+      }
     }
     if (st.shown < st.target.length) schedule();
     else if (st.resolveDone) { const done = st.resolveDone; st.resolveDone = null; done(); }
@@ -1426,8 +1480,11 @@ async function sendMessage(text) {
   const mineBox = addLine(mine, text, "mine", new Date().toISOString());
   if (me && me.persona) colourLine(mineBox, me.persona.name);
   await streamTurn("/api/chat", { character: who, message: text }, who);
-  // A first message adds this character to the sidebar.
-  loadCharacters(false).catch(() => {});
+  // The sidebar ranks solo characters by recent activity, so refresh only when this chat's place there can change.
+  if (who === current && soloNames.includes(who)) {
+    const first = $("charList").querySelector(".char-item");
+    if (!first || first.dataset.name !== who) loadCharacters(false).catch(() => {});
+  }
 }
 
 // Stream one turn (a new message, or a regenerated reply) into the log, then reload the saved chat.
@@ -1446,8 +1503,10 @@ async function streamTurn(path, body, who) {
     bubbles[speaker] = addLine(speaker, "", "theirs streaming");
     const node = bubbles[speaker].querySelector(".text");
     reveals[speaker] = makeReveal((txt) => {
+      const log = $("log");
+      const follow = nearBottom(log);
       renderMarkdown(txt || "mrrp~ thinking…", node);
-      $("log").scrollTop = $("log").scrollHeight;
+      if (follow) log.scrollTop = log.scrollHeight;
     });
   };
   const show = (speaker, t) => {
@@ -1471,8 +1530,10 @@ async function streamTurn(path, body, who) {
         if (who !== current) return;
         dropThinking();
         ensureBubble(p.speaker);
+        const log = $("log");
+        const follow = nearBottom(log);
         setThinking(bubbles[p.speaker], p.text);
-        $("log").scrollTop = $("log").scrollHeight;
+        if (follow) log.scrollTop = log.scrollHeight;
       },
       done(data) {
         flushing = Promise.all(Object.keys(reveals).map((k) => reveals[k].finish())).then(() => {
@@ -1704,6 +1765,18 @@ async function init() {
   showChat();
   renderUsage();
   await loadCharacters();
+  openRequestedEditor();
+}
+
+// /chat?edit=<name> opens that character's editor. The character wizard's done screen links here. The address is
+// tidied at once, so a refresh does not open the editor again. editor.js may not have run yet, so it waits for load.
+function openRequestedEditor() {
+  const name = new URLSearchParams(location.search).get("edit");
+  if (!name) return;
+  history.replaceState(null, "", "/chat");
+  const open = () => openEditor(name).catch((err) => { $("chatErr").textContent = err.message; });
+  if (typeof openEditor === "function") open();
+  else window.addEventListener("load", open, { once: true });
 }
 
 $("chatForm").addEventListener("submit", send);
@@ -1807,7 +1880,7 @@ function fitToVisibleArea() {
     return;
   }
   const log = $("log");
-  const wasAtBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const wasAtBottom = nearBottom(log);
   body.classList.add("fit-viewport");
   body.style.top = vv.offsetTop + "px";
   body.style.height = vv.height + "px";
@@ -1856,9 +1929,10 @@ $("sizeUp").addEventListener("click", () => applySize(chatSize + 1));
 applySize(localStorage.getItem("rp_size") || SIZE_DEFAULT);
 applyBubbleStyle(localStorage.getItem("rp_bubble"));
 $("thinkToggle").addEventListener("change", (e) => saveSettings({ thinking: e.target.checked }));
+$("reasoningSelect").addEventListener("change", (e) => saveSettings({ reasoning: e.target.value }));
 $("avatarShape").addEventListener("change", (e) => saveAvatarShape(e.target.value));
 $("modelSelect").addEventListener("change", (e) => saveSettings({ model: e.target.value }));
-$("editNewBtn").addEventListener("click", () => openEditor(null));
+$("editNewBtn").addEventListener("click", () => { location.href = "/create/character"; });
 $("undoBtn").addEventListener("click", undo);
 $("branchPick").addEventListener("change", async () => {
   const chat = current;
@@ -1915,7 +1989,6 @@ async function openPinned() {
   }
 }
 
-$("pinCard").addEventListener("click", openPinned);
 $("pinSave").addEventListener("click", async () => {
   if (!pinFor || busy) return;
   $("pinMsg").textContent = "";
@@ -1990,6 +2063,245 @@ $("memBack").addEventListener("click", () => showMemory(false));
 $("memSave").addEventListener("click", saveMemory);
 $("memRefresh").addEventListener("click", refreshMemory);
 
+// The story bible: a wiki page of this chat, built from every memory plus the first and last 30 messages.
+// Characters met, places visited, items acquired, open questions and key events, with an overview on top.
+// With the account switch on it is rebuilt after every dream; otherwise the reader rebuilds it by hand.
+let bibleFor = null;
+
+const BIBLE_HEADINGS = {
+  characters_met: "Characters met",
+  places_visited: "Places visited",
+  items_acquired: "Items acquired",
+  open_questions: "Open questions",
+  key_events: "Key events",
+};
+
+function showBible(on) {
+  $("bibleSection").hidden = !on;
+  $("chatSection").hidden = on;
+}
+
+function renderBible(data) {
+  $("bibleAuto").checked = !!data.on;
+  showBibleNote(data);
+  $("bibleErr").textContent = "";
+  const body = $("bibleBody");
+  body.textContent = "";
+  const bible = data.bible;
+  if (!bible) {
+    $("bibleMeta").textContent = "";
+    body.appendChild(el("p", tr("Nothing written yet. Regenerate to build the bible from everything remembered so far."), "muted"));
+    return;
+  }
+  const when = bible.when ? MISO_I18N.date(bible.when) : "";
+  $("bibleMeta").textContent = when ? tr("Written {when} for {n} messages", { when: when, n: bible.history }) : "";
+  const groups = [];
+  if (bible.overview) groups.push([tr("Overview"), el("p", bible.overview, "bible-overview")]);
+  for (const [key, title] of Object.entries(BIBLE_HEADINGS)) {
+    const items = bible[key] || [];
+    if (items.length) {
+      const list = el("ul", null, "bible-list");
+      for (const item of items) list.appendChild(el("li", item));
+      groups.push([tr(title), list]);
+    }
+  }
+  if (!groups.length) {
+    body.appendChild(el("p", tr("The last generation found nothing worth listing yet."), "muted"));
+    return;
+  }
+  for (const [title, content] of groups) {
+    const part = el("div", null, "bible-part");
+    part.append(el("h2", title, "bible-head"), content);
+    body.appendChild(part);
+  }
+}
+
+function showBibleNote(data) {
+  if (data.on && data.dream_on) {
+    $("bibleAutoNote").textContent = tr("On. The bible is rebuilt after every dream of this character, from what it tidied plus everything else remembered.");
+  } else if (data.on) {
+    $("bibleAutoNote").textContent = tr("On. No dreams are scheduled for this character, so rebuild the bible by hand when you want it fresh.");
+  } else {
+    $("bibleAutoNote").textContent = tr("Autobuild after dreams is off. Rebuild the bible by hand here whenever you like.");
+  }
+}
+
+async function openStoryBible() {
+  if (busy || !current) return;
+  const who = current;
+  $("chatErr").textContent = "";
+  $("bibleErr").textContent = "";
+  try {
+    const data = await api("GET", "/api/story-bible?character=" + encodeURIComponent(who));
+    bibleFor = who;
+    renderBible(data);
+    showBible(true);
+  } catch (err) {
+    $("chatErr").textContent = err.message;
+  }
+}
+
+$("bibleBack").addEventListener("click", () => showBible(false));
+
+$("bibleRegen").addEventListener("click", async () => {
+  if (!bibleFor || busy) return;
+  $("bibleErr").textContent = "";
+  $("bibleMsg").textContent = tr("Reading every memory plus the first and last 30 messages...");
+  $("bibleRegen").disabled = true;
+  try {
+    renderBible(await api("POST", "/api/story-bible/regenerate", { character: bibleFor }));
+    $("bibleMsg").textContent = tr("Written.");
+  } catch (err) {
+    $("bibleErr").textContent = err.message;
+    $("bibleMsg").textContent = "";
+  } finally {
+    $("bibleRegen").disabled = false;
+  }
+});
+
+$("bibleAuto").addEventListener("change", async (e) => {
+  if (!bibleFor) return;
+  try {
+    await api("POST", "/api/settings", { story_bible: e.target.checked });
+    renderBible(await api("GET", "/api/story-bible?character=" + encodeURIComponent(bibleFor)));
+    $("bibleMsg").textContent = tr("Saved.");
+  } catch (err) {
+    $("bibleErr").textContent = err.message;
+    e.target.checked = !e.target.checked;
+  }
+});
+
+// The character's icon and name above the chat open the story bible, like their name on a message.
+$("chatIcon").title = tr("Open the story bible");
+$("chatTitle").title = tr("Open the story bible");
+$("chatIcon").addEventListener("click", openStoryBible);
+$("chatTitle").addEventListener("click", openStoryBible);
+$("bibleDocBtn").addEventListener("click", openDocImport);
+$("docBtnMem").addEventListener("click", openDocImport);
+
+// Document import: a backstory, novel excerpt or setting document is read once and what it may be worth
+// remembering is proposed. Memory Palace entries and memory-bank facts are shown for review; nothing
+// enters memory until it is picked here.
+let docFor = null;
+let docMined = null;
+
+function openDocImport() {
+  if (!current) return;
+  docFor = current;
+  docMined = null;
+  $("docFile").value = "";
+  $("docImportBtn").disabled = true;
+  $("docResults").textContent = "";
+  $("docMsg").textContent = "";
+  $("docSaveMsg").textContent = "";
+  $("docSave").disabled = true;
+  if (!$("docImportDlg").open) $("docImportDlg").showModal();
+}
+
+$("docFile").addEventListener("change", () => {
+  $("docImportBtn").disabled = !$("docFile").files.length;
+});
+
+async function docMine() {
+  const file = $("docFile").files[0];
+  if (!file || busy) return;
+  $("docMsg").textContent = tr("Reading...");
+  $("docImportBtn").disabled = true;
+  $("docResults").textContent = "";
+  $("docSave").disabled = true;
+  try {
+    const r = await fetch("/api/memory/import-doc?character=" + encodeURIComponent(docFor), {
+      method: "POST",
+      headers: { "X-Requested-With": "roleplay", "Content-Type": "application/octet-stream",
+                 "x-filename": encodeURIComponent(file.name) },
+      credentials: "same-origin",
+      body: await file.arrayBuffer(),
+    });
+    if (!r.ok) {
+      let data = {};
+      try { data = await r.json(); } catch (e) { /* no body */ }
+      throw apiError(r.status, data);
+    }
+    docMined = await r.json();
+    renderDocCandidates();
+    $("docMsg").textContent = tr("Pick what to keep, then save.");
+  } catch (err) {
+    $("docMsg").textContent = err.message;
+  } finally {
+    $("docImportBtn").disabled = false;
+  }
+}
+
+function renderDocCandidates() {
+  const body = $("docResults");
+  body.textContent = "";
+  const mined = docMined || {};
+  const entries = Array.isArray(mined.palace) ? mined.palace : [];
+  const facts = Array.isArray(mined.facts) ? mined.facts : [];
+  if (!entries.length && !facts.length) {
+    body.appendChild(el("p", tr("Nothing worth keeping was found in this document."), "muted"));
+    return;
+  }
+  if (entries.length) {
+    const box = el("div", null, "doc-group");
+    box.appendChild(el("h3", tr("Mind Palace entries"), "doc-head"));
+    entries.forEach((entry, i) => {
+      const row = el("label", null, "doc-candidate");
+      const pick = el("input");
+      pick.type = "checkbox"; pick.checked = true; pick.dataset.kind = "palace"; pick.dataset.index = String(i);
+      row.appendChild(pick);
+      row.appendChild(el("span", entry.title || tr("Untitled"), "doc-title"));
+      if (entry.keys && entry.keys.length) row.appendChild(el("span", "(" + entry.keys.join(", ") + ")", "muted"));
+      row.appendChild(el("span", " " + (entry.content || ""), "doc-text"));
+      box.appendChild(row);
+    });
+    body.appendChild(box);
+  }
+  if (facts.length) {
+    const box = el("div", null, "doc-group");
+    box.appendChild(el("h3", tr("Memory facts"), "doc-head"));
+    facts.forEach((fact, i) => {
+      const row = el("label", null, "doc-candidate");
+      const pick = el("input");
+      pick.type = "checkbox"; pick.checked = true; pick.dataset.kind = "facts"; pick.dataset.index = String(i);
+      row.appendChild(pick);
+      row.appendChild(el("span", "[" + fact.section + "]", "doc-section"));
+      row.appendChild(el("span", " " + (fact.text || ""), "doc-text"));
+      box.appendChild(row);
+    });
+    body.appendChild(box);
+  }
+  $("docSave").disabled = false;
+}
+
+$("docImportBtn").addEventListener("click", docMine);
+
+$("docSave").addEventListener("click", async () => {
+  if (!docMined || busy) return;
+  const entries = [], facts = [];
+  for (const pick of $("docResults").querySelectorAll("input[data-kind]")) {
+    if (!pick.checked) continue;
+    const item = (docMined[pick.dataset.kind] || [])[Number(pick.dataset.index)];
+    if (!item) continue;
+    if (pick.dataset.kind === "palace") entries.push(item); else facts.push(item);
+  }
+  if (!entries.length && !facts.length) {
+    $("docSaveMsg").textContent = tr("Nothing picked.");
+    return;
+  }
+  $("docSaveMsg").textContent = tr("Saving...");
+  try {
+    const data = await api("POST", "/api/memory/import-doc/apply", { character: docFor, entries: entries, facts: facts });
+    // the chat sessions were dropped on the server, so the next reply reads the new memory
+    $("docSaveMsg").textContent = tr("Saved: {p} palace entries and {f} facts.", { p: data.palace_added, f: data.facts_added });
+    $("docSave").disabled = true;
+  } catch (err) {
+    $("docSaveMsg").textContent = err.message;
+  }
+});
+
+$("docCancel").addEventListener("click", () => $("docImportDlg").close());
+
 // Scheduled check-ins: a character's own schedule, set in Settings, Check-in. Off by default.
 // The page shows the time in the reader's own time zone, which is the one saved with the schedule.
 let ciFor = null;   // the character whose check-in settings are open
@@ -2002,6 +2314,7 @@ async function openCheckin() {
     const data = await api("GET", "/api/checkins?character=" + encodeURIComponent(who));
     ciFor = who;
     $("ciEnabled").checked = data.enabled;
+    $("ciEvery").value = String(data.every_days || 1);
     document.querySelector('input[name="ciMode"][value="' + data.mode + '"]').checked = true;
     $("ciAt").value = data.at;
     $("ciStart").value = data.start;
@@ -2014,12 +2327,15 @@ async function openCheckin() {
 
 function showCheckinNote(data) {
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const every = Number(data.every_days) || 1;
   if (!data.enabled) {
     $("ciNote").textContent = tr("Off. {name} will not message you on its own.", { name: ciFor || tr("This character") });
   } else if (data.next) {
     $("ciNote").textContent = tr("Today's check-in is set for {next} ({zone}). It is skipped if the server is not running then.", { next: data.next, zone: zone });
-  } else {
+  } else if (every === 1) {
     $("ciNote").textContent = tr("On. Once a day, in {zone}. It is skipped if the server is not running at the chosen time.", { zone: zone });
+  } else {
+    $("ciNote").textContent = tr("On. Once every {n} days, in {zone}. It is skipped if the server is not running at the chosen time.", { n: every, zone: zone });
   }
 }
 
@@ -2027,15 +2343,24 @@ $("checkinCard").addEventListener("click", openCheckin);
 
 // Autonomous dreaming: the quiet hours for this character, saved with the browser's time zone.
 let dreamFor = null;
+let dreamItems = [];
 
 function showDreamLast(data) {
   $("dreamServerNote").hidden = data.server_on;
-  $("dreamEvery").textContent = data.every_days === 1 ? tr("A dream can run each night.") : tr("A dream runs at most once every {n} days.", { n: data.every_days });
+  const every = Math.max(Number(data.every_days) || 1, Number(data.floor_days) || 1);
+  $("dreamEverySelect").value = String(data.every_days || 1);
+  $("dreamEvery").textContent = every === 1 ? tr("A dream can run each night.") : tr("A dream runs at most once every {n} days.", { n: every });
   const last = data.last;
   if (!last) {
+    dreamItems = [];
+    $("dreamBubblesBtn").disabled = true;
     $("dreamLast").textContent = tr("No dream yet.");
     return;
   }
+  dreamItems = Array.isArray(last.items) && last.items.length
+    ? last.items
+    : (last.note ? [{ kind: "NOTE", text: last.note }] : []);
+  $("dreamBubblesBtn").disabled = !dreamItems.length;
   const when = last.when ? MISO_I18N.date(last.when) : "";
   const events = last.events ? tr(", {events} events recorded, {evolved} changes noted", { events: last.events, evolved: last.evolved || 0 }) : "";
   $("dreamLast").textContent = tr("Last dream {when}: {note} ({added} added, {updated} updated, {removed} removed, {dropped} palace entries dropped{events}).", {
@@ -2049,10 +2374,125 @@ function showDreamLast(data) {
   });
 }
 
+// The last dream's work as bubbles: one per memory change, palace drop, event, change of outlook or note. A bubble
+// shows a short label and no more than a line of text; clicking it opens the full line.
+const DREAM_KIND_LABELS = {
+  ADD: "Learned",
+  UPDATE: "Corrected",
+  REMOVE: "Forgot",
+  LINK: "Linked",
+  DROP: "Dropped",
+  EVENT: "Happened",
+  EVOLVE: "Changed",
+  NOTE: "Noted",
+};
+
+function dreamKindLabel(kind) {
+  return tr(DREAM_KIND_LABELS[String(kind || "").toUpperCase()] || "Noted");
+}
+
+function dreamLine(text) {
+  return String(text || "").replace(/^\[[^\]]+\]\s*/, "").replace(/\s+/g, " ").trim();
+}
+
+function dreamShort(text) {
+  const line = dreamLine(text);
+  return line.length > 18 ? line.slice(0, 18) + "…" : line;
+}
+
+function scatterDreamBubbles() {
+  const field = $("dreamBubbleField");
+  const bubbles = Array.from(field.querySelectorAll(".dream-bubble"));
+  if (!bubbles.length) return;
+  const fw = field.clientWidth, fh = field.clientHeight;
+  const maxW = Math.max(...bubbles.map((b) => b.offsetWidth), 1);
+  const cols = Math.max(1, Math.floor(fw / (maxW + 8)));
+  const rows = Math.max(1, Math.ceil(bubbles.length / cols));
+  const cw = fw / cols, ch = fh / rows;
+  bubbles.forEach((b, i) => {
+    const bw = b.offsetWidth, bh = b.offsetHeight;
+    const x = (i % cols) * cw + Math.max(0, cw - bw - 4) * Math.random();
+    const y = Math.floor(i / cols) * ch + Math.max(0, ch - bh - 4) * Math.random();
+    b.style.left = Math.max(3, Math.min(fw - bw - 3, x)) + "px";
+    b.style.top = Math.max(3, Math.min(fh - bh - 3, y)) + "px";
+  });
+}
+
+function openDreamBubbles() {
+  if (!dreamItems.length) return;
+  const field = $("dreamBubbleField");
+  field.textContent = "";
+  for (const item of dreamItems) {
+    const kind = String(item.kind || "NOTE").toUpperCase();
+    const text = String(item.text || "");
+    const bubble = el("button", null, "dream-bubble");
+    bubble.type = "button";
+    bubble.dataset.kind = kind;
+    bubble.dataset.text = text;
+    bubble.append(el("span", dreamKindLabel(kind), "dream-bubble-kind"), el("span", dreamShort(text), "dream-bubble-text"));
+    bubble.setAttribute("aria-label", dreamKindLabel(kind) + ": " + dreamLine(text));
+    field.appendChild(bubble);
+  }
+  if (!$("dreamBubblesDlg").open) $("dreamBubblesDlg").showModal();
+  requestAnimationFrame(scatterDreamBubbles);
+}
+
+function showDreamItem(kind, text) {
+  $("dreamItemKind").textContent = dreamKindLabel(kind);
+  $("dreamItemText").textContent = dreamLine(text);
+  if (!$("dreamItemDlg").open) $("dreamItemDlg").showModal();
+}
+
+let dreamDrag = null;
+
+$("dreamBubbleField").addEventListener("pointerdown", (e) => {
+  const bubble = e.target.closest(".dream-bubble");
+  if (!bubble) return;
+  const rect = bubble.getBoundingClientRect();
+  dreamDrag = { bubble, id: e.pointerId, dx: e.clientX - rect.left, dy: e.clientY - rect.top, x: e.clientX, y: e.clientY, moved: false };
+  bubble.setPointerCapture(e.pointerId);
+  bubble.classList.add("dragging");
+  e.preventDefault();
+});
+
+$("dreamBubbleField").addEventListener("pointermove", (e) => {
+  if (!dreamDrag || e.pointerId !== dreamDrag.id) return;
+  const field = $("dreamBubbleField");
+  const fr = field.getBoundingClientRect(), br = dreamDrag.bubble.getBoundingClientRect();
+  let x = e.clientX - fr.left - dreamDrag.dx;
+  let y = e.clientY - fr.top - dreamDrag.dy;
+  x = Math.max(3, Math.min(fr.width - br.width - 3, x));
+  y = Math.max(3, Math.min(fr.height - br.height - 3, y));
+  dreamDrag.bubble.style.left = x + "px";
+  dreamDrag.bubble.style.top = y + "px";
+  if (Math.abs(e.clientX - dreamDrag.x) > 4 || Math.abs(e.clientY - dreamDrag.y) > 4) dreamDrag.moved = true;
+});
+
+function endDreamDrag(open) {
+  if (!dreamDrag) return;
+  const d = dreamDrag;
+  dreamDrag = null;
+  d.bubble.classList.remove("dragging");
+  if (open && !d.moved) showDreamItem(d.bubble.dataset.kind, d.bubble.dataset.text);
+}
+
+$("dreamBubbleField").addEventListener("pointerup", (e) => {
+  if (dreamDrag && e.pointerId === dreamDrag.id) endDreamDrag(true);
+});
+$("dreamBubbleField").addEventListener("pointercancel", () => endDreamDrag(false));
+$("dreamBubbleField").addEventListener("keydown", (e) => {
+  const bubble = e.target.closest(".dream-bubble");
+  if (!bubble || (e.key !== "Enter" && e.key !== " ")) return;
+  e.preventDefault();
+  showDreamItem(bubble.dataset.kind, bubble.dataset.text);
+});
+
 async function openDreams() {
   if (busy || !current) return;
   const who = current;
   $("dreamMsg").textContent = "";
+  dreamItems = [];
+  $("dreamBubblesBtn").disabled = true;
   try {
     const data = await api("GET", "/api/dreams?character=" + encodeURIComponent(who));
     dreamFor = who;
@@ -2140,7 +2580,14 @@ function showMood(m) {
 }
 
 function showAttitude(a) {
+  $("attBox").hidden = !a.enabled;
   $("attitudeServerNote").hidden = a.enabled;
+  const rel = a.relationship;
+  $("attitudeType").textContent = rel
+    ? tr("{type} · {trust} · {affection}", {
+        type: tr(rel.type), trust: tr(rel.trust), affection: tr(rel.affection),
+      })
+    : "";
   $("attitudeLine").textContent = tr("Level: {level}.", { level: tr(a.level) });
   $("attitudeNote").textContent = tr("{level}, affection {affection}, trust {trust}", { level: tr(a.level), affection: a.affection, trust: a.trust });
   setMetric("attAffection", a.affection, null, false);
@@ -2156,33 +2603,39 @@ function showAttitude(a) {
 // The mood values sit in the Character panel, and the relationship keeps its own card. Both are for characters
 // only; a group has neither.
 async function refreshStateCards() {
-  // The mood block and the relationship card start hidden in the page and show only when the server says the
-  // feature is on, so a switched-off feature shows nothing. A group, or no open character, hides both.
+  // The mood block and the relationship block start hidden in the page and show only when the server says the
+  // feature is on, so a switched-off feature shows nothing. The Relationship card holds both and shows when
+  // either is on. A group, or no open character, hides everything.
   refreshRetention();
   const solo = !!current && soloNames.includes(current);
   if (!solo) {
     $("moodBox").hidden = true;
+    $("attBox").hidden = true;
     $("attitudeCard").hidden = true;
     return;
   }
   const who = current;
+  let moodOn = false, attOn = false;
   try {
     const m = await api("GET", "/api/character-state?character=" + encodeURIComponent(who));
     if (current !== who) return;
     showMood(m);
-    $("moodBox").hidden = !m.enabled;
+    moodOn = !!m.enabled;
   } catch (err) {
     // On a failed load the block stays hidden.
-    $("moodBox").hidden = true;
   }
+  $("moodBox").hidden = !moodOn;
   try {
     const a = await api("GET", "/api/character-attitude?character=" + encodeURIComponent(who));
     if (current !== who) return;
-    $("attitudeNote").textContent = tr("{level}, affection {affection}, trust {trust}", { level: tr(a.level), affection: a.affection, trust: a.trust });
-    $("attitudeCard").hidden = !a.enabled;
+    showAttitude(a);
+    attOn = !!a.enabled;
   } catch (err) {
-    // On a failed load the card stays hidden.
+    // On a failed load the block stays hidden.
   }
+  $("attBox").hidden = !attOn;
+  $("attitudeCard").hidden = !(moodOn || attOn);
+  if (!attOn) $("attitudeNote").textContent = tr("Mood, affection and trust");
 }
 
 // The relationship with the user: affection, trust and the level. Read only, except for admins.
@@ -2246,6 +2699,7 @@ $("dreamSave").addEventListener("click", async () => {
     const data = await api("POST", "/api/dreams", {
       character: dreamFor,
       enabled: $("dreamEnabled").checked,
+      every_days: Number($("dreamEverySelect").value),
       start: $("dreamStart").value,
       end: $("dreamEnd").value,
       tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -2256,6 +2710,9 @@ $("dreamSave").addEventListener("click", async () => {
     $("dreamMsg").textContent = err.message;
   }
 });
+$("dreamBubblesBtn").addEventListener("click", openDreamBubbles);
+$("dreamBubblesClose").addEventListener("click", () => $("dreamBubblesDlg").close());
+$("dreamItemClose").addEventListener("click", () => $("dreamItemDlg").close());
 $("ciSave").addEventListener("click", async () => {
   if (!ciFor || busy) return;
   $("ciMsg").textContent = "";
@@ -2264,6 +2721,7 @@ $("ciSave").addEventListener("click", async () => {
     const data = await api("POST", "/api/checkins", {
       character: ciFor,
       enabled: $("ciEnabled").checked,
+      every_days: Number($("ciEvery").value),
       mode,
       at: $("ciAt").value,
       start: $("ciStart").value,
@@ -2345,8 +2803,13 @@ setInterval(refreshUnread, 60000);
   function openPanel(name, back) {
     show(name, back);
     if (name === "worlds") return refreshWorldCache().catch(() => {});
+    if (name === "memory") { openPinned(); refreshRetention(); }
     if (name === "dreams") openDreams();
-    if (name === "voice" && window.ttsInitPanel) window.ttsInitPanel();
+    if (name === "offscreen") loadOffscreen();
+    if (name === "voice") {
+      if (window.ttsInitPanel) window.ttsInitPanel();
+      if (window.themeMusicInitPanel) window.themeMusicInitPanel();
+    }
   }
   function place() {
     const inSheet = phone.matches || !sheet.hidden;
@@ -2368,6 +2831,7 @@ setInterval(refreshUnread, 60000);
     renderProfileSettings();
     renderAccountPrefs();
     if (window.ttsInitPanel) window.ttsInitPanel();
+    if (window.themeMusicInitPanel) window.themeMusicInitPanel();
     closeBtn.focus();
   }
   function close(refocus) {
@@ -2387,11 +2851,11 @@ setInterval(refreshUnread, 60000);
   });
   sheet.addEventListener("click", (e) => {
     const story = e.target.closest("[data-story]");
-    if (story) { openPanel(story.dataset.story, "story"); backBtn.focus(); }
+    if (story) { openPanel(story.dataset.story, story.dataset.back || "story"); backBtn.focus(); }
   });
   sheet.addEventListener("click", (e) => { if (e.target === sheet) close(true); });
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || sheet.hidden) return;
+    if (e.key !== "Escape" || sheet.hidden || document.querySelector("dialog[open]")) return;
     if (grid.hidden) { if (backTo) show(backTo); else show(null); } else close(true);   // Escape steps back from a category before closing
   });
   document.getElementById("editNewBtn").addEventListener("click", () => close(false));
@@ -2518,6 +2982,8 @@ setInterval(refreshUnread, 60000);
 
 // ---- Private group chats: an account's own groups of solo characters, with a note for each member.
 let soloNames = [];
+let groupNames = new Set();
+let novelIds = new Set();
 // ---- Branch tree. Everyone sees their own; admins can also open any account's tree, read-only.
 async function openTree() {
   const admin = !!(me && me.is_admin);
@@ -2903,7 +3369,10 @@ async function saveScenarioMode() {
 // ---- Story panel: the world a chat uses, and its narrative tensions (Character settings).
 async function refreshStory() {
   const name = current;
+  const isOther = !!name && (groupNames.has(name) || novelIds.has(name));
   $("storyBox").hidden = !name;
+  $("offQuickRow").hidden = isOther;
+  $("offStoryLink").hidden = isOther;
   if (!name) return;
   await refreshWorldCache();
   const data = await api("GET", "/api/tensions?character=" + encodeURIComponent(name));
@@ -2957,6 +3426,65 @@ async function tensionAction(url, extra) {
   }
 }
 
+// ---- Off-screen life: what a character does between chats, written by a daily director.
+let offServerOn = false;
+
+// The quick switch in the Character panel reads the same per-chat row as the Off-screen life panel.
+async function loadOffQuick() {
+  if (!current || groupNames.has(current) || novelIds.has(current)) { $("offQuick").checked = false; return; }
+  const name = current;
+  try {
+    const data = await api("GET", "/api/offscreen?character=" + encodeURIComponent(name));
+    if (name !== current) return;   // the user switched chats while this was loading
+    offServerOn = !!data.server_on;
+    $("offQuick").checked = !!data.enabled;
+    $("offEnabled").checked = !!data.enabled;
+    offSyncButtons();
+  } catch { /* the Off-screen life panel shows the error when it is opened */ }
+}
+
+function offSyncButtons() {
+  $("offWrite").disabled = !offServerOn || !$("offEnabled").checked;
+}
+
+async function loadOffscreen() {
+  const name = current;
+  $("offMsg").textContent = "";
+  if (!name) return;
+  if (groupNames.has(name) || novelIds.has(name)) { $("offEnabled").checked = false; $("offWrite").disabled = true; $("offMsg").textContent = tr("Only characters have an off-screen life."); return; }
+  try {
+    const data = await api("GET", "/api/offscreen?character=" + encodeURIComponent(name));
+    if (name !== current) return;   // the user switched chats while this was loading
+    offServerOn = !!data.server_on;
+    $("offEnabled").checked = !!data.enabled;
+    $("offQuick").checked = !!data.enabled;
+    $("offServerNote").hidden = offServerOn;
+    offSyncButtons();
+    renderOffscreen(data);
+  } catch (err) {
+    $("offMsg").textContent = err.message;
+  }
+}
+
+function renderOffscreen(data) {
+  const frag = $("offFragments");
+  const twist = $("offTwists");
+  frag.textContent = "";
+  twist.textContent = "";
+  const moments = data.fragments || [];
+  const twists = data.twists || [];
+  frag.appendChild(el("p", tr("Recent moments"), "muted"));
+  if (!moments.length) frag.appendChild(el("p", tr("Nothing yet."), "muted"));
+  for (const item of moments.slice().reverse()) {
+    frag.appendChild(el("p", (item.day ? item.day + "  " : "") + item.text, "muted"));
+  }
+  twist.appendChild(el("p", tr("Twist cards"), "muted"));
+  if (!twists.length) twist.appendChild(el("p", tr("Nothing yet."), "muted"));
+  for (const item of twists.slice().reverse()) {
+    twist.appendChild(el("p", (item.day ? item.day + "  " : "") + item.text, "muted"));
+  }
+}
+
 document.querySelector('.set-card[data-panel="scenarios"]').addEventListener("click", () => {
   refreshScenarioCache().catch(() => {});   // the Scenarios panel always shows the account's current library
 });
@@ -2983,5 +3511,50 @@ $("tensionMode").addEventListener("change", async (e) => {
     await api("POST", "/api/tensions/mode", { character: current, mode: e.target.value });
   } catch (err) {
     $("chatErr").textContent = err.message;
+  }
+});
+
+$("offEnabled").addEventListener("change", async (e) => {
+  $("offMsg").textContent = "";
+  try {
+    const data = await api("POST", "/api/offscreen", { character: current, enabled: e.target.checked });
+    offServerOn = !!data.server_on;
+    $("offQuick").checked = !!data.enabled;
+    $("offServerNote").hidden = offServerOn;
+    offSyncButtons();
+    $("offMsg").textContent = tr("Saved.");
+  } catch (err) {
+    $("offMsg").textContent = err.message;
+    e.target.checked = !e.target.checked;
+  }
+});
+
+$("offQuick").addEventListener("change", async (e) => {
+  $("charMsg").textContent = "";
+  if (!current || groupNames.has(current) || novelIds.has(current)) return;
+  try {
+    const data = await api("POST", "/api/offscreen", { character: current, enabled: e.target.checked });
+    offServerOn = !!data.server_on;
+    $("offEnabled").checked = !!data.enabled;
+    $("offServerNote").hidden = offServerOn;
+    offSyncButtons();
+    $("charMsg").textContent = tr("Saved.");
+  } catch (err) {
+    $("charMsg").textContent = err.message;
+    e.target.checked = !e.target.checked;
+  }
+});
+
+$("offWrite").addEventListener("click", async () => {
+  $("offMsg").textContent = tr("Writing...");
+  $("offWrite").disabled = true;
+  try {
+    const data = await api("POST", "/api/offscreen", { character: current, enabled: $("offEnabled").checked, write: true });
+    renderOffscreen(data);
+    $("offMsg").textContent = tr("Written.");
+  } catch (err) {
+    $("offMsg").textContent = err.message;
+  } finally {
+    offSyncButtons();
   }
 });

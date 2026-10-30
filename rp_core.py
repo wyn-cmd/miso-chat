@@ -23,7 +23,8 @@ import pytz
 from google.genai import types
 from charname import display_for
 import sandbox
-from web import palace, episodes, memory_bank, dreams, eventgraph, quench, memory_policy, tensions, examples as examples_mod
+from web import palace, palace_audit, episodes, memory_bank, dreams, eventgraph, quench, memory_policy, tensions, offscreen, examples as examples_mod
+from web import story_bible, docextract
 
 
 def _mk(text):
@@ -186,20 +187,28 @@ def _whole_word(word):
 
 PROVIDER_PREFIXES = ("deepseek:", "local:", "claude:")
 ZERO_BUDGET_OK = ("3.1-flash-lite",)   # verified to accept thinking_budget=0; other Gemini models are untested
+REASONING_LEVELS = ("low", "medium", "high")
 
 
-def thinking_config_for(model, enabled):
+def thinking_config_for(model, enabled, reasoning="low"):
     # Thinking settings for one model. Off by default.
     #
-    # OpenAI-style and Claude Code backends read include_thoughts only. Gemma accepts no thinking
-    # config at all. Gemini models that refuse a budget of 0 get include_thoughts=False with no budget,
-    # so any thinking they do stays hidden.
+    # OpenAI-style and Claude Code backends read include_thoughts and the thinking level. Gemma accepts no
+    # thinking config at all. Gemini models that refuse a budget of 0 get include_thoughts=False with no
+    # budget, so any thinking they do stays hidden.
+    level = str(reasoning or "low").lower()
+    if level not in REASONING_LEVELS:
+        level = "low"
+    thinking_levels = getattr(types, "ThinkingLevel", None)
+    thinking_level = getattr(thinking_levels, level.upper(), None) if thinking_levels is not None else None
     if model.startswith(PROVIDER_PREFIXES):
-        return types.ThinkingConfig(include_thoughts=bool(enabled))
+        if not enabled:
+            return types.ThinkingConfig(include_thoughts=False)
+        return types.ThinkingConfig(include_thoughts=True, thinking_level=thinking_level)
     if "gemma" in model:
         return None
     if enabled:
-        return types.ThinkingConfig(include_thoughts=True, thinking_budget=-1)
+        return types.ThinkingConfig(include_thoughts=True, thinking_level=thinking_level)
     if any(tag in model for tag in ZERO_BUDGET_OK):
         return types.ThinkingConfig(include_thoughts=False, thinking_budget=0)
     return types.ThinkingConfig(include_thoughts=False)
@@ -498,9 +507,11 @@ class Engine:
         self.memory_enabled = True
         self.palace_enabled = True
         self.palace_dir = None   # an account's own palace folder; None means ai_dir
+        self.palace_fired = []   # palace keys whose entries matched this turn, read by the server for the usage counts
         self.palace_text = ""
         self.mood_text = ""      # the character's simulated state for this turn, set by the server; empty when off
         self.attitude_text = ""  # the relationship block for this turn, set by the server; empty when off
+        self.offscreen_text = "" # what the character did between sessions, set by the server; empty when off
         self.persist_config = persist_config
         self.allow_root_user = allow_root_user
         self.character_file = os.path.join(ai_dir, "character.md")
@@ -529,6 +540,8 @@ class Engine:
         self.episode_vectors = {}          # query text hash -> vector, for the few turns that need a similarity search
         self.dream_file = os.path.join(self.state_dir, "dream.json")
         self.dream_calls = 0               # model calls the last dream made, for the server's dream cap
+        self.bible_file = os.path.join(self.state_dir, story_bible.FILE)   # the chat's story bible, read only
+        self.bible_calls = 0               # model calls the last story bible generation made
         last = _read_json(self.dream_file, {})
         self.dream_len = int(last.get("len", 0)) if isinstance(last, dict) else 0   # history length at the last dream
         self.event_memory_enabled = False  # the admin switch in effect this turn; set by the server
@@ -557,6 +570,8 @@ class Engine:
         self.model_name = None
         self.pinned_model = None
         self.thinking = False          # reasoning shown and enabled (off by default)
+        self.reasoning = "low"         # reasoning level when thinking is on: low, medium or high
+        self.reasoning_levels = list(REASONING_LEVELS)   # levels this account's tier may pick
 
         self.full_history = []
         self.regen_stash = None        # set while a regenerate runs: the exchange it took out of memory
@@ -567,6 +582,7 @@ class Engine:
         self.character_color = "cyan"
         self.character_prompt = ""
         self.example_text = ""        # the character's own example messages, as a prompt block; empty when it has none
+        self.author_note = ""         # an optional instruction for the chat, sent near the end of the prompt
         self.is_group = False
         self.group_members = []
         self.member_notes = {}         # per-member notes for an account's own group, keyed by folder name
@@ -674,6 +690,7 @@ class Engine:
         self.character_color = "cyan"
         self.character_prompt = ""
         self.example_text = ""
+        self.author_note = ""
         self.is_group = False
         self.group_members = []
 
@@ -714,6 +731,14 @@ class Engine:
         # Example messages live beside the card. They show the voice, so they sit right after it in the prompt.
         if not self.is_group:
             self.example_text = examples_mod.prompt_block(examples_mod.load(self.ai_dir), self.character_name)
+        # The author's note is set by the character editor. It is not part of the card, and it goes in the newest
+        # message near the end of the prompt, so it can steer tone and pacing without rewriting the card.
+        note_file = os.path.join(self.ai_dir, "author_note.md")
+        if os.path.exists(note_file):
+            try:
+                self.author_note = _read_text(note_file).strip()
+            except Exception as e:
+                self.log(f"[yellow]Could not load author_note.md: {e}[/yellow]")
 
     def _load_user(self):
         self.user_prompt = ""
@@ -800,11 +825,19 @@ class Engine:
     # the newest user message, not in the system prompt, so the system prompt and the history before that message stay
     # the same from one turn to the next. The text is kept out of the saved chat.
     def _turn_notes(self):
-        body = (self.attitude_text + self.mood_text + self._recall_text() + self._tension_text()).strip()
+        body = (self.attitude_text + self.mood_text + self.offscreen_text + self._recall_text()
+                + self._tension_text()).strip()
+        if body:
+            body = ("[Notes for this reply, from the simulation and memory. The user did not write these.]\n"
+                    + body)
+        if self.author_note:
+            if body:
+                body += "\n\n"
+            body += ("[Author's note for this chat. Follow it when it fits the scene.]\n"
+                     + self.author_note)
         if not body:
             return ""
-        return ("[Notes for this reply, from the simulation and memory. The user did not write these.]\n"
-                + body + "\n\n[The user says:]\n")
+        return body + "\n\n[The user says:]\n"
 
     # The open tensions as constraints for this reply, when the chat tracks them. Empty when off or none are open.
     def _tension_text(self):
@@ -905,6 +938,7 @@ class Engine:
         # Matched entries depend on the newest messages.
         blocks = []
         self.policy_retrieved = []
+        self.palace_fired = []
         if self.palace_enabled:
             recent = [str(m.get("text") or "") for m in self.full_history[-palace.DEPTH_MAX:]]
             entries, cfg = palace.load_all(self.palace_dir or self.ai_dir)
@@ -915,8 +949,10 @@ class Engine:
             if self.policy_enabled:
                 weights = {palace.palace_key(e): memory_policy.rank_multiplier(self.policy, palace.palace_key(e))
                            for e in auto}
+            fired = []
             kept = palace.match_entries(entries, recent + [str(processed or "")], cfg["budget"], cfg["recursive"],
-                                        weights)
+                                        weights, fired=fired)
+            self.palace_fired = [palace.palace_key(e) for e in fired]
             blocks = [palace.block_for(e) for e in kept]
             if self.policy_enabled:
                 # An entry that did not match this turn is still on the books, so one that never matches can be
@@ -1027,10 +1063,13 @@ class Engine:
         # it is old enough. Only the character's own automatic entries and its episodes are candidates. An entry the
         # user wrote is never touched, and the character card and memory bank are never changed.
         self.policy_forgotten = []
-        entries, cfg = palace.load_all(self.palace_dir or self.ai_dir)
+        pdir = self.palace_dir or self.ai_dir
+        entries, cfg = palace.load_all(pdir)
+        core = palace_audit.core_keys(pdir)   # core memory is never forgotten, even when the character wrote it
         kept = []
         for entry in entries:
-            if entry.get("auto") and memory_policy.should_forget(self.policy, palace.palace_key(entry)):
+            key = palace.palace_key(entry)
+            if entry.get("auto") and key not in core and memory_policy.should_forget(self.policy, key):
                 self.policy_forgotten.append(entry["title"] or entry["content"][:60])
                 continue
             kept.append(entry)
@@ -1067,6 +1106,15 @@ class Engine:
     def sandbox_active(self):
         return self.sandbox_root is not None and not self.is_group
 
+    def reasoning_for(self, model):
+        # The level to send for one model. A level the tier no longer allows falls back to its first, and
+        # DeepSeek stays on low unless every level is allowed (a pro account or an admin).
+        level = self.reasoning if self.reasoning in self.reasoning_levels else (
+            self.reasoning_levels[0] if self.reasoning_levels else "low")
+        if str(model or "").startswith("deepseek:") and set(self.reasoning_levels) != set(REASONING_LEVELS):
+            level = "low"
+        return level
+
     def create_chat_session(self, model_name):
         contents = self._window(self.window_size(), labelled=False)
         active = self.sandbox_active()
@@ -1077,7 +1125,7 @@ class Engine:
                 system_instruction=self.system_prompt + (SANDBOX_NOTE if active else ""),
                 temperature=self.temperature_value(),
                 safety_settings=safety_settings(),
-                thinking_config=thinking_config_for(model_name, self.thinking),
+                thinking_config=thinking_config_for(model_name, self.thinking, self.reasoning_for(model_name)),
                 tools=_sandbox_tools() if active else None,
             ),
         )
@@ -1407,7 +1455,7 @@ class Engine:
                     model=model,
                     history=contents if contents else None,
                     config=types.GenerateContentConfig(system_instruction=self._group_system(), temperature=self.temperature_value(),
-                                                       thinking_config=thinking_config_for(model, self.thinking)),
+                                                       thinking_config=thinking_config_for(model, self.thinking, self.reasoning_for(model))),
                 )
                 ask = (f"[{label} respond to the group, answering the user's last message above]" if in_history
                        else f"[{label} respond to the group]: {request}")
@@ -1688,7 +1736,7 @@ class Engine:
                     history=contents if contents else None,
                     config=types.GenerateContentConfig(system_instruction=system, temperature=0.9,
                                                        safety_settings=safety_settings(),
-                                                       thinking_config=thinking_config_for(model, self.thinking)),
+                                                       thinking_config=thinking_config_for(model, self.thinking, self.reasoning_for(model))),
                 )
                 text = _text(chat.send_message(final_prompt))
                 if text and text.strip():
@@ -1742,6 +1790,7 @@ class Engine:
         # Event memory: the dream reads the messages since the last event pass, and links them to the latest events.
         events_on = self.event_memory_enabled
         new_lines = recent_events = None
+        new_events, new_evolve = [], []
         if events_on:
             span = self.full_history[self.graph["covered"]:][-eventgraph.NEW_MESSAGES:]
             new_lines = [f"- [{e.get('speaker') or e.get('role')}]: {e['text']}" for e in span if e.get("text")]
@@ -1774,7 +1823,9 @@ class Engine:
             with open(self.memory_bank_file, "w", encoding="utf-8") as f:
                 f.write(merged)
         dropped = 0
+        dropped_entries = []
         if drops:
+            dropped_entries = [e for e in entries if e["auto"] and e["id"] in drops]
             keep = [e for e in entries if not (e["auto"] and e["id"] in drops)]
             dropped = len(entries) - len(keep)
             if dropped:
@@ -1794,12 +1845,156 @@ class Engine:
             except Exception as err:
                 self.log(f"[yellow]Tension pass after the dream failed: {err}[/yellow]")
         self.dream_len = len(self.full_history)
+        items = []
+        for line in (changes or "").splitlines():
+            line = line.strip()
+            kind, sep, payload = line.partition(":")
+            kind, payload = kind.strip().upper(), payload.strip()
+            if not sep or kind not in ("ADD", "UPDATE", "REMOVE"):
+                continue
+            if kind == "ADD" and payload.startswith("[Connections]"):
+                kind = "LINK"
+            items.append({"kind": kind, "text": payload[:dreams.ITEM_MAX]})
+        for e in dropped_entries:
+            title = (e.get("title") or "").strip()
+            content = (e.get("content") or "").strip()
+            text = f"{title}: {content}" if title and content else (title or content or "Untitled")
+            items.append({"kind": "DROP", "text": text[:dreams.ITEM_MAX]})
+        for ev in new_events:
+            text = f"{ev.get('actor') or 'Someone'}: {ev.get('event') or ''}".strip()
+            if ev.get("consequence"):
+                text += f" - {ev['consequence']}"
+            items.append({"kind": "EVENT", "text": text[:dreams.ITEM_MAX]})
+        for line in new_evolve:
+            items.append({"kind": "EVOLVE", "text": str(line)[:dreams.ITEM_MAX]})
+        if note:
+            items.append({"kind": "NOTE", "text": note[:dreams.ITEM_MAX]})
+        items = items[:dreams.MAX_ITEMS]
         record = {"len": self.dream_len, "when": _now_iso(), "note": note, "added": counts["added"],
                   "updated": counts["updated"], "removed": counts["removed"], "dropped": dropped,
-                  "events": events_added, "evolved": evolved}
+                  "events": events_added, "evolved": evolved, "items": items}
         _write_json(self.dream_file, record)
         self._build_system_prompt()
         return record
+
+    def write_story_bible(self, count_requests=True):
+        # One wiki page for this chat, rebuilt from every memory source plus the first and latest messages.
+        # With count_requests the calls are counted like the reader's own requests; a dream-night call is
+        # counted by the caller against the server's dream cap instead. The bible is read-only output: it
+        # never touches memory.md, the palace or the history. Returns the saved record, or None.
+        self.bible_calls = 0
+        history = self.full_history
+        if len(history) < story_bible.MIN_HISTORY:
+            return None
+        memory = _read_text(self.memory_bank_file) if os.path.exists(self.memory_bank_file) else ""
+        pinned = _read_text(self.pinned_file) if os.path.exists(self.pinned_file) else ""
+        entries, _cfg = palace.load_all(self.palace_dir or self.ai_dir)
+        threads_open = [f"{t.get('kind')}: {t.get('text')}" for t in tensions.open_items(self.tensions)]
+        events = eventgraph.recent_for_dream(self.graph)
+        prompt = story_bible.build_prompt(memory, pinned, entries, self.summary_text, threads_open, events,
+                                          story_bible.opening_lines(history), story_bible.recent_lines(history),
+                                          self.user_display_name or "the reader")
+        models = []
+        for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
+            if m and m not in models:
+                models.append(m)
+        text = None
+        for m in models:
+            self.bible_calls += 1
+            try:
+                if count_requests:
+                    self._count_request(m)
+                chat = self.client.chats.create(
+                    model=m,
+                    config=types.GenerateContentConfig(system_instruction=story_bible.SYSTEM, temperature=0.5,
+                                                       safety_settings=safety_settings()))
+                resp = chat.send_message(prompt)
+                if count_requests:
+                    usage = getattr(resp, "usage_metadata", None)
+                    total = usage.total_token_count if usage and hasattr(usage, "total_token_count") else 0
+                    if isinstance(total, int) and total > 0:
+                        self._count_tokens(total, m)
+                text = _text(resp)
+                if text and text.strip():
+                    break
+            except Exception as err:
+                self.log(f"[yellow]Story bible with {m} failed: {err}[/yellow]")
+                text = None
+        if not text:
+            return None
+        record = story_bible.parse(text)
+        if record is None:
+            self.log("[yellow]The story bible reply was not valid JSON; the last one is kept.[/yellow]")
+            return None
+        story_bible.with_stamp(record, _now_iso(), len(history))
+        story_bible.save(self.bible_file, record)
+        return record
+
+    def import_doc(self, text):
+        # Reads an uploaded reference document (backstory, novel excerpt, setting PDF) once and mines its
+        # lasting lore for review. Counted like the reader's own requests. Nothing is saved here. Returns
+        # {"palace": [{title, keys, content}, ...], "facts": [{section, text}, ...]}, or raises when no
+        # model came back with a readable mining.
+        self.import_calls = 0
+        text = str(text or "").strip()[:docextract.TEXT_LIMIT]
+        if not text:
+            raise RuntimeError("the document holds no readable text")
+        models = []
+        for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
+            if m and m not in models:
+                models.append(m)
+        last_err = None
+        for m in models:
+            self.import_calls += 1
+            try:
+                self._count_request(m)
+                chat = self.client.chats.create(
+                    model=m,
+                    config=types.GenerateContentConfig(system_instruction=docextract.SYSTEM, temperature=0.4,
+                                                       safety_settings=safety_settings()))
+                resp = chat.send_message(text)
+                usage = getattr(resp, "usage_metadata", None)
+                total = usage.total_token_count if usage and hasattr(usage, "total_token_count") else 0
+                if isinstance(total, int) and total > 0:
+                    self._count_tokens(total, m)
+                result = docextract.parse(_text(resp) or "")
+                if result is not None:
+                    return result
+                last_err = RuntimeError("the reply was not valid JSON")
+            except Exception as err:
+                last_err = err
+        raise RuntimeError(f"no model could read the document ({last_err})")
+
+    # One off-screen pass: the model writes what the character did between sessions, and sometimes a twist.
+    # The calls here do not go through _count_request or _count_tokens, so they are not counted as the user's
+    # requests or tokens. The caller counts them against the server's own director cap. Returns (fragments, twists).
+    def director(self, record):
+        self.director_calls = 0
+        recent = [f"- [{e.get('speaker') or e.get('role') or 'user'}]: {str(e['text'])[:300]}"
+                  for e in self.full_history[-offscreen.NEW_MESSAGES:] if e.get("text")]
+        threads = tensions.prompt_block(self.tensions) if self.tension_mode != "off" else ""
+        prompt = offscreen.build_prompt(self.character_prompt, recent, record, threads)
+        models = []
+        for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
+            if m and m not in models:
+                models.append(m)
+        text = None
+        for m in models:
+            self.director_calls += 1
+            try:
+                chat = self.client.chats.create(
+                    model=m,
+                    config=types.GenerateContentConfig(system_instruction=offscreen.SYSTEM, temperature=0.8,
+                                                       safety_settings=safety_settings()))
+                text = _text(chat.send_message(prompt))
+                if text and text.strip():
+                    break
+            except Exception as err:
+                self.log(f"[yellow]Off-screen pass with {m} failed: {err}[/yellow]")
+                text = None
+        if not text:
+            return [], []
+        return offscreen.parse(text)
 
     # One tension pass over the messages since the last one: it opens the tensions the chat sets up and closes the ones
     # it resolves. It runs only when the chat's mode is when ("dream" from the nightly dream, "save" from a memory

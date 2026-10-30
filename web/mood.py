@@ -9,6 +9,8 @@
 # moves depend on energy, affinity and hours of silence, with a margin on the way back so a value near a line does
 # not flip every turn. A lonely character reaches out once per silence, through the check-in path.
 
+import re
+
 # The stored columns, in the order the store keeps them.
 KEYS = ("energy", "affinity", "emotion", "streak", "last_update", "last_user", "reached")
 
@@ -23,9 +25,9 @@ TOKENS_PER_EXCHANGE = 7000  # estimate: a 25-message window at about 150 tokens 
                             # block of about 2,000, and a reply of about 300, with headroom
 REST_AFTER_HOURS = 2       # a silence this long is a rest, and the conversation count starts again
 REST_PER_HOUR = 6.0        # energy regained per hour of silence
-EXCHANGE_GAIN = 0.8        # affinity gained per exchange
-FADE_AFTER_HOURS = 72      # silence before affinity starts to fade
-FADE_PER_DAY = 1.0         # affinity lost per day of silence beyond that
+EXCHANGE_GAIN = 0.8 / 3    # affinity gained per exchange
+FADE_AFTER_HOURS = 168    # silence before affinity starts to fade
+FADE_PER_DAY = 0.5         # affinity lost per day of silence beyond that
 AFFINITY_FLOOR = 10.0
 TIRED_BELOW = 25.0         # energy under this makes a character tired
 TIRED_ENDS = 40.0          # and it stays tired until energy reaches this
@@ -33,6 +35,26 @@ LONELY_AFTER_HOURS = 48    # this long in silence, with affinity high enough, ma
 LONELY_MIN_AFFINITY = 35.0
 WARM_AT = 70.0             # affinity at this makes a character warm
 WARM_ENDS = 60.0           # and it stays warm until affinity falls below this
+COMFORT_GAIN = 2.0         # energy regained by a cuddle, a rest or a sleep in the chat
+
+# Rest and closeness in the chat itself: a small energy lift, enough to show without undoing the longer rest.
+COMFORT_KEYS = [
+    re.compile(r"\bcuddl(e|es|ed|ing)\b", re.I),
+    re.compile(r"\bsnuggl(e|es|ed|ing)\b", re.I),
+    re.compile(r"\b(get some rest|have a rest|take a rest|let'?s rest|we can rest|i (want|need) to rest)\b", re.I),
+    re.compile(r"\b(i )?(need|want) (some )?rest\b", re.I),
+    re.compile(r"\brest (with|beside|next to) you\b", re.I),
+    re.compile(r"\bresting\b", re.I),
+    re.compile(r"\b(let'?s|we can|can we|i (want|need) to) (sleep|nap)\b", re.I),
+    re.compile(r"\bsleep (with|beside|next to|together)\b", re.I),
+    re.compile(r"\b(go to|going to|time to) sleep\b", re.I),
+    re.compile(r"\bsleeping\b", re.I),
+    re.compile(r"\bnap(ping|s|ped)?\b", re.I),
+]
+
+
+def comforting(text):
+    return any(pattern.search(text or "") for pattern in COMFORT_KEYS)
 
 TONE = {
     "calm": "You are in an ordinary mood.",
@@ -95,13 +117,15 @@ def lite_allowance(daily_tokens, request_cap):
 # One exchange: the user wrote and the character answered. The state is first moved to now. A silence long enough
 # to count as a rest starts the conversation count again. Only exchanges past the allowance cost energy. Every
 # exchange adds affinity and resets silence.
-def on_exchange(state, now, allowance):
+def on_exchange(state, now, allowance, text=""):
     s = advance(state, now)
     if (now - s["last_user"]) / 3600 >= REST_AFTER_HOURS:
         s["streak"] = 0
     if s["streak"] >= allowance:
         s["energy"] = max(0.0, s["energy"] - EXHAUST_COST)
     s["affinity"] = min(AFFINITY_MAX, s["affinity"] + EXCHANGE_GAIN)
+    if comforting(text):
+        s["energy"] = min(ENERGY_MAX, s["energy"] + COMFORT_GAIN)
     s["streak"] += 1
     s["last_user"] = now
     s["emotion"] = next_emotion(s["emotion"], s["energy"], s["affinity"], 0.0)

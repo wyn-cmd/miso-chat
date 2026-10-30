@@ -19,6 +19,7 @@
   let current = null;       // the locale in use, once its file is in place
   let numberFormat = null;
   let pluralRules = null;
+  const dateFormats = new Map();   // formatters by locale and options, so repeated dates do not rebuild them
 
   function stored() {
     try { return localStorage.getItem(STORAGE) || ""; } catch (e) { return ""; }
@@ -69,6 +70,7 @@
     document.documentElement.dir = meta.dir || "ltr";
     try { numberFormat = new Intl.NumberFormat(locale); } catch (e) { numberFormat = new Intl.NumberFormat("en"); }
     try { pluralRules = new Intl.PluralRules(locale); } catch (e) { pluralRules = new Intl.PluralRules("en"); }
+    dateFormats.clear();
     syncPicker();
     return true;
   }
@@ -231,7 +233,16 @@
     tn: tn,
     number: number,
     date: (value, options) => {
-      try { return new Intl.DateTimeFormat(current || code || "en", options).format(value instanceof Date ? value : new Date(value)); } catch (e) { return String(value); }
+      try {
+        const locale = current || code || "en";
+        const key = locale + "|" + JSON.stringify(options || null);
+        let formatter = dateFormats.get(key);
+        if (!formatter) {
+          formatter = new Intl.DateTimeFormat(locale, options);
+          dateFormats.set(key, formatter);
+        }
+        return formatter.format(value instanceof Date ? value : new Date(value));
+      } catch (e) { return String(value); }
     },
     apply: apply,
     setLang: setLang,

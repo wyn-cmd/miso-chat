@@ -3,20 +3,20 @@
 // Theme and highlight colour. Stored per browser in localStorage ("rp_theme", "rp_accent").
 // The light/dark tokens live in style.css and tokens.css; theme-init.js sets the attribute before first paint.
 // "rp_ui" picks which look the app wears: "moon" (Moonlit, the default, a sheet of its own over redesign.css),
-// "folio" (Soft Shadows), "dusk", or "classic" (Hyacinth, the 1.4.1 look). The stored value stays "classic" even
+// "lantern" (Lantern), "dusk", or "classic" (Hyacinth, the 1.4.1 look). The stored value stays "classic" even
 // though the theme is named Hyacinth, so choices already saved in a browser keep working. Classic switches the
 // redesign stylesheet off, so the plain style.css underneath shows through. The other looks keep redesign.css and
-// add their own sheet over it, with data-look set to the look's name. A saved look that no longer exists (Spore)
-// falls back to Moonlit.
+// add their own sheet over it, with data-look set to the look's name. A saved look that no longer exists (Spore,
+// Folio) falls back to Moonlit.
 const UI_KEY = "rp_ui";
 const UI_CLASSIC = "classic";
 const UI_MOON = "moon";
-const UI_FOLIO = "folio";
+const UI_LANTERN = "lantern";
 const UI_DUSK = "dusk";
 // The sheet each look adds over redesign.css. Hyacinth switches redesign.css off instead.
-const LOOK_SHEETS = { moon: "/static/moon.css", folio: "/static/folio.css", dusk: "/static/dusk.css" };
+const LOOK_SHEETS = { moon: "/static/moon.css", lantern: "/static/lantern.css", dusk: "/static/dusk.css" };
 const ACCENT_DEFAULT_DUSK = "#a0b0f4";
-const ACCENT_DEFAULT_FOLIO = "#1b6e66";
+const ACCENT_DEFAULT_LANTERN = "#e9b25a";
 const ACCENT_DEFAULT_CLASSIC = "#4cc4ff";
 const ACCENT_DEFAULT_MOON = "#8fd3cc";
 const THEME_KEY = "rp_theme";
@@ -46,7 +46,7 @@ function uiThemeName() {
 function accentDefault() {
   const look = uiThemeName();
   if (look === UI_CLASSIC) return ACCENT_DEFAULT_CLASSIC;
-  if (look === UI_FOLIO) return ACCENT_DEFAULT_FOLIO;
+  if (look === UI_LANTERN) return ACCENT_DEFAULT_LANTERN;
   if (look === UI_DUSK) return ACCENT_DEFAULT_DUSK;
   return ACCENT_DEFAULT_MOON;
 }
@@ -341,6 +341,21 @@ function faceIcon(hex) {
   }
   span.innerHTML = `<svg viewBox="0 0 64 64" focusable="false"><circle cx="23" cy="27" r="4.5" fill="${ink}"/><circle cx="41" cy="27" r="4.5" fill="${ink}"/><path d="M21 40 Q32 50 43 40" fill="none" stroke="${ink}" stroke-width="4" stroke-linecap="round"/></svg>`;
   return span;
+}
+
+// Same rule as fold_accents in web/profiles.py: accents go from Latin letters only. Tags are folded with it.
+function foldAccents(text) {
+  let out = "";
+  let latin = false;
+  for (const c of text.normalize("NFD")) {
+    if (/\p{M}/u.test(c)) {
+      if (latin) continue;
+    } else {
+      latin = /^\p{Script=Latin}/u.test(c);
+    }
+    out += c;
+  }
+  return out.normalize("NFC");
 }
 
 function el(tag, text, cls) {

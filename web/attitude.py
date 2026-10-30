@@ -16,11 +16,11 @@ LEVELS = ("stranger", "acquaintance", "friend", "partner", "married")
 START_AFFECTION = 5.0
 START_TRUST = 5.0
 
-COOLDOWN = 3              # exchanges before the same event may count again
+COOLDOWN = 9              # exchanges before the same event may count again
 MAX_TURN = 6.0            # most the scores may move in one exchange, up or down
 HOLD_MARGIN = 5.0         # a level is kept until a score falls this far below its mark
-DECAY_AFTER = 30          # exchanges without a bonding event before trust starts to ease
-DECAY_EVERY = 10          # then one more point of trust eases every this many exchanges
+DECAY_AFTER = 5           # exchanges without a bonding event before trust starts to ease
+DECAY_EVERY = 5           # then one more point of trust eases every this many exchanges
 DECAY_TRUST = 1.0
 MARRY_AFFECTION = 85.0    # the proposal is accepted only from partner level, at these scores
 MARRY_TRUST = 75.0
@@ -41,6 +41,16 @@ EVENTS = {
                           r"\bplay a game\b", r"\bspend (some )?time\b"],
                  "affection": 2, "trust": 1, "bonding": True,
                  "says": "the user suggested doing something together"},
+    "cuddle": {"keys": [r"\bcuddl(e|es|ed|ing)\b", r"\bsnuggl(e|es|ed|ing)\b"],
+               "affection": 2, "trust": 1, "bonding": True,
+               "says": "the user cuddled you"},
+    "rest": {"keys": [r"\b(get some rest|have a rest|take a rest|let'?s rest|we can rest|i (want|need) to rest)\b",
+                      r"\b(i )?(need|want) (some )?rest\b", r"\brest (with|beside|next to) you\b", r"\bresting\b",
+                      r"\b(let'?s|we can|can we|i (want|need) to) (sleep|nap)\b",
+                      r"\bsleep (with|beside|next to|together)\b", r"\b(go to|going to|time to) sleep\b",
+                      r"\bsleeping\b", r"\bnap(ping|s|ped)?\b"],
+             "affection": 1, "trust": 1, "bonding": True,
+             "says": "the user rested with you"},
     "share": {"keys": [r"\bhow was your day\b", r"\btell me about yourself\b", r"\bwhat do you like\b",
                        r"\bwhat'?s your favou?rite\b"],
               "affection": 2, "trust": 1, "bonding": True,
@@ -144,8 +154,15 @@ def level_for(current, affection, trust):
 
 
 # One exchange: the message is read for events, the scores move, trust may ease, and the level is re-read.
-# Returns the new state and what happened this turn, for the prompt.
-def apply(state, text):
+# A character's relationship speed multiplies the positive change only; unkindness and trust decay are not
+# scaled. Returns the new state and what happened this turn, for the prompt.
+def _move(values, multiplier):
+    positive = min(sum(v for v in values if v > 0), MAX_TURN) * multiplier
+    negative = max(sum(v for v in values if v < 0), -MAX_TURN)
+    return positive + negative
+
+
+def apply(state, text, affection_multiplier=1.0, trust_multiplier=1.0):
     s = dict(state)
     s["last_fired"] = dict(state["last_fired"])
     s["exchanges"] += 1
@@ -159,8 +176,8 @@ def apply(state, text):
             continue
         s["last_fired"][name] = n
         took.append(name)
-    affection = _clamp(sum(EVENTS[e]["affection"] for e in took), -MAX_TURN, MAX_TURN)
-    trust = _clamp(sum(EVENTS[e]["trust"] for e in took), -MAX_TURN, MAX_TURN)
+    affection = _move([EVENTS[e]["affection"] for e in took], max(0.0, affection_multiplier))
+    trust = _move([EVENTS[e]["trust"] for e in took], max(0.0, trust_multiplier))
     s["affection"] = _clamp(s["affection"] + affection, 0.0, 100.0)
     s["trust"] = _clamp(s["trust"] + trust, 0.0, 100.0)
 
