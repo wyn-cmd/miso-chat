@@ -77,9 +77,9 @@ Moonlit, on a phone:
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/moonlit-phone-chat.png" alt="Moonlit: a chat on a phone" width="220"><br>A chat</td>
-    <td align="center"><img src="docs/screenshots/moonlit-phone-settings.png" alt="Moonlit: settings on a phone" width="220"><br>Settings</td>
-    <td align="center"><img src="docs/screenshots/moonlit-phone-home.png" alt="Moonlit: home on a phone" width="220"><br>Home</td>
+    <td align="center"><img src="docs/screenshots/moonlit-phone-chat.png" alt="Moonlit: a chat on a phone" width="200"><br>A chat</td>
+    <td align="center"><img src="docs/screenshots/moonlit-phone-settings.png" alt="Moonlit: settings on a phone" width="200"><br>Settings</td>
+    <td align="center"><img src="docs/screenshots/moonlit-phone-home.png" alt="Moonlit: home on a phone" width="200"><br>Home</td>
   </tr>
 </table>
 
