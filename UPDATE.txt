@@ -15,7 +15,6 @@ Before you update, note these changes:
 - State-changing requests must come from the same origin. A reverse proxy that rewrites the Host header may need its forwarded headers kept intact.
 - The request rate limit is 30 a second or 600 a minute. Icon and background requests are exempt, and a burst gets a short cooldown rather than a permanent block.
 - Character icons and backgrounds now cache for five minutes in the browser instead of being fetched on every page load.
-- This beta zip carries no tests folder. Any tests already on the server are left in place and are not updated.
 
 1. Stop the web app.
 
