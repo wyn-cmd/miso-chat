@@ -46,6 +46,23 @@ h1 { margin:0 0 12px; font-size:22px; } h2 { font-size:18px; margin:18px 0 8px; 
 .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
 select, input, textarea { font: inherit; padding:8px 11px; border:1px solid var(--line); border-radius:10px; background:var(--input); color:var(--ink); transition: border-color .15s, box-shadow .15s; }
 select:focus, input:focus, textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+/* The plain look gives its selects the same custom caret as the themed looks, in its own ink and paper, so no
+   dropdown falls back to the browser's grey arrow or menu. */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 34px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+select:hover { border-color: var(--border-strong); }
+select option, select optgroup { background: var(--input); color: var(--ink); }
+select.font-select { padding-right: 26px; background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%; }
 input[type=number].cap { width:90px; }
 input[type=number].scale-num { width: 82px; }
 label { display:flex; flex-direction:column; gap:4px; font-size:14px; }
@@ -69,7 +86,7 @@ a { color:var(--accent); }
 .line.scenario:not(.note) { background: color-mix(in srgb, var(--accent) 8%, var(--card)); border:1px solid var(--accent-soft); }
 .line.scenario .speaker { text-transform:uppercase; letter-spacing:.05em; font-size:11px; }
 .scenario-actions { display:flex; gap:8px; margin-top:10px; }
-.speaker { font-size:12px; font-weight:700; color:var(--muted); margin-bottom:2px; }
+.speaker { font-size:11px; font-weight:700; color:var(--muted); margin-bottom:2px; }
 .text { white-space: pre-wrap; word-wrap: break-word; }
 .composer { display:flex; gap:10px; margin-top:10px; }
 /* monthly token budget bar, shown after the request and token counter */
@@ -190,19 +207,20 @@ body { --chat-size: 15px; }
 
 /* badge mode (default): a coloured name pill and a coloured edge on the bubble */
 .bubble-badge .line.coloured { border-left: 3px solid var(--speaker); }
-.bubble-badge .line.coloured .speaker { display: inline-block; background: var(--speaker); color: var(--speaker-text); padding: 1px 9px; border-radius: 999px; margin-bottom: 4px; opacity: 1; }
+.bubble-badge .line.coloured .speaker { display: inline-block; background: var(--speaker); color: var(--speaker-text); padding: 1px 7px; border-radius: 999px; margin-bottom: 4px; opacity: 1; }
 
-/* bubble mode: the whole bubble takes the colour; text switches black or white for legibility */
-.bubble-bubble .line.coloured { background: var(--speaker); color: var(--speaker-text); border-color: var(--speaker); }
-.bubble-bubble .line.coloured .speaker { color: var(--speaker-text); opacity: .8; }
-.bubble-bubble .line.coloured .text { color: var(--speaker-text); }
+/* bubble mode: the whole bubble takes the colour, washed toward the page; text is picked against that wash
+   (--speaker-text2, black on pale tints) while the solid badge keeps the raw colour's --speaker-text */
+.bubble-bubble .line.coloured { background: var(--speaker); color: var(--speaker-text2, var(--speaker-text)); border-color: var(--speaker); }
+.bubble-bubble .line.coloured .speaker { color: var(--speaker-text2, var(--speaker-text)); opacity: .8; }
+.bubble-bubble .line.coloured .text { color: var(--speaker-text2, var(--speaker-text)); }
 .bubble-bubble .line.coloured .text em { color: inherit; opacity: .82; }
-.bubble-bubble .line.coloured .text a { color: var(--speaker-text); text-decoration: underline; }
+.bubble-bubble .line.coloured .text a { color: var(--speaker-text2, var(--speaker-text)); text-decoration: underline; }
 .bubble-bubble .line.coloured .text code,
-.bubble-bubble .line.coloured .text pre { background: var(--chip); border-color: transparent; }
-.bubble-bubble .line.coloured .text blockquote { border-left-color: var(--speaker-text); color: inherit; opacity: .9; }
-.bubble-bubble .line.coloured .text strong { color: var(--speaker-text); }
-.bubble-bubble .line.coloured .text hr { border-top-color: var(--speaker-text); opacity: .4; }
+.bubble-bubble .line.coloured .text pre { background: var(--chip2, var(--chip)); border-color: transparent; }
+.bubble-bubble .line.coloured .text blockquote { border-left-color: var(--speaker-text2, var(--speaker-text)); color: inherit; opacity: .9; }
+.bubble-bubble .line.coloured .text strong { color: var(--speaker-text2, var(--speaker-text)); }
+.bubble-bubble .line.coloured .text hr { border-top-color: var(--speaker-text2, var(--speaker-text)); opacity: .4; }
 
 /* ---- sidebar: icon beside each name, edit pencil for admins */
 .char-item { display: flex; align-items: center; gap: 8px; }
@@ -304,6 +322,9 @@ body.fit-viewport { position: fixed; left: 0; right: 0; overflow: hidden; }
 #chatSection .bar { align-items: center; }
 .chat-icon { width: 34px; height: 34px; font-size: 14px; margin-right: 8px; flex: none; }
 .stamp { font-size: 11px; color: var(--muted); text-align: right; margin-top: 4px; opacity: .85; }
+#log .msg-tools { display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+#log .msg-tools .speak-btn, #log .msg-tools .edit-btn { margin-top: 0; }
+#log .msg-tools .stamp { margin-top: 0; margin-left: auto; }
 input.budget { width: 84px; margin-right: 4px; }
 
 
@@ -695,6 +716,12 @@ main > section:has(> table) { overflow-x: auto; }
   font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); cursor: pointer; }
 .theme-music-toggle[aria-pressed="false"] { opacity: 0.6; }
 .theme-music-toggle[hidden] { display: none; }
+/* Phones keep the music switch inside the character drawer, so it never sits over the prompt. */
+@media (max-width: 760px) {
+  body:has(#sidebar) .theme-music-toggle { display: none; }
+  body:has(#sidebar.open) .theme-music-toggle:not([hidden]) { display: inline-flex; }
+  body:has(#sidebar) .sidebar { padding-bottom: 64px; }
+}
 .export-box { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 
 /* The Mind Palace check (palace_audit.js). */
@@ -731,17 +758,17 @@ main > section:has(> table) { overflow-x: auto; }
 
 /* Chat window: a little darker in dark mode, and see-through over a character's background. */
 :root:not([data-theme="light"]) .log { background: linear-gradient(180deg, color-mix(in srgb, var(--card) 60%, #000), color-mix(in srgb, var(--surface) 60%, #000)); }
-#chatSection.has-art .log { background: linear-gradient(180deg, color-mix(in srgb, var(--card) 25%, transparent), color-mix(in srgb, var(--surface) 25%, transparent)); }
-:root:not([data-theme="light"]) #chatSection.has-art .log { background: linear-gradient(180deg, color-mix(in srgb, color-mix(in srgb, var(--card) 60%, #000) 25%, transparent), color-mix(in srgb, color-mix(in srgb, var(--surface) 60%, #000) 25%, transparent)); }
+#chatSection.has-art .log { background: linear-gradient(180deg, color-mix(in srgb, var(--card) 16%, transparent), color-mix(in srgb, var(--surface) 16%, transparent)); }
+:root:not([data-theme="light"]) #chatSection.has-art .log { background: linear-gradient(180deg, color-mix(in srgb, color-mix(in srgb, var(--card) 45%, #000) 18%, transparent), color-mix(in srgb, color-mix(in srgb, var(--surface) 45%, #000) 18%, transparent)); }
 
-:root { --shade-overlay: rgba(0, 0, 0, 0); --bubble-alpha: 72%; }
+:root { --shade-overlay: rgba(0, 0, 0, 0); --bubble-alpha: 60%; }
 /* Chat bubbles: a little see-through in both themes, and darker in dark mode. Notes stay plain. */
 .line:not(.note) { background: color-mix(in srgb, var(--theirs) var(--bubble-alpha), transparent); }
 .line.mine:not(.note) { background: color-mix(in srgb, var(--mine) var(--bubble-alpha), transparent); }
 .bubble-bubble .line.coloured { background: color-mix(in srgb, var(--speaker) var(--bubble-alpha), transparent); }
-:root:not([data-theme="light"]) .line:not(.note) { background: color-mix(in srgb, color-mix(in srgb, var(--theirs) 65%, #000) var(--bubble-alpha), transparent); }
-:root:not([data-theme="light"]) .line.mine:not(.note) { background: color-mix(in srgb, color-mix(in srgb, var(--mine) 65%, #000) var(--bubble-alpha), transparent); }
-:root:not([data-theme="light"]) .bubble-bubble .line.coloured { background: color-mix(in srgb, color-mix(in srgb, var(--speaker) 65%, #000) var(--bubble-alpha), transparent); }
+:root:not([data-theme="light"]) .line:not(.note) { background: color-mix(in srgb, color-mix(in srgb, var(--theirs) 50%, #000) var(--bubble-alpha), transparent); }
+:root:not([data-theme="light"]) .line.mine:not(.note) { background: color-mix(in srgb, color-mix(in srgb, var(--mine) 50%, #000) var(--bubble-alpha), transparent); }
+:root:not([data-theme="light"]) .bubble-bubble .line.coloured { background: color-mix(in srgb, color-mix(in srgb, var(--speaker) 50%, #000) var(--bubble-alpha), transparent); }
 .line:not(.note) { box-shadow: 0 4px 12px rgba(0, 0, 0, .5); }
 
 /* Draft and Mind Palace boxes in the character editor. */
@@ -776,6 +803,25 @@ dialog.dlg::backdrop { background: rgba(0, 0, 0, .55); }
 .dlg-actions .grow { flex: 1; }
 .dream-bubbles-dlg { width: min(760px, 94vw); }
 .dream-item-dlg { width: min(460px, 94vw); max-height: 88vh; overflow-y: auto; }
+/* Mini-games: the play dialog sized to the game it holds, the picker cards and the sandboxed frame */
+dialog.dlg.game-dlg { width: min(var(--game-w, 820px), calc(100vw - 24px)); height: min(var(--game-h, 600px), calc(100vh - 24px)); max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); margin: auto; padding: 0; box-sizing: border-box; overflow: hidden; }
+dialog.dlg.game-dlg[open] { display: flex; flex-direction: column; }
+.game-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex: none; }
+.game-head h2 { font-size: 16px; margin: 0; }
+.game-who { min-width: 0; }
+.game-who p { margin: 2px 0 0; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.game-head .grow { flex: 1; }
+.game-head button { flex: none; white-space: nowrap; }
+.game-list { flex: 1; overflow: auto; padding: 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; align-content: start; }
+.game-card { text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; color: var(--ink); box-shadow: none; font: inherit; font-weight: 400; cursor: pointer; }
+.game-card:hover, .game-card:focus-visible { border-color: var(--accent); }
+.game-card .g-name { margin: 0 0 4px; font-weight: 600; }
+.game-card .g-desc { margin: 0; color: var(--text-soft); font-size: 13px; }
+.game-card .g-meta { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+.game-stage { flex: 1; min-height: 0; position: relative; }
+.game-stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; }
+.game-note { margin: 0; padding: 0 16px 8px; }
+.game-dlg .dlg-actions { margin: 0; padding: 10px 16px; border-top: 1px solid var(--line); flex: none; }
 .dream-bubble-field { position: relative; height: min(56vh, 420px); margin: 8px 0 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); touch-action: none; }
 .dream-bubble { position: absolute; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 180px; padding: 6px 11px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); color: var(--text); font-weight: 500; text-align: left; box-shadow: 0 4px 12px rgba(0, 0, 0, .18); cursor: grab; user-select: none; touch-action: none; }
 .dream-bubble:hover, .dream-bubble:focus-visible { border-color: var(--accent); }
@@ -846,7 +892,12 @@ body.page-art { background: linear-gradient(var(--shade-overlay), var(--shade-ov
 #log .speak-btn:hover, #log .speak-btn:focus-visible { opacity: 1; color: var(--accent); border-color: var(--line); outline: none; box-shadow: none; transform: none; }
 #log .speak-btn.speaking { opacity: 1; color: var(--accent); background: var(--accent-soft); }
 #log .speak-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-#log .bubble-bubble .line.coloured .speak-btn { color: var(--speaker-text); opacity: .8; }
+#log .bubble-bubble .line.coloured .speak-btn { color: var(--speaker-text2, var(--speaker-text)); opacity: .8; }
+/* Voice profiles in Settings: a name and its voice on one line, with an Edit button on the right. */
+.tts-profile-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.tts-profile-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.tts-profile-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tts-profile-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Character state bars in the settings sheet: energy, affinity, affection and trust. */
 .metric { margin: 8px 0 10px; }

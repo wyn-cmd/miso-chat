@@ -1,0 +1,23 @@
+{
+  "name": "miso-chat-desktop",
+  "productName": "Miso Chat",
+  "version": "1.6.1",
+  "description": "Desktop shell for Miso Chat: runs the local server and opens it in its own window.",
+  "license": "MIT",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --config electron-builder.config.js",
+    "dist:win": "electron-builder --config electron-builder.config.js --win --x64",
+    "dist:linux": "electron-builder --config electron-builder.config.js --linux --x64",
+    "dist:mac": "electron-builder --config electron-builder.config.js --mac dir --arm64"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  }
+}

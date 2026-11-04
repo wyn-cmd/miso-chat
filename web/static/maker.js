@@ -135,7 +135,12 @@ async function createWorld() {
   }
 }
 
-// A group's picture or background, sent or removed, then shown as saved.
+// A chat's picture or background, sent or removed, then shown as saved. A group has both; a novel has only
+// the background, because a novel has no picture of its own in the sidebar.
+function chatBase() {
+  return (KIND === "novel" ? "/api/novels/" : "/api/groups/") + encodeURIComponent(EDIT_ID);
+}
+
 async function changeArt(kind, method, file) {
   const icon = kind === "icon";
   const msg = $(icon ? "iconMsg" : "bgMsg");
@@ -143,7 +148,7 @@ async function changeArt(kind, method, file) {
   const input = $(icon ? "iconFile" : "bgFile");
   msg.textContent = method === "DELETE" ? tr("Removing...") : tr("Uploading...");
   try {
-    const r = await fetch("/api/groups/" + encodeURIComponent(EDIT_ID) + "/" + kind, {
+    const r = await fetch(chatBase() + "/" + kind, {
       method,
       headers: { "X-Requested-With": "roleplay", "Content-Type": "application/octet-stream" },
       credentials: "same-origin",
@@ -161,6 +166,49 @@ async function changeArt(kind, method, file) {
     input.value = "";
   } catch (err) {
     msg.textContent = err.message;
+  }
+}
+
+// The chat's theme music: the same list a character has, up to three tracks, played in order.
+const MUSIC_MAX = 3;
+let musicItems = [];
+
+function renderMusic(items) {
+  musicItems = items || [];
+  themeMusic.renderList($("makerMusicList"), musicItems, { onRemove: removeMusic });
+  $("musicFile").disabled = musicItems.length >= MUSIC_MAX;
+  if (musicItems.length >= MUSIC_MAX) $("musicAdd").disabled = true;
+  $("musicMsg").textContent = tr("{n} of {max} tracks.", { n: musicItems.length, max: MUSIC_MAX });
+}
+
+async function refreshMusic() {
+  const data = KIND === "novel" ? await api("GET", "/api/novels") : await api("GET", "/api/groups");
+  const list = KIND === "novel" ? data.novels : data.groups;
+  const item = (list || []).find((row) => row.id === EDIT_ID);
+  renderMusic(item ? item.music : []);
+}
+
+async function addMusic() {
+  const file = $("musicFile").files[0];
+  if (!file || !EDIT_ID) return;
+  $("musicMsg").textContent = tr("Uploading...");
+  try {
+    await themeMusic.upload(chatBase() + "/music", file, file.name.replace(/\.[^.]+$/, ""));
+    $("musicFile").value = "";
+    $("musicAdd").disabled = true;
+    await refreshMusic();
+  } catch (err) {
+    $("musicMsg").textContent = err.message;
+  }
+}
+
+async function removeMusic(id) {
+  $("musicMsg").textContent = tr("Removing...");
+  try {
+    await api("DELETE", chatBase() + "/music/" + encodeURIComponent(id));
+    await refreshMusic();
+  } catch (err) {
+    $("musicMsg").textContent = err.message;
   }
 }
 
@@ -231,17 +279,22 @@ async function init() {
     if (EDIT_ID && !item) return fail(tr("That novel no longer exists."));
     drawWorld(worlds, item ? (item.world || "") : "");
     $("worldBox").hidden = false;
+    // A novel's background and theme music live on the novel, so they can be set only once it exists.
+    $("iconRow").hidden = true;
+    $("artNote").textContent = tr("The background behind this novel's chat. Only you see it. A new picture replaces the old one.");
   } else {
     const data = await api("GET", "/api/groups");
     noteMax = data.note_max;
     item = EDIT_ID ? data.groups.find((g) => g.id === EDIT_ID) : null;
     if (EDIT_ID && !item) return fail(tr("That group no longer exists."));
-    // A group's picture and background are kept on the group, so they can be set only once it exists.
-    $("artBox").hidden = !item;
-    if (item) {
-      $("iconRemove").hidden = !item.has_icon;
-      $("bgRemove").hidden = !item.has_background;
-    }
+  }
+  // Pictures and theme music are kept on the chat itself, so the boxes wait until it exists.
+  $("artBox").hidden = !item;
+  $("musicBox").hidden = !item;
+  if (item) {
+    if (KIND !== "novel") $("iconRemove").hidden = !item.has_icon;
+    $("bgRemove").hidden = !item.has_background;
+    renderMusic(item.music || []);
   }
 
   const selected = item ? item.members.map((m) => m.name) : [];
@@ -270,6 +323,10 @@ async function init() {
     if (file) changeArt("background", "POST", file);
   });
   $("bgRemove").addEventListener("click", () => changeArt("background", "DELETE"));
+  $("musicFile").addEventListener("change", () => {
+    $("musicAdd").disabled = !$("musicFile").files[0] || musicItems.length >= MUSIC_MAX;
+  });
+  $("musicAdd").addEventListener("click", addMusic);
   $("loading").hidden = true;
   $("makerSection").hidden = false;
   $("makerName").focus();

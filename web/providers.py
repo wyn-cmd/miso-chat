@@ -1,4 +1,5 @@
-# Provider settings for the web app: DeepSeek key, local LLM endpoint and key, Claude Code location.
+# Provider settings for the web app: DeepSeek key, local LLM endpoint and key, Claude Code location, and the
+# speech server that reads replies aloud.
 #
 # Stored as providers.json in the data folder (outside the character tree and outside git). Keys are
 # written with owner-only permissions where the OS supports it, and are never returned to the browser:
@@ -12,6 +13,10 @@ DEFAULTS = {
     "deepseek": {"enabled": False, "api_key": ""},
     "local": {"enabled": False, "base_url": "http://127.0.0.1:8000/v1", "api_key": "", "models": ""},
     "claude": {"enabled": False, "exe": ""},
+    # A llama.cpp server started with an audio model, or any server with an OpenAI-compatible speech endpoint.
+    # style "llama" posts to /tts and accepts a reference clip; style "openai" posts to /v1/audio/speech.
+    "audio": {"enabled": False, "base_url": "http://127.0.0.1:8080", "api_key": "", "style": "llama",
+              "model": "", "lang": "en", "voice": "female", "timeout": 60, "sample_rate": 24000},
 }
 
 
@@ -63,6 +68,11 @@ def public_view(cfg):
                   "models": cfg["local"]["models"]},
         "claude": {"enabled": bool(cfg["claude"]["enabled"]), "exe": cfg["claude"]["exe"],
                    "found": bool(shutil.which(cfg["claude"]["exe"] or "claude"))},
+        "audio": {"enabled": bool(cfg["audio"]["enabled"]), "base_url": cfg["audio"]["base_url"],
+                  "key_set": bool(cfg["audio"]["api_key"]), "key_hint": mask(cfg["audio"]["api_key"]),
+                  "style": cfg["audio"]["style"], "model": cfg["audio"]["model"],
+                  "lang": cfg["audio"]["lang"], "voice": cfg["audio"]["voice"],
+                  "timeout": cfg["audio"]["timeout"], "sample_rate": cfg["audio"]["sample_rate"]},
     }
 
 
@@ -79,7 +89,17 @@ def update(data_dir, patch):
                 continue
             if key == "enabled":
                 cfg[name][key] = bool(val)
-            elif key in ("base_url", "exe", "models", "api_key"):
+            elif key == "style":
+                cfg[name][key] = "openai" if str(val).strip().lower() == "openai" else "llama"
+            elif key == "voice":
+                cfg[name][key] = "male" if str(val).strip().lower() == "male" else "female"
+            elif key in ("timeout", "sample_rate"):
+                low, high = (1, 600) if key == "timeout" else (8000, 48000)
+                try:
+                    cfg[name][key] = min(high, max(low, int(val)))
+                except (TypeError, ValueError):
+                    pass
+            else:
                 cfg[name][key] = str(val).strip()
     save(data_dir, cfg)
     return cfg

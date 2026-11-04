@@ -1,0 +1,291 @@
+/* Plexiglass: the fourth look. Panes of frosted glass over a near-white room lit by pale blue orbs: surfaces are
+   translucent and blurred, and their edges are drawn as a rounded highlight that warps around the corner instead of a
+   solid outline. It loads over redesign.css, like Moonlit and Lantern, so the layout and behaviour are unchanged and this
+   sheet only changes the surface. The faces are the app's bundled Instrument Sans: the app does not load fonts from
+   outside. The sheet is applied by the data-look="plexiglass" attribute that common.js and the inline head script set. */
+
+:root[data-look="plexiglass"] {
+  --font-display: "Instrument Sans", system-ui, sans-serif;
+  --display-weight: 500;
+  --tracking-display: -0.02em;
+  --grain: 0;
+  --radius-card: 26px;
+  --radius-field: 14px;
+  --color-error: #b3262e;
+  color-scheme: light;
+  /* A near-white room with pale blue light: the panes are barely there, so the orbs behind them do the colouring. */
+  --color-paper: #f4f9ff; --color-paper-2: #fbfdff; --color-paper-3: #eaf3fc;
+  --color-ink: #0b1c2c; --color-ink-2: #2a4258; --color-muted: #5c7186;
+  --color-rule: rgba(20, 60, 100, 0.14);
+  --color-accent: #2f9fd8; --color-accent-2: #6fc8ff;
+  --color-accent-3: #8fd2f7;
+  --color-accent-ink: #04202e; --color-focus: #2f9fd8;
+  --color-jade: #2ca58d; --color-jade-ink: #f2fffb;
+  --meta-theme: #f4f9ff;
+  --glass: rgba(255, 255, 255, 0.16);
+  --glass-strong: rgba(255, 255, 255, 0.28);
+  --glass-mine: rgba(47, 159, 216, 0.12);
+  --glass-edge: rgba(255, 255, 255, 0.95);
+  --glass-edge-2: rgba(20, 60, 100, 0.10);
+  --glass-shadow: 0 24px 60px -30px rgba(40, 90, 130, 0.30);
+  --glass-blur: 22px;
+  --glass-sheen: linear-gradient(135deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0) 38%, rgba(255, 255, 255, 0.18) 100%);
+  --glass-radius: 26px 32px 24px 34px / 32px 26px 34px 24px;
+  --glass-bubble: 24px 30px 26px 12px / 26px 24px 30px 14px;
+  --glass-bubble-mine: 30px 24px 12px 26px / 24px 30px 14px 26px;
+  --glass-pill: 18px 24px 20px 26px / 24px 18px 26px 20px;
+  --glass-scrim: color-mix(in oklab, var(--color-paper) 8%, transparent);
+  --glass-orb: color-mix(in oklab, #7cc8ff 58%, transparent);
+  --glass-orb-2: color-mix(in oklab, #b9e8ff 66%, transparent);
+}
+
+
+/* The page itself is the light source: four soft blue orbs over a near-white wash, so the glass has something to
+   refract without a photograph. */
+:root[data-look="plexiglass"] body {
+  background:
+    radial-gradient(circle at 14% 10%, var(--glass-orb) 0, transparent 30%),
+    radial-gradient(circle at 84% 8%, color-mix(in oklab, #9bd8ff 46%, transparent) 0, transparent 27%),
+    radial-gradient(circle at 76% 86%, var(--glass-orb-2) 0, transparent 34%),
+    radial-gradient(circle at 8% 84%, color-mix(in oklab, #d8f3ff 72%, transparent) 0, transparent 30%),
+    linear-gradient(180deg, #fbfdff, #eef7ff);
+  background-attachment: fixed;
+}
+/* The drifting page field is pale blue in this look, even when a character's mood would tint another look warmer. */
+:root[data-look="plexiglass"] .ambient-page {
+  --tone-1: #8ed3ff;
+  --tone-2: #b6e6ff;
+  --tone-3: #d4f1ff;
+}
+/* A picture behind the page still shows, under a glass scrim in the ground's colour. */
+:root[data-look="plexiglass"] body.page-art {
+  background:
+    linear-gradient(var(--glass-scrim), var(--glass-scrim)),
+    linear-gradient(var(--shade-overlay), var(--shade-overlay)),
+    var(--chat-art) center / cover no-repeat fixed; /* taste-skill-ignore: a flat neutral scrim over a photograph */
+}
+
+/* One pane recipe, used by every raised surface: frosted fill, a sheen, and highlights inset along every edge so the
+   rim reads as the curved edge of a thick sheet rather than a painted border. */
+:root[data-look="plexiglass"] .line,
+:root[data-look="plexiglass"] .card,
+:root[data-look="plexiglass"] .set-panel,
+:root[data-look="plexiglass"] .home-card,
+:root[data-look="plexiglass"] .example-row,
+:root[data-look="plexiglass"] .msg-wrap,
+:root[data-look="plexiglass"] .pick-bar,
+:root[data-look="plexiglass"] .tag-panel,
+:root[data-look="plexiglass"] .sandbox-list,
+:root[data-look="plexiglass"] .tree,
+:root[data-look="plexiglass"] .export-box,
+:root[data-look="plexiglass"] dialog,
+:root[data-look="plexiglass"] .sheet-card,
+:root[data-look="plexiglass"] .call-card,
+:root[data-look="plexiglass"] #settingsSheet .set-card,
+:root[data-look="plexiglass"] .budget-alert,
+:root[data-look="plexiglass"] .think,
+:root[data-look="plexiglass"] .text code,
+:root[data-look="plexiglass"] .text pre {
+  background-color: var(--glass);
+  background-image: var(--glass-sheen);
+  border: 0;
+  border-radius: var(--glass-radius);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-2),
+    inset 1px 0 0 var(--glass-edge-2),
+    inset -1px 0 0 var(--glass-edge-2),
+    var(--glass-shadow);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+}
+
+/* Chat: a bubble is a warped pane, the reader's own with a warmer tint and its own corner pulled open. */
+:root[data-look="plexiglass"] .line {
+  border-radius: var(--glass-bubble);
+  padding: var(--space-sm) var(--space-md);
+}
+:root[data-look="plexiglass"] .line.mine,
+:root[data-look="plexiglass"] .line.mine:not(.note) {
+  background-color: var(--glass-mine);
+  border-radius: var(--glass-bubble-mine);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-2),
+    inset 1px 0 0 color-mix(in oklab, var(--color-jade) 55%, transparent),
+    inset -1px 0 0 color-mix(in oklab, var(--color-jade) 55%, transparent),
+    var(--glass-shadow);
+}
+:root[data-look="plexiglass"] .line.note,
+:root[data-look="plexiglass"] .line.event {
+  background: transparent;
+  background-image: none;
+  box-shadow: inset 2px 0 0 var(--color-rule);
+  border-radius: 0 var(--radius-field) var(--radius-field) 0;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* Tool call and reasoning boxes stay plain so code does not sit on a blur. */
+:root[data-look="plexiglass"] .text code,
+:root[data-look="plexiglass"] .text pre,
+:root[data-look="plexiglass"] .think {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Call transcript rows keep the glass tint but skip a second blur inside the call pane. */
+:root[data-look="plexiglass"] .call-line {
+  background: var(--glass);
+  border: 0;
+  border-radius: var(--glass-bubble);
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+}
+:root[data-look="plexiglass"] .call-line.you { background: var(--glass-mine); }
+:root[data-look="plexiglass"] .call-line.note { background: transparent; box-shadow: none; }
+
+/* Buttons: ghost controls are small panes with the same warped rim; the primary action is accent glass, still legible. */
+:root[data-look="plexiglass"] button.ghost,
+:root[data-look="plexiglass"] button.danger,
+:root[data-look="plexiglass"] .icon-btn,
+:root[data-look="plexiglass"] .call-round,
+:root[data-look="plexiglass"] .dice-btn,
+:root[data-look="plexiglass"] .del-btn {
+  background-color: var(--glass);
+  background-image: var(--glass-sheen);
+  border: 0;
+  border-radius: var(--glass-pill);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-2),
+    var(--glass-shadow);
+  backdrop-filter: blur(12px) saturate(1.35);
+  -webkit-backdrop-filter: blur(12px) saturate(1.35);
+}
+:root[data-look="plexiglass"] button.ghost:hover,
+:root[data-look="plexiglass"] .icon-btn:hover,
+:root[data-look="plexiglass"] .call-round:hover {
+  background-color: var(--glass-strong);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-2),
+    0 0 0 3px var(--accent-soft, transparent),
+    var(--glass-shadow);
+}
+:root[data-look="plexiglass"] button.danger {
+  color: var(--color-error);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 0 0 1px color-mix(in oklab, var(--color-error) 55%, transparent),
+    var(--glass-shadow);
+}
+:root[data-look="plexiglass"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):not(.home-info) {
+  background: linear-gradient(135deg, var(--color-accent), var(--color-accent-2));
+  color: var(--color-accent-ink);
+  border: 0;
+  border-radius: var(--glass-pill);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 12px 26px -14px var(--color-accent);
+}
+:root[data-look="plexiglass"] button:not(.ghost):not(.char-item):not(.icon-btn):not(.dice-btn):not(.del-btn):not(.home-info):hover {
+  background: linear-gradient(135deg, var(--color-accent-2), var(--color-accent));
+}
+
+/* Inputs and dropdowns are thin panes too, so a form reads as a row of glass pieces. */
+:root[data-look="plexiglass"] input,
+:root[data-look="plexiglass"] select,
+:root[data-look="plexiglass"] textarea {
+  background-color: var(--glass);
+  background-image: var(--glass-sheen);
+  border: 0;
+  border-radius: var(--radius-field);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-2),
+    inset 0 0 0 1px var(--glass-edge-2);
+  backdrop-filter: blur(10px) saturate(1.3);
+  -webkit-backdrop-filter: blur(10px) saturate(1.3);
+}
+
+/* The sidebar and settings cards are panes; hover deepens the frost rather than painting a line. */
+:root[data-look="plexiglass"] .char-item {
+  background: transparent;
+  border: 0;
+  border-radius: var(--glass-pill);
+}
+:root[data-look="plexiglass"] .char-item:hover:not(:disabled) {
+  background-color: var(--glass);
+  background-image: var(--glass-sheen);
+}
+:root[data-look="plexiglass"] .char-item.active {
+  background-color: var(--glass-strong);
+  background-image: var(--glass-sheen);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-2),
+    inset 2px 0 0 var(--color-accent);
+}
+:root[data-look="plexiglass"] #settingsSheet .set-card:hover,
+:root[data-look="plexiglass"] #settingsSheet .set-card:focus-visible {
+  background-color: var(--glass-strong);
+  background-image: var(--glass-sheen);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-2),
+    0 0 0 2px var(--accent-soft, transparent);
+  outline: none;
+}
+
+/* Icons and avatars sit in their own pane rim. */
+:root[data-look="plexiglass"] .chat-icon,
+:root[data-look="plexiglass"] .char-icon {
+  border-radius: 34% 42% 38% 46% / 42% 34% 46% 38%;
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-2);
+}
+:root[data-look="plexiglass"] .call-avatar {
+  border: 0;
+  border-radius: 38% 46% 42% 50% / 46% 38% 50% 42%;
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-2),
+    0 18px 40px -22px rgba(0, 0, 0, 0.7);
+}
+
+/* Muted labels read as a second ink, not as disabled text. */
+:root[data-look="plexiglass"] .muted { color: var(--color-muted); }
+
+/* The chat panel over a picture frosts the log so the pane still reads. */
+:root[data-look="plexiglass"] #chatSection.has-art .log {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Phone header: the chat's name is squeezed to a sliver beside the wordmark, so it steps out of the way. */
+@media (max-width: 760px) {
+  :root[data-look="plexiglass"] #headerChat .chat-title { display: none; }
+}
+
+/* The chat bar carries one "..." button at its right edge; Tree, Undo, Roll, Select and the name badge
+   live in the actions sheet it opens. The controls themselves stay in the bar for the other themes. */
+:root[data-look="plexiglass"] #chatSection .bar > #branchTree,
+:root[data-look="plexiglass"] #chatSection .bar > #rollBtn,
+:root[data-look="plexiglass"] #chatSection .bar > #undoBtn,
+:root[data-look="plexiglass"] #chatSection .bar > #selectBtn,
+:root[data-look="plexiglass"] #chatSection .bar > #bubbleSelect { display: none; }
+:root[data-look="plexiglass"] #chatSection .bar > #plexiMoreBtn { order: 9; margin-left: auto; font-size: 15px; }
+
+/* The actions sheet is a bottom sheet at every width. */
+#plexiSheet { align-items: flex-end; justify-content: center; }
+#plexiSheet .sheet-card {
+  width: min(440px, 92vw);
+  max-height: 70vh;
+  overflow-y: auto;
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, .3), inset 0 1px 0 var(--glass-edge);
+}
+.plexi-action-grid { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+.plexi-badge-toggle { display: inline-flex; gap: 6px; }
+.plexi-badge-toggle button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent-glow); }

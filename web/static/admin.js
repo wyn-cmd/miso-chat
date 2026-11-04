@@ -157,9 +157,11 @@ async function loadSettings() {
   $("s_dreams_in_novels").checked = s.dreams_in_novels === "1";
   $("s_mood_enabled").checked = s.mood_enabled === "1";
   $("s_attitude_enabled").checked = s.attitude_enabled === "1";
+  $("s_minigames_enabled").checked = s.minigames_enabled === "1";
   $("s_event_memory_enabled").checked = s.event_memory_enabled === "1";
   $("s_memory_policy_enabled").checked = s.memory_policy_enabled === "1";
   $("s_offscreen_enabled").checked = s.offscreen_enabled === "1";
+  $("s_credits_auto_accept").checked = s.credits_auto_accept === "1";
   $("s_dream_daily_cap").value = s.dream_daily_cap;
   $("s_offscreen_daily_cap").value = s.offscreen_daily_cap;
   $("s_dream_every_days").value = s.dream_every_days;
@@ -202,9 +204,11 @@ $("settingsForm").addEventListener("submit", async (ev) => {
       dreams_in_novels: $("s_dreams_in_novels").checked,
       mood_enabled: $("s_mood_enabled").checked,
       attitude_enabled: $("s_attitude_enabled").checked,
+      minigames_enabled: $("s_minigames_enabled").checked,
       event_memory_enabled: $("s_event_memory_enabled").checked,
       memory_policy_enabled: $("s_memory_policy_enabled").checked,
       offscreen_enabled: $("s_offscreen_enabled").checked,
+      credits_auto_accept: $("s_credits_auto_accept").checked,
       dream_daily_cap: parseInt($("s_dream_daily_cap").value, 10),
       offscreen_daily_cap: parseInt($("s_offscreen_daily_cap").value, 10),
       dream_every_days: parseInt($("s_dream_every_days").value, 10),
@@ -334,7 +338,211 @@ async function saveTier(tr) {
     await loadUsers();
     await loadSettings();
     await loadTiers();
+    await loadGames();
   } catch (err) {
     $("err").textContent = err.message;
   }
 })();
+
+// ---- Mini-games: which games are offered to players, importing new ones, and each game's files
+function fileSizeText(n) {
+  if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
+  if (n >= 1024) return Math.round(n / 1024) + " KB";
+  return n + " B";
+}
+
+async function loadGameAssets(g, list) {
+  list.textContent = "";
+  let rows = [];
+  try {
+    rows = (await api("GET", "/api/minigames/assets/" + encodeURIComponent(g.id))).assets || [];
+  } catch (err) {
+    list.appendChild(el("p", err.message, "muted"));
+    return;
+  }
+  for (const a of rows) {
+    const row = el("p", "", "muted");
+    row.style.margin = "2px 0 0 24px";
+    row.textContent = a.name + " · " + fileSizeText(a.size) + " ";
+    const del = el("button", window.tr("Remove"), "ghost small");
+    del.type = "button";
+    del.addEventListener("click", async () => {
+      try {
+        await api("DELETE", "/api/admin/minigames/" + encodeURIComponent(g.id)
+          + "/asset/" + encodeURIComponent(a.name));
+        await loadGameAssets(g, list);
+      } catch (err) {
+        list.appendChild(el("p", err.message, "muted"));
+      }
+    });
+    row.appendChild(del);
+    list.appendChild(row);
+  }
+  if (!rows.length) list.appendChild(el("p", window.tr("No files attached."), "muted"));
+}
+
+function assetPanel(g) {
+  // One game's files: what it has, and a picker to add pictures, sounds or clips.
+  const box = el("div", null, "stack narrow");
+  box.style.margin = "4px 0 0 24px";
+  const list = el("div");
+  const pick = document.createElement("input");
+  pick.type = "file";
+  pick.multiple = true;
+  pick.accept = "image/*,audio/*,video/*,.json,application/json";
+  const label = el("label", "", "inline");
+  label.appendChild(pick);
+  const up = el("button", window.tr("Upload files"), "ghost small");
+  up.type = "button";
+  const msg = el("p", "", "muted");
+  box.appendChild(list);
+  box.appendChild(label);
+  box.appendChild(up);
+  box.appendChild(msg);
+  up.addEventListener("click", async () => {
+    msg.textContent = "";
+    const chosen = [...pick.files];
+    if (!chosen.length) {
+      msg.textContent = window.tr("Pick a file first.");
+      return;
+    }
+    let failed = "";
+    for (const f of chosen) {
+      const name = f.name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 64);
+      try {
+        const r = await fetch("/api/admin/minigames/" + encodeURIComponent(g.id)
+          + "/asset/" + encodeURIComponent(name), {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "X-Requested-With": "roleplay", "Content-Type": f.type || "application/octet-stream" },
+          body: f,
+        });
+        let data = {};
+        try { data = await r.json(); } catch (e) { /* empty body */ }
+        if (!r.ok) throw new Error(data && data.detail ? data.detail : window.tr("Upload failed."));
+      } catch (err) {
+        failed = name + ": " + err.message;
+        break;
+      }
+    }
+    pick.value = "";
+    await loadGameAssets(g, list);
+    msg.textContent = failed;
+  });
+  loadGameAssets(g, list);
+  return box;
+}
+
+async function loadGames() {
+  const rows = $("gameRows");
+  rows.textContent = "";
+  $("gameMsg").textContent = "";
+  let data;
+  try {
+    data = await api("GET", "/api/minigames");
+  } catch (err) {
+    $("gameMsg").textContent = err.message;
+    return;
+  }
+  for (const g of data.games) {
+    const row = document.createElement("div");
+    row.style.marginBottom = "8px";
+    const label = el("label", "", "inline");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = g.on;
+    box.dataset.game = g.id;
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(" " + g.name + (g.source === "imported" ? " (imported)" : "")));
+    row.appendChild(label);
+    if (g.source === "imported") {
+      const del = el("button", "Delete", "ghost small");
+      del.type = "button";
+      del.style.marginLeft = "10px";
+      del.addEventListener("click", async () => {
+        if (!window.confirm(window.tr("Remove {name}? Players lose access and its file is deleted.", { name: g.name }))) return;
+        try {
+          await api("DELETE", "/api/admin/minigames/" + encodeURIComponent(g.id));
+          await loadGames();
+        } catch (err) {
+          $("gameMsg").textContent = err.message;
+        }
+      });
+      row.appendChild(del);
+    }
+    const filesBtn = el("button", window.tr("Files"), "ghost small");
+    filesBtn.type = "button";
+    filesBtn.style.marginLeft = "10px";
+    let panel = null;
+    filesBtn.addEventListener("click", () => {
+      if (panel) {
+        panel.remove();
+        panel = null;
+        return;
+      }
+      panel = assetPanel(g);
+      row.appendChild(panel);
+    });
+    row.appendChild(filesBtn);
+    if (g.description) {
+      const p = el("p", g.description, "muted");
+      p.style.margin = "2px 0 0 24px";
+      row.appendChild(p);
+    }
+    rows.appendChild(row);
+  }
+  if (!data.games.length) rows.appendChild(el("p", "No games.", "muted"));
+}
+
+$("gameSave").addEventListener("click", async () => {
+  $("gameMsg").textContent = "";
+  const ids = [...document.querySelectorAll("#gameRows input[data-game]")]
+    .filter((b) => b.checked).map((b) => b.dataset.game);
+  try {
+    await api("POST", "/api/admin/minigames", { enabled: ids });
+    $("gameMsg").textContent = window.tr("Saved.");
+    await loadGames();
+  } catch (err) {
+    $("gameMsg").textContent = err.message;
+  }
+});
+
+$("gameImportForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  $("gameImportMsg").textContent = "";
+  const file = $("gameFile").files[0];
+  if (!file) {
+    $("gameImportMsg").textContent = window.tr("Pick a game file first.");
+    return;
+  }
+  try {
+    if (/\.zip$/i.test(file.name)) {
+      // A zip holds the game and its own files together. It is not JSON, so it goes as raw bytes
+      // and the reply is read here rather than through api(), which expects JSON from a form POST.
+      const r = await fetch("/api/admin/minigames/import-zip", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-Requested-With": "roleplay", "Content-Type": "application/zip" },
+        body: file,
+      });
+      let data = {};
+      try { data = await r.json(); } catch (e) { /* empty body */ }
+      if (!r.ok) {
+        const detail = data && data.detail;
+        const text = typeof detail === "string" ? detail : (detail && detail.message) || window.tr("Import failed.");
+        throw new Error(text);
+      }
+      let msg = window.tr("Imported {name}. Switch it on in the list, then save.", { name: data.name });
+      if (data.assets) msg += " " + window.tr("{n} files came with it.", { n: data.assets });
+      $("gameImportMsg").textContent = msg;
+    } else {
+      const code = await file.text();
+      const meta = await api("POST", "/api/admin/minigames/import", { code });
+      $("gameImportMsg").textContent = window.tr("Imported {name}. Switch it on in the list, then save.", { name: meta.name });
+    }
+    $("gameImportForm").reset();
+    await loadGames();
+  } catch (err) {
+    $("gameImportMsg").textContent = err.message;
+  }
+});

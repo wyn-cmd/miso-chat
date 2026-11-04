@@ -186,6 +186,7 @@ def add(folder, data, title=""):
     # Opus in WebM with the AAC copy beside it. Refuses past MAX_TRACKS, before any conversion runs.
     if not data:
         raise MusicError("Choose an audio file first.")
+    editor._scan_bytes(data)
     if len(data) > UPLOAD_MAX:
         raise MusicError(f"A track can be up to {UPLOAD_MAX // (1024 * 1024)} MB.")
     current = _read_index(folder)

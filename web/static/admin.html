@@ -11,7 +11,7 @@
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
@@ -66,9 +66,11 @@
       <label class="inline"><input id="s_dreams_in_novels" type="checkbox"> Dreaming in novels (on by default; separate from the switch above)</label>
       <label class="inline"><input id="s_mood_enabled" type="checkbox"> Character mood (energy, affinity, emotion) and lonely check-ins (off by default)</label>
       <label class="inline"><input id="s_attitude_enabled" type="checkbox"> Relationship with the user (affection, trust, five levels) (off by default)</label>
+      <label class="inline"><input id="s_minigames_enabled" type="checkbox"> Mini-games with characters (off by default)</label>
       <label class="inline"><input id="s_event_memory_enabled" type="checkbox"> Event memory graph, written in quiet hours by dreams (off by default)</label>
       <label class="inline"><input id="s_memory_policy_enabled" type="checkbox"> Learned memory retention: score self-written memories by how useful they proved (off by default)</label>
       <label class="inline"><input id="s_offscreen_enabled" type="checkbox"> Off-screen life: a daily director writes what characters did between sessions (off by default)</label>
+      <label class="inline"><input id="s_credits_auto_accept" type="checkbox"> Prepaid credits: approve top-up requests automatically (off by default)</label>
       <label>Dream every how many days <input id="s_dream_every_days" type="number" min="1" max="30" required></label>
       <label>Dream model calls across the server per day <input id="s_dream_daily_cap" type="number" min="1" required></label>
       <p class="muted">Dreams tidy each character's memory during its quiet hours. Their model calls are not counted against any user's requests or tokens, so this cap is the only limit on them. Set it to what you are willing to spend per day.</p>
@@ -79,6 +81,19 @@
       <p class="muted">Posted as JSON when a user's daily, weekly or monthly token budget reaches 80% and again at 100%. Leave empty to turn it off.</p>
         <button type="submit">Save limits</button>
         <p id="settingsMsg" class="muted"></p>
+      </form>
+    </section>
+    <section>
+      <h2>Mini-games</h2>
+      <p class="muted">A game is one small JavaScript file that each player's browser runs in a sandboxed frame with no cookies, storage or network access. During a game the character's mood and relationship level can be shown, progress and the final score are saved to the player's account (a result the page never saw answered is sent again on its own), and the character can be asked for a short in-character line that is also written into the chat. Only games switched on here are offered. Rewards are capped per day and per character by the rules in web/minigames.py.</p>
+      <p class="muted">A game can also have files of its own: pictures, sounds or short clips (6 MB each, 24 MB and 24 files for one game) attached from a game's Files list. The player's page reads them and hands them to the game as data URLs, so the frame still has no network of its own; the game reads them from ctx.assets.</p>
+      <div id="gameRows" class="stack narrow"></div>
+      <p class="row"><button id="gameSave" class="ghost small" type="button">Save enabled games</button> <span id="gameMsg" class="muted" role="status"></span></p>
+      <form id="gameImportForm" class="stack narrow">
+        <label>Import a game file <input id="gameFile" type="file" accept=".js,.zip,text/javascript,application/zip"></label>
+        <p class="muted">A game names itself on its first line, for example: // miso-game: {"id": "my-game", "name": "My Game"}. Only that line is read when importing; the code itself never runs on the server. A zip may hold that one .js file along with its pictures, sounds and clips, and imports all of it in one step. A card game also carries its deck as prefcards.json in the same zip, so importing the zip is all it takes; replacing that file from a game's Files list changes the cards. Start from the <a href="/static/games/miso-game-template.js" download>game template</a>, then turn the game on above.</p>
+        <button type="submit">Import game</button>
+        <p id="gameImportMsg" class="muted" role="status"></p>
       </form>
     </section>
 <section>
@@ -134,6 +149,31 @@
           <label class="inline"><input id="p_claude_enabled" type="checkbox"> Enabled</label>
           <label>Path to claude (blank = find it on PATH) <input id="p_claude_exe" placeholder="claude"></label>
           <p id="p_claude_hint" class="muted"></p>
+        </fieldset>
+        <fieldset class="prov">
+          <legend>Speech (llama.cpp with an audio model, or an OpenAI-style speech endpoint)</legend>
+          <label class="inline"><input id="p_audio_enabled" type="checkbox"> Enabled</label>
+          <label>Server address <input id="p_audio_url" placeholder="http://127.0.0.1:8080"></label>
+          <label>API key (optional) <input id="p_audio_key" type="password" autocomplete="off" placeholder="leave blank to keep"></label>
+          <label>Style
+            <select id="p_audio_style">
+              <option value="llama">llama.cpp /tts (reference clip supported)</option>
+              <option value="openai">OpenAI-style /v1/audio/speech</option>
+            </select>
+          </label>
+          <label>Model (OpenAI-style only) <input id="p_audio_model" placeholder="tts-1" list="p_audio_models"></label>
+          <datalist id="p_audio_models"></datalist>
+          <p class="muted"><button id="p_audio_detect" type="button" class="ghost small">Detect models</button> <span id="p_audio_model_hint"></span></p>
+          <label>Default language
+            <select id="p_audio_lang"></select>
+          </label>
+          <label>Default voice
+            <select id="p_audio_voice">
+              <option value="female">female</option>
+              <option value="male">male</option>
+            </select>
+          </label>
+          <p id="p_audio_hint" class="muted"></p>
         </fieldset>
         <button type="submit">Save providers</button>
         <p id="providerMsg" class="muted"></p>

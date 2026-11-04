@@ -1,7 +1,7 @@
-/* Hallmark · shape: Workbench (app screen) · genre: atmospheric · theme: Spore, ember (deal 3/3, seed miso-chat-roleplay-chat-ceca.ecf1eb16.2026-10-25.r0) · job: continue the story · draw: app-shell
- * hero: none, the chat is the first screen · nav: edge-aligned header, brand and one action · footer: none · imagery: character art in the gallery, chat icon and backgrounds · signature: the chat as a candlelit ledger, each exchange a ruled well on warm paper · spore: ember
- * axes: dark/roman-serif/warm · posture: committed · contrast: pass · fold: pass · v2.0.0 */
-/* Hallmark · pre-emit critique: P_ H_ E_ S_ R_ V_ · weakest: imagery, the app ships no art of its own, so the gallery leans on the user's pictures and the type carries the rest */
+﻿/* Hallmark Â· shape: Workbench (app screen) Â· genre: atmospheric Â· theme: Spore, ember (deal 3/3, seed miso-chat-roleplay-chat-ceca.ecf1eb16.2026-10-25.r0) Â· job: continue the story Â· draw: app-shell
+ * hero: none, the chat is the first screen Â· nav: edge-aligned header, brand and one action Â· footer: none Â· imagery: character art in the gallery, chat icon and backgrounds Â· signature: the chat as a candlelit ledger, each exchange a ruled well on warm paper Â· spore: ember
+ * axes: dark/roman-serif/warm Â· posture: committed Â· contrast: pass Â· fold: pass Â· v2.0.0 */
+/* Hallmark Â· pre-emit critique: P_ H_ E_ S_ R_ V_ Â· weakest: imagery, the app ships no art of its own, so the gallery leans on the user's pictures and the type carries the rest */
 @import url("./tokens.css");
 @import url("./base.css");
 
@@ -85,6 +85,22 @@ select, textarea {
 }
 /* the open list of a select takes the paper colour, so it does not fall back to the browser's grey menu */
 select option, select optgroup { background: var(--color-paper-2); color: var(--color-ink); }
+/* a look's select carries its own caret, drawn from currentColor, so it takes the look's ink instead of the
+   browser's grey arrow. The field already wears the look's paper and edge; this only replaces the glyph. */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: calc(var(--space-lg) + 4px);
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+select:hover { box-shadow: inset 0 0 0 1.5px var(--color-ink-2), 0 0 0 2px var(--color-accent-soft); }
+select.font-select { padding-right: 26px; background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%; }
 input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=file]):not([type=range]):focus,
 select:focus, textarea:focus { outline: none; box-shadow: inset 0 0 0 1.5px var(--color-ink-2), 0 0 0 3px var(--color-accent-soft); }
 input::placeholder, textarea::placeholder { color: var(--color-muted); }

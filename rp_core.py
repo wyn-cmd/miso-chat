@@ -132,6 +132,12 @@ GROUP_RULE = (
     "Do not repeat what other group members have already said in this turn. Focus on your "
     "specific character's perspective."
 )
+# A live voice call carries only what the character says. Nothing outside quotation marks is spoken.
+VOICE_CALL_INSTRUCTION = (
+    "[This turn is a live voice call. Reply only with what you say out loud, every line inside double "
+    "quotation marks. Do not write narration, actions, stage directions, thoughts, descriptions, or the "
+    "sound of your voice. Do not mention the call itself. Keep each reply short and natural to speak.]"
+)
 # A novel's narrator writes prose, not chat turns. It voices the cast from their cards and never writes speaker labels.
 NOVEL_INSTRUCTION = (
     "\n\nYou are the narrator of a novel. Write in prose, third person and past tense, the way a novelist does: scene, "
@@ -551,6 +557,7 @@ class Engine:
         self.tensions_file = os.path.join(self.state_dir, tensions.FILE)
         self.tensions = tensions.load(self.tensions_file)   # open narrative tensions, read into each reply's notes
         self.tension_mode = tensions.DEFAULT_MODE           # off, dream or save; set by the server from the chat's setting
+        self.call_mode = False                              # a live voice call: only spoken lines, set for one turn
         self.world_text = ""                                # the world block for this chat; empty when it has none
         self.is_novel = False                               # a novel: a narrator writes prose for a cast
         self._load_episodes()
@@ -835,6 +842,10 @@ class Engine:
                 body += "\n\n"
             body += ("[Author's note for this chat. Follow it when it fits the scene.]\n"
                      + self.author_note)
+        if self.call_mode:
+            if body:
+                body += "\n\n"
+            body += VOICE_CALL_INSTRUCTION
         if not body:
             return ""
         return body + "\n\n[The user says:]\n"
@@ -2061,6 +2072,16 @@ class Engine:
         self.full_history.append({"role": "user", "speaker": "narrator", "text": "Random event: " + text, "ts": _now_iso()})
         self.save()
         return text
+
+    def append_narrator(self, text, game=False):
+        # A note the app wrote itself: a mini-game result, or a line the character said during one.
+        # Saved like a roll event, so swipe and regenerate treat it as narration and leave it in place.
+        entry = {"role": "user", "speaker": "narrator", "text": text, "ts": _now_iso()}
+        if game:
+            entry["game"] = True
+        self.full_history.append(entry)
+        self.save()
+        return entry["ts"]
 
     def _exchange_start(self):
         # Index of the last user line that is not a narrator event, or None.
