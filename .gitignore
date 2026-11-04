@@ -24,3 +24,10 @@ __pycache__/
 dist/
 .taste-skill/
 .hallmark/
+
+# desktop build output: rebuilt per OS, never committed
+desktop/node_modules/
+desktop/backend-dist/
+desktop/.pyi-build/
+desktop/.eb-cache/
+desktop/.eb-tmp/

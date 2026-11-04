@@ -1,7 +1,11 @@
 // Runs in <head> before the page paints, so a saved light theme never flashes dark.
 // Pages set the theme attribute here; common.js handles the toggle button and the accent colour.
 try {
-  if (localStorage.getItem("rp_theme") === "light") document.documentElement.dataset.theme = "light";
+  const look = localStorage.getItem("rp_ui");
+  // Plexiglass is a light look, so it holds the light token set before the sheet paints as well.
+  if (localStorage.getItem("rp_theme") === "light" || look === "plexiglass" || look === "dusk") {
+    document.documentElement.dataset.theme = "light";
+  }
 } catch (e) { /* storage blocked: stay on the dark default */ }
 try {
   if (localStorage.getItem("rp_avatar") === "circle") document.documentElement.dataset.avatar = "circle";

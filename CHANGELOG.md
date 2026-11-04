@@ -2,6 +2,84 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.6.1 - 2026-11-05
+
+Built on 1.6.0, adding prepaid credits, voice calls and the Plexiglass look, mini-games, a desktop package for Windows, macOS and Linux, and backgrounds and theme music for novels and group chats. The terminal client is 1.6.1. The server adds two tables, one column and one setting on first start.
+
+### Added
+- **Novel backgrounds and theme music**: a novel can have a background picture behind its chat and up to three theme tracks, chosen on its edit page. The background is picked at random from the novel's own pictures like a character's, and the music plays while the novel is open.
+- **Group chat theme music**: a group chat keeps up to three tracks too, set on its edit page, and plays them while it is open. Groups had backgrounds already; this gives them the same music a character has.
+- **Desktop MSI and updates**: the Windows build also makes an MSI for a native install, and the packaged app checks this repository's releases for a newer stable version, downloads it in the background and installs it on restart or close. Beta versions are never offered. A published release now builds Windows, macOS and Linux packages and attaches them, with the update files, to that release.
+- **Desktop app**: a small Electron shell starts the local server and shows it in its own window, packaged for Windows, macOS and Linux with PyInstaller and electron-builder. A GitHub workflow builds all three on three runners, because the server bundle cannot be cross-compiled. The desktop app keeps its database, its sealing key and its character folders in the per-user application folder instead of the project folder, and closing the window stops the server.
+- **Mini-games**: a dice button beside the settings button opens a near-fullscreen picker of small games to play with the open character. Three games ship built in: Memory Match, Word Guess and Dice Duel. Games run in a sandboxed frame, so a game file is just a script with no access to the account, the page or the network.
+- **Games in the chat**: each finished game is capped by play limits, moves the character's mood and relationship numbers when those systems are on, and writes one narrator line into the chat. A game can also ask the character for a short in-character line mid-game, which is recorded in the chat as the character speaking.
+- **Game progress**: a game can save its state per character, so closing and reopening resumes where you left off.
+- **Game API and template**: an admin section turns the feature on or off, switches individual games on, and imports a new game file. The header line names the game; the code never runs on the server. A downloadable template documents the whole API.
+
+### Changed
+- The mood and relationship level of the open character show in the game picker while a game runs.
+
+### Fixed
+- Coloured message bubbles in the light theme now use dark text on pale tints. The label and text follow the washed bubble background, which is very light for pale speaker colours, instead of the raw colour, and both repaint when the theme or the bubble-opacity slider changes.
+
+## 1.6.1-beta-1 - 2026-11-02
+
+A beta built on 1.6.0-beta-5, adding a voice call mode for talking to a character and replacing the Dusk look with Plexiglass. The terminal client is 1.6.1-beta-1. The server creates no new tables on first start.
+
+### Added
+- **Voice calls**: a Call button beside the settings button opens a hands-free voice call with a solo character. The browser records speech, the server transcribes it through the configured speech server, the character answers in the normal chat with a call-only instruction, and the reply is read back with only the lines inside quotation marks.
+- **Call overlay**: live transcript of both sides, a mute button, an end button, an Escape shortcut, and a timer.
+- **Call speed bars**: three bars beside the call timer show the turnaround from the end of speech to the first reply clip. More than two seconds drops to two bars, more than five seconds drops to one bar in red.
+- **Chat actions sheet (Plexiglass)**: one "..." button at the right edge of the chat bar opens a bottom sheet with Tree, Undo, Roll, Select and the name badge toggle, so the bar stays clear.
+
+### Changed
+- **Plexiglass look**: the fourth look is now Plexiglass instead of Dusk. Surfaces are translucent frosted panes with a warp of rounded glass highlights instead of solid borders, and a saved Dusk choice moves to it.
+- Character names on messages are a size smaller and the name badge pill is tighter, so long names fit on one line in every look.
+- Calls read the reply as it streams: speech starts on the first complete quoted line, and the rest follows while the model is still writing.
+- The silence window that ends a voice turn is shorter, and the speech server conversion no longer probes the file first, so a turn reaches the model sooner.
+- Voice activity detection in the browser only sends a recording when real speech was heard, so silence and clicks are dropped instead of being transcribed.
+- The speech server is no longer sent narration: only the spoken lines reach text-to-speech.
+
+### Fixed
+- Call recordings are converted with ffmpeg to 16 kHz mono WAV before transcription, with a size and length guard.
+
+## 1.6.0-beta-5 - 2026-10-30
+
+A beta built on 1.6.0-beta-4, adding optional server speech for reading replies aloud, a switch that turns background music off entirely and a custom dropdown caret for every look. The terminal client is 1.6.0-beta-5. The server creates no new tables on first start.
+
+### Added
+- **Server speech**: a local speech server (llama.cpp with an audio model, or an OpenAI-compatible speech endpoint) can read replies aloud with a character's voice or an account's voice profile. Character authors set a default voice, a language and an optional reference clip; the voice and language work without a clip, a Preview voice button plays the result, and accounts keep their own profiles and choose one per character. The admin form can ask the server for its model ids and offer them in the Model box. Speech runs only on the server: with it off, replies stay silent, and quoted-dialogue-only reading is a switch.
+- **Disable background music**: a switch in Settings, Voice & audio, under Background music turns theme music off entirely, stops whatever is playing and greys out the volume and fade controls. The choice is kept in the browser.
+
+### Changed
+- Dropdown menus take each look's own paper, ink and accent, with a caret drawn from the text colour, instead of the browser's grey arrow or menu. This covers the plain Hyacinth look and Moonlit, Lantern and Dusk.
+- A message's controls share one row: Edit, Branch, the speaker and the timestamp sit together, so a reply with speech takes two fewer lines.
+
+### Fixed
+- Speech audio can play in the browser: the page policy now allows blob media, which the player uses for the WAV the server returns.
+- Long replies are read to the end: text over about 1,200 characters is split at sentence breaks and the audio is joined, so the speech model no longer fails on a full reply.
+
+## 1.6.0-beta-4 - 2026-10-30
+
+A beta built on 1.6.0, adding prepaid credits, a sign-in and upload hardening pass and a rate-limit fix. The terminal client is 1.6.0-beta-4. The server adds two tables, one column and one setting on first start.
+
+### Added
+- **Prepaid credits (MCC)**: each account has a token balance. When a tier's daily, weekly or monthly request quota is used up, the next request draws one credit from the balance instead of stopping, until the balance is empty.
+- **Balance page** at `/balance`: shows the tier and balance and sends a top-up request for a token count and a price in MCC. It opens from Settings and carries the usual top bar.
+- **Admin credit requests**: pending top-ups are reviewed on the balance page and approved or rejected there. An "approve automatically" switch skips the review, and each approval credits the account once.
+- **Audit log**: a hash-chained record of sign-ins, locks, admin actions and credit changes, kept in the database.
+- **Upload scanning hook**: ClamAV is used when it is installed, before a portrait, background, music track or imported zip is stored.
+
+### Changed
+- **Passwords**: a new password needs at least 12 characters and includes a letter and a digit. Common passwords, repeated characters and the username are refused.
+- **Request rate limit**: 30 requests a second or 600 a minute per account and address. A burst gets a short cooldown with `Retry-After`, not a permanent block, and icon and background requests are exempt.
+- **Request checks**: state-changing requests must come from the same origin, and sign-in bodies and page JSON have a size limit.
+
+### Fixed
+- Character icons and backgrounds were re-downloaded on every page load because a security header overrode their cache header; they now cache for five minutes.
+- The rate limiter could permanently block an account and its sign-in when a character grid loaded quickly. The permanent block is gone and an admin no longer has to unlock it.
+- A credit top-up returned a bad request when the balance page sent one, and an approved request could be credited twice. Both are fixed.
+
 ## 1.6.0 - 2026-10-30
 
 A release built on 1.5.2, carrying the off-screen life, author's notes, dream bubble viewer, reasoning levels, relationship speed, the Story Bible, document import, a character wizard, Mind Palace checks, core memory, theme music and the Lantern look. The terminal client is 1.6.0.

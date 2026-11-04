@@ -11,7 +11,8 @@
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <link rel="stylesheet" href="/static/call.css">
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
@@ -213,6 +214,28 @@
           <p id="edMusicNote" class="muted"></p>
         </div>
       </div>
+      <div id="edVoiceBox" class="icon-box voice-box">
+        <div class="stack">
+          <p class="muted">The voice the speech server uses for this character when a reader leaves the choice on the character's own voice. Pick a voice and a language here; the reference clip below is optional and only helps it match.</p>
+          <div class="sheet-row"><label for="edVoiceVoice">Voice</label>
+            <select id="edVoiceVoice" aria-label="Character voice">
+              <option value="">Server default</option>
+              <option value="female">female</option>
+              <option value="male">male</option>
+            </select>
+          </div>
+          <div class="sheet-row"><label for="edVoiceLang">Language</label><select id="edVoiceLang" aria-label="Character language"></select></div>
+          <input id="edVoiceFile" type="file" accept="audio/*">
+          <p class="muted">A WAV, MP3, M4A, Ogg, Opus, WebM or FLAC clip up to 20 MB. It is trimmed to 20 seconds and stored as a mono WAV.</p>
+          <div class="row">
+            <button id="edVoicePreview" class="ghost" type="button">Preview voice</button>
+            <button id="edVoiceSave" class="ghost" type="button" disabled>Upload clip</button>
+            <button id="edVoiceRemove" class="ghost" type="button" hidden>Remove clip</button>
+          </div>
+          <p id="edVoiceNote" class="muted" role="status"></p>
+          <p id="edVoiceErr" class="error"></p>
+        </div>
+      </div>
       <fieldset id="edPalaceBox" class="icon-box palace-box">
         <legend>Mind Palace (database searching)</legend>
         <p class="muted">Each entry joins the prompt when its keys appear in the recent chat. Keys match whole words, ignoring case and accents. Plurals and common endings (cat, cats, loved, stopping, cities) match on their own. For an irregular form, write both in one key, such as mouse|mice. Secondary keys narrow it further (see Logic). Always on entries join every reply.</p>
@@ -245,7 +268,9 @@
           <span class="bar-track"><span id="tokenFill" class="bar-fill"></span></span>
           <span id="tokenText" class="muted"></span>
         </span>
+          <button id="gamesBtn" class="ghost settings-btn" type="button" aria-label="Games" title="Play a mini-game with this character" aria-haspopup="dialog" aria-controls="gameDlg" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><circle cx="8.5" cy="8.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="8.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="8.5" cy="15.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="15.5" r="1.4" fill="currentColor" stroke="none"/></svg></button>
           <button id="settingsBtn" class="ghost settings-btn" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-controls="settingsSheet" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke-width="3"/></svg></button>
+          <button id="callBtn" class="ghost settings-btn" type="button" aria-label="Call" title="Call this character and talk with your voice" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></button>
           <select id="fontSelect" class="font-select" aria-label="Font" title="Font for the chat and the interface">
             <option value="theme">Theme's own font</option>
             <option value="instrument">Instrument Sans</option>
@@ -268,10 +293,11 @@
         <select id="branchPick" class="font-select" aria-label="Chat branch" title="Which branch of this chat is open" hidden></select>
         <button id="branchDel" class="ghost small" type="button" title="Delete the open branch" hidden>Delete branch</button>
       <button id="branchTree" class="ghost chat-action" type="button" title="Show the branches as a tree" hidden>Tree</button>
-        <button id="memBtn" class="ghost" type="button" title="See and edit what the character remembers">Memory</button>
-        <button id="rollBtn" class="ghost chat-action" type="button" title="Roll: the model adds a random event to the scene">Roll</button>
+         <button id="memBtn" class="ghost" type="button" title="See and edit what the character remembers">Memory</button>
+         <button id="rollBtn" class="ghost chat-action" type="button" title="Roll: the model adds a random event to the scene">Roll</button>
         <button id="undoBtn" class="ghost chat-action" type="button">Undo</button>
         <button id="selectBtn" class="ghost chat-action" type="button" aria-pressed="false" title="Pick several messages to delete">Select</button>
+        <button id="plexiMoreBtn" class="ghost chat-action" type="button" title="More actions" aria-haspopup="true" aria-controls="plexiSheet" aria-expanded="false" hidden>&#8943;</button>
       </div>
       <div id="budgetAlert" class="budget-alert" role="status" hidden>
         <span id="budgetAlertText"></span>
@@ -401,13 +427,16 @@
         <div class="sheet-row"><span>Token usage</span>
           <button id="tokenUsageBtn" class="ghost small" type="button">View usage</button>
         </div>
+        <div class="sheet-row"><span>Token balance</span>
+          <button id="balanceBtn" class="ghost small" type="button">View balance</button>
+        </div>
       </section>
       <section class="set-panel" data-panel="appearance" hidden>
         <div class="sheet-row"><span>Theme</span>
           <select id="uiThemePick" aria-label="Theme">
             <option value="moon">Moonlit (default)</option>
             <option value="lantern">Lantern</option>
-            <option value="dusk">Dusk</option>
+            <option value="plexiglass">Plexiglass</option>
             <option value="classic">Hyacinth (1.4.1)</option>
           </select>
         </div>
@@ -456,9 +485,8 @@
         <div data-slot="characters"></div>
       </section>
       <section class="set-panel" data-panel="voice" hidden>
-        <p class="muted">Read character replies aloud with your browser's speech voices. Playback stays on this device.</p>
+        <p class="muted">Read character replies aloud. A speech server reads them with a character's voice or one of your profiles. It is off until an admin enables it under Admin, Model providers, Speech; without it, replies are not read aloud.</p>
         <label class="check-row"><input id="ttsAuto" type="checkbox"> Read new replies aloud automatically</label>
-        <div class="sheet-row"><label for="ttsVoice">Voice</label><select id="ttsVoice" aria-label="Voice"></select></div>
         <div class="sheet-row" id="ttsCharVoiceRow"><label for="ttsCharVoice" id="ttsCharVoiceLabel">Character voice</label><select id="ttsCharVoice" aria-label="Character voice"></select></div>
         <div class="sheet-row"><label for="ttsRate">Speed <span id="ttsRateVal" class="muted"></span></label>
           <span class="slider-ctl"><input id="ttsRate" type="range" min="0.5" max="2" step="0.05" aria-label="Speed"></span>
@@ -469,11 +497,31 @@
         <div class="sheet-row"><label for="ttsVolume">Volume <span id="ttsVolumeVal" class="muted"></span></label>
           <span class="slider-ctl"><input id="ttsVolume" type="range" min="0" max="1" step="0.05" aria-label="Volume"></span>
         </div>
+        <label class="check-row"><input id="ttsDialogue" type="checkbox"> Read only the quoted dialogue</label>
         <p><button id="ttsTest" class="ghost small" type="button">Play a sample</button> <button id="ttsStop" class="ghost small" type="button">Stop</button></p>
-        <p class="muted">Speech voices come from your browser. Nothing is sent to Miso Chat.</p>
         <p id="ttsNote" class="muted" role="status"></p>
+        <div class="sheet-row"><span>My voice profiles</span></div>
+        <p class="muted">A profile is a voice and an optional reference clip. Server speech uses the clip to match the voice. Profiles are kept with this account.</p>
+        <div id="ttsProfileList" class="tts-profile-list"></div>
+        <p><button id="ttsProfileNew" class="ghost small" type="button">New profile</button></p>
+        <div id="ttsProfileForm" hidden>
+          <label>Name <input id="ttsProfileName" maxlength="40" autocomplete="off"></label>
+          <div class="sheet-row"><label for="ttsProfileVoice">Voice</label>
+            <select id="ttsProfileVoice" aria-label="Profile voice">
+              <option value="">Server default</option>
+              <option value="female">female</option>
+              <option value="male">male</option>
+            </select>
+          </div>
+          <div class="sheet-row"><label for="ttsProfileLang">Language</label><select id="ttsProfileLang" aria-label="Profile language"></select></div>
+          <label>Reference clip <span class="muted">optional</span> <input id="ttsProfileFile" type="file" accept="audio/*"></label>
+          <p class="muted">A WAV, MP3, M4A, Ogg, Opus, WebM or FLAC clip up to 20 MB. It is trimmed to 20 seconds and stored as a mono WAV.</p>
+          <p><button id="ttsProfileSave" class="small" type="button">Save profile</button> <button id="ttsProfileCancel" class="ghost small" type="button">Cancel</button> <button id="ttsProfileDelete" class="ghost small" type="button" hidden>Delete</button></p>
+          <p id="ttsProfileMsg" class="muted" role="status"></p>
+        </div>
         <div class="sheet-row"><span>Background music</span></div>
         <p class="muted">Character theme music plays while its chat or card is open. These settings apply on this device.</p>
+        <label class="check-row"><input id="tmDisabled" type="checkbox"> Disable background music entirely</label>
         <div class="sheet-row"><label for="tmVolume">Volume <span id="tmVolumeVal" class="muted"></span></label>
           <span class="slider-ctl"><input id="tmVolume" type="range" min="0" max="1" step="0.05" aria-label="Music volume"></span>
         </div>
@@ -749,6 +797,24 @@
       <button id="auditClose" class="ghost" type="button">Close</button>
     </div>
   </dialog>
+  <div id="plexiSheet" class="sheet" hidden>
+    <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="plexiTitle">
+      <div class="sheet-head">
+        <h2 id="plexiTitle">Chat actions</h2>
+        <button id="plexiClose" class="ghost small" type="button">Done</button>
+      </div>
+      <div class="plexi-action-grid">
+        <button id="plexiTree" class="ghost chat-action" type="button" title="Show the branches as a tree">Tree</button>
+        <button id="plexiUndo" class="ghost chat-action" type="button">Undo</button>
+        <button id="plexiRoll" class="ghost chat-action" type="button" title="Roll: the model adds a random event to the scene">Roll</button>
+        <button id="plexiSelect" class="ghost chat-action" type="button" aria-pressed="false" title="Pick several messages to delete">Select</button>
+      </div>
+      <div class="sheet-row"><span>Name badge</span><span class="plexi-badge-toggle" role="group" aria-label="Name badge style">
+        <button type="button" class="ghost small" data-bubble="badge">Name badge</button>
+        <button type="button" class="ghost small" data-bubble="bubble">Coloured bubble</button>
+      </span></div>
+    </div>
+  </div>
   <dialog id="treeDlg" class="dlg" aria-labelledby="treeTitle">
     <h2 id="treeTitle">Branch tree</h2>
     <label id="treeAccountRow" class="dlg-field" hidden>Account
@@ -801,12 +867,60 @@
       <button id="docCancel" class="ghost" type="button">Close</button>
     </div>
   </dialog>
+  <dialog id="gameDlg" class="dlg game-dlg" aria-labelledby="gameTitle">
+    <div class="game-head">
+      <span id="gameIcon" class="char-icon" aria-hidden="true" hidden></span>
+      <div class="game-who">
+        <h2 id="gameTitle">Games</h2>
+        <p id="gameStats" class="muted"></p>
+      </div>
+      <span class="grow"></span>
+      <button id="gameBack" class="ghost small" type="button" hidden>All games</button>
+      <button id="gameClose" class="ghost small" type="button">Close</button>
+    </div>
+    <div id="gameList" class="game-list"></div>
+    <div id="gameStage" class="game-stage" hidden></div>
+    <p id="gameNote" class="muted game-note" role="status" hidden></p>
+    <div id="gameFooter" class="dlg-actions" hidden>
+      <span id="gameRewards" class="muted" role="status"></span>
+      <span class="grow"></span>
+      <button id="gameAgain" type="button" hidden>Play again</button>
+      <button id="gameDone" class="ghost" type="button">Close</button>
+    </div>
+  </dialog>
+  <div id="callOverlay" class="call-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="callName">
+    <div class="call-card" data-phase="idle">
+      <div class="call-top">
+        <span id="callStatus" class="call-status" role="status">Connecting…</span>
+        <span class="call-top-right">
+          <span id="callSignal" class="call-signal" data-bars="3" role="img" aria-label="Response speed">
+            <span class="call-bar"></span><span class="call-bar"></span><span class="call-bar"></span>
+          </span>
+          <span id="callTimer" class="call-timer" aria-label="Call time">00:00</span>
+        </span>
+      </div>
+      <div id="callAvatar" class="char-icon call-avatar" aria-hidden="true"></div>
+      <h2 id="callName" class="call-name"></h2>
+      <div id="callLog" class="call-log" aria-live="polite"></div>
+      <p id="callHint" class="call-hint">Use headphones so the microphone does not pick up the character.</p>
+      <div class="call-controls">
+        <button id="callMic" class="call-round" type="button" aria-pressed="false" title="Mute your microphone" aria-label="Mute your microphone">
+          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/><path class="call-mic-slash" d="M4 4l16 16"/></svg>
+        </button>
+        <button id="callEnd" class="call-round call-end" type="button" title="End the call" aria-label="End the call">
+          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14c4.5-4 11.5-4 16 0l-2.2 2.8a1.6 1.6 0 0 1-2 .4l-2.3-1.2a1.6 1.6 0 0 1-.9-1.6l.1-1.1a10 10 0 0 0-5.4 0l.1 1.1a1.6 1.6 0 0 1-.9 1.6l-2.3 1.2a1.6 1.6 0 0 1-2-.4z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
   <script src="/static/common.js"></script>
   <script src="/static/theme_music.js"></script>
   <script src="/static/search.js"></script>
   <script src="/static/markdown.js"></script>
   <script src="/static/tts.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/minigames.js"></script>
+  <script src="/static/call.js"></script>
   <script src="/static/editor.js"></script>
   <script src="/static/palace_audit.js"></script>
   <script src="/static/security.js"></script>

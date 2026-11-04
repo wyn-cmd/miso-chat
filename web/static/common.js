@@ -3,19 +3,19 @@
 // Theme and highlight colour. Stored per browser in localStorage ("rp_theme", "rp_accent").
 // The light/dark tokens live in style.css and tokens.css; theme-init.js sets the attribute before first paint.
 // "rp_ui" picks which look the app wears: "moon" (Moonlit, the default, a sheet of its own over redesign.css),
-// "lantern" (Lantern), "dusk", or "classic" (Hyacinth, the 1.4.1 look). The stored value stays "classic" even
+// "lantern" (Lantern), "plexiglass", or "classic" (Hyacinth, the 1.4.1 look). The stored value stays "classic" even
 // though the theme is named Hyacinth, so choices already saved in a browser keep working. Classic switches the
 // redesign stylesheet off, so the plain style.css underneath shows through. The other looks keep redesign.css and
 // add their own sheet over it, with data-look set to the look's name. A saved look that no longer exists (Spore,
-// Folio) falls back to Moonlit.
+// Folio, Dusk) falls back to Moonlit, except Dusk, which maps to Plexiglass.
 const UI_KEY = "rp_ui";
 const UI_CLASSIC = "classic";
 const UI_MOON = "moon";
 const UI_LANTERN = "lantern";
-const UI_DUSK = "dusk";
+const UI_PLEXIGLASS = "plexiglass";
 // The sheet each look adds over redesign.css. Hyacinth switches redesign.css off instead.
-const LOOK_SHEETS = { moon: "/static/moon.css", lantern: "/static/lantern.css", dusk: "/static/dusk.css" };
-const ACCENT_DEFAULT_DUSK = "#a0b0f4";
+const LOOK_SHEETS = { moon: "/static/moon.css", lantern: "/static/lantern.css", plexiglass: "/static/plexiglass.css" };
+const ACCENT_DEFAULT_PLEXIGLASS = "#9fe6ff";
 const ACCENT_DEFAULT_LANTERN = "#e9b25a";
 const ACCENT_DEFAULT_CLASSIC = "#4cc4ff";
 const ACCENT_DEFAULT_MOON = "#8fd3cc";
@@ -39,6 +39,7 @@ function lookDefaults(list) {
 function uiThemeName() {
   try {
     const saved = localStorage.getItem(UI_KEY);
+    if (saved === "dusk") return UI_PLEXIGLASS;   // the old look was replaced by Plexiglass
     return saved === UI_CLASSIC || saved in LOOK_SHEETS ? saved : UI_MOON;
   } catch (e) { return UI_MOON; }
 }
@@ -47,7 +48,7 @@ function accentDefault() {
   const look = uiThemeName();
   if (look === UI_CLASSIC) return ACCENT_DEFAULT_CLASSIC;
   if (look === UI_LANTERN) return ACCENT_DEFAULT_LANTERN;
-  if (look === UI_DUSK) return ACCENT_DEFAULT_DUSK;
+  if (look === UI_PLEXIGLASS) return ACCENT_DEFAULT_PLEXIGLASS;
   return ACCENT_DEFAULT_MOON;
 }
 
@@ -87,7 +88,8 @@ function applyUi(name) {
     sheet.disabled = !href;
   }
   try { localStorage.setItem(UI_KEY, look); } catch (e) { /* private mode */ }
-  applyMetaTheme();
+  // Re-run the theme so Plexiglass can hold its light token set and every other look gets the saved mode back.
+  applyTheme(savedTheme());
   const pick = document.getElementById("accentPick");
   if (pick && !savedAccent()) pick.value = accentDefault();
 }
@@ -169,13 +171,16 @@ function savedAccent() {
 
 function applyTheme(theme) {
   const mode = theme === "light" ? "light" : "dark";
-  document.documentElement.dataset.theme = mode;
+  // Plexiglass is a light look: keep the light token set in both modes so its near-white glass and light blue
+  // orbs do not turn dark under a saved dark-mode preference.
+  const light = mode === "light" || uiThemeName() === UI_PLEXIGLASS;
+  document.documentElement.dataset.theme = light ? "light" : "dark";
   applyMetaTheme();
   for (const b of document.querySelectorAll("#themeBtn")) {
-    const label = t(mode === "light" ? "Switch to dark theme" : "Switch to light theme");
+    const label = t(light ? "Switch to dark theme" : "Switch to light theme");
     b.setAttribute("aria-label", label);
     b.title = label;
-    b.innerHTML = mode === "light" ? MOON_ICON : SUN_ICON;   // static markup, never model output
+    b.innerHTML = light ? MOON_ICON : SUN_ICON;   // static markup, never model output
   }
 }
 

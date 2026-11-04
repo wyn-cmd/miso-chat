@@ -110,6 +110,7 @@ def import_zip(root, data_dir, uid, username, data, admin=True):
     # Creates a new character from an archive. Anything that fails after the folder is made removes it again.
     if not data:
         raise EditorError("Choose a file first.")
+    editor._scan_bytes(data)
     if len(data) > MAX_ZIP:
         raise EditorError("Character archives can be up to 60 MB.")
     try:
