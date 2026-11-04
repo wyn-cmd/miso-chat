@@ -1,7 +1,7 @@
 /* Lantern: a look lit from within. Deep soot rooms with an amber lamp overhead: the ground is warm charcoal, your
    own lines carry the lamp's amber edge, and the ambient field drifts in lantern glow. At home in the light theme it
    becomes washi paper in the day, with the amber deepened to a tea colour that holds contrast. It loads over
-   redesign.css, like Moonlit and Dusk, so the layout, ids and behaviour are Spore's and this sheet changes the
+   redesign.css, like Moonlit and Plexiglass, so the layout, ids and behaviour are Spore's and this sheet changes the
    surface only: the primary action stays an inverted pill (ink on the ground), colour stays with the data and the
    reader's own marks. The sheet is applied by the data-look="lantern" attribute that common.js and the page's
    head script set on <html>. The display face is Young Serif, already bundled. */

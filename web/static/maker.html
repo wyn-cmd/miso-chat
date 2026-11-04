@@ -11,7 +11,7 @@
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="dusk"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
@@ -64,15 +64,24 @@
         </fieldset>
         <fieldset id="artBox" class="maker-set" hidden>
           <legend>Pictures</legend>
-          <p class="muted">The picture shown beside this group in the sidebar, and the background behind its chat. Only you see them. A new picture replaces the old one.</p>
-          <div class="sheet-row"><label for="iconFile">Picture</label>
+          <p id="artNote" class="muted">The picture shown beside this group in the sidebar, and the background behind its chat. Only you see them. A new picture replaces the old one.</p>
+          <div id="iconRow" class="sheet-row"><label for="iconFile">Picture</label>
             <span class="slider-ctl"><input id="iconFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Group picture"><button id="iconRemove" class="ghost small" type="button" hidden>Remove</button></span>
           </div>
           <p id="iconMsg" class="muted" role="status"></p>
           <div class="sheet-row"><label for="bgFile">Background</label>
-            <span class="slider-ctl"><input id="bgFile" type="file" accept="image/*" aria-label="Group background picture"><button id="bgRemove" class="ghost small" type="button" hidden>Remove</button></span>
+            <span class="slider-ctl"><input id="bgFile" type="file" accept="image/*" aria-label="Chat background picture"><button id="bgRemove" class="ghost small" type="button" hidden>Remove</button></span>
           </div>
           <p id="bgMsg" class="muted" role="status"></p>
+        </fieldset>
+        <fieldset id="musicBox" class="maker-set" hidden>
+          <legend>Theme music</legend>
+          <p class="muted">Plays while this chat is open, the way a character's theme music does. Up to three tracks, in order, each one fading in and out. An MP3, AAC (M4A), Opus, WebM, Ogg or WAV file up to 60 MB and 15 minutes.</p>
+          <div id="makerMusicList"></div>
+          <div class="sheet-row"><label for="musicFile">Add a track</label>
+            <span class="slider-ctl"><input id="musicFile" type="file" accept="audio/*"><button id="musicAdd" class="ghost small" type="button" disabled>Add track</button></span>
+          </div>
+          <p id="musicMsg" class="muted" role="status"></p>
         </fieldset>
         <p id="makerMsg" class="error-msg" role="alert"></p>
         <div class="row">
@@ -85,6 +94,7 @@
     </section>
   </main>
   <script src="/static/common.js"></script>
+  <script src="/static/theme_music.js"></script>
   <script src="/static/maker.js"></script>
 </body>
 </html>

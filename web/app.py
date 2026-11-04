@@ -36,7 +36,7 @@ from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_T
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_audit, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude, novels, worlds, tensions, passwords, scenarios, search, offscreen, relationship, story_bible, docextract, memory_bank, music
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_audit, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude, novels, worlds, tensions, passwords, scenarios, search, offscreen, relationship, story_bible, docextract, memory_bank, music, voice, minigames
 import pytz
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, TIERS, TIER_MONTHLY_TOKENS, budget_days, recent_days, verify_password, needs_rehash, ADMIN_NAME
 
@@ -69,7 +69,7 @@ COOKIE = "__Host-rp_session" if COOKIE_SECURE else "rp_session"
 LOGIN_CHECKS = 4
 MAX_MESSAGE = 4000
 MAX_DELETE = 500         # most messages one delete call may remove
-MIN_PASSWORD = 10
+MIN_PASSWORD = 12
 # Sign-in input limits. No account can have a longer name, and no password this long can be a real one: such input is
 # refused before any lookup or hash. Passwords set from now on are capped too; longer ones set earlier still sign in.
 MAX_LOGIN_USERNAME = 64
@@ -86,8 +86,12 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{2,32}$")
 TOKEN_DISPLAY_LIMIT = 1_000_000
 MEMORY_LIMIT = 20_000        # characters allowed in memory.md or pinned.md
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-       "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
+       "img-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; "
        "base-uri 'none'; form-action 'self'")
+# Imported game assets may be SVG, which is a document when opened on its own. This policy keeps that
+# document from running any script or reaching the network, so an uploaded picture cannot act as a page.
+ASSET_CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+             "font-src data:; media-src data:; sandbox")
 
 
 def log(msg):
@@ -480,6 +484,17 @@ def _csrf(request):
     # Browsers won't send a custom header cross-site without a CORS preflight, which we never allow.
     if request.headers.get("x-requested-with") != "roleplay":
         raise HTTPException(403, "Bad request.")
+    # Defence in depth: when the browser sends an Origin, it must agree with the Host we are serving.
+    origin = request.headers.get("origin")
+    if origin:
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(origin)
+        except ValueError:
+            raise HTTPException(403, "Bad request.")
+        host = request.headers.get("host", request.url.netloc)
+        if parsed.netloc != host:
+            raise HTTPException(403, "Bad request.")
 
 
 def _current_user(request):
@@ -655,8 +670,8 @@ def _private_group_root(st, uid):
     return os.path.join(st.data_dir, "users", str(uid))
 
 
-# Background ids for every name that has one: characters, shared group chats, and the account's own group chats.
-# Keyed by the name the pages show. Names with no backgrounds are left out.
+# Background ids for every name that has one: characters, shared group chats, the account's own group chats
+# and its novels. Keyed by the name the pages show. Names with no backgrounds are left out.
 def _background_ids_for(st, user, solo, groups):
     out = {}
     for n in list(solo) + list(groups):
@@ -667,6 +682,10 @@ def _background_ids_for(st, user, solo, groups):
         ids = editor.background_ids(_private_group_root(st, user["id"]), item["id"])
         if ids:
             out[item["name"]] = ids
+    for item in novels.list_for(st.data_dir, user["id"]):
+        ids = editor.background_ids(_private_group_root(st, user["id"]), item["id"])
+        if ids:
+            out[item["id"]] = ids
     return out
 
 
@@ -961,6 +980,11 @@ def _budget_block(st, user):
     # Why a turn must wait, or None: a window whose tokens are already at or over its budget blocks.
     for b in _budget_status(st, user):
         if b["budget"] is not None and b["used"] >= b["budget"]:
+            # Prepaid credits: drain one token instead of blocking, when a balance exists.
+            if st.store.credit_balance(user["id"]) > 0:
+                st.store.adjust_credit(user["id"], -1)
+                st.store.audit("credit_drain", user["username"], None, f"{b['kind']} budget")
+                return None
             return (f"Your {b['kind']} token budget is used up ({b['used']:,} of {b['budget']:,} tokens). "
                     f"It {b['reset']}.")
     return None
@@ -1143,9 +1167,14 @@ def _check_caps(st, user):
     used = st.store.usage_today(user["id"])["requests"]
     cap = _effective_cap(st, user)
     if used >= cap:
-        raise HTTPException(429, {"code": "cap_reached",
-                                  "message": f"Daily request cap reached ({used}/{cap}). "
-                                             "It resets at midnight Pacific."})
+        # Prepaid credits: drain one token instead of blocking, when a balance exists.
+        if st.store.credit_balance(user["id"]) > 0:
+            st.store.adjust_credit(user["id"], -1)
+            st.store.audit("credit_drain", user["username"], None, "daily cap")
+        else:
+            raise HTTPException(429, {"code": "cap_reached",
+                                      "message": f"Daily request cap reached ({used}/{cap}). "
+                                                 "It resets at midnight Pacific."})
     blocked = _budget_block(st, user)
     if blocked:
         raise HTTPException(429, {"code": "budget_reached", "message": blocked})
@@ -1238,7 +1267,8 @@ def _apply_chat_settings(st, user, name, engine):
 
 
 SWITCHES = ("memory_enabled", "palace_enabled", "episodes_enabled", "dreams_enabled", "mood_enabled", "attitude_enabled",
-            "event_memory_enabled", "memory_policy_enabled", "dreams_in_novels", "offscreen_enabled")
+            "event_memory_enabled", "memory_policy_enabled", "dreams_in_novels", "offscreen_enabled", "credits_auto_accept",
+            "minigames_enabled")
 
 
 def _apply_switches(st, engine):
@@ -1424,7 +1454,9 @@ def _history(engine):
     out = []
     for e in engine.full_history:
         role = e.get("role")
-        if e.get("speaker") == "narrator":
+        if e.get("game"):
+            speaker = engine.character_name   # a mini-game line: saved as narration, shown as the character
+        elif e.get("speaker") == "narrator":
             speaker = "Narrator"
         elif role == "user":
             speaker = engine.user_display_name
@@ -1433,6 +1465,8 @@ def _history(engine):
         item = {"speaker": speaker, "role": role, "text": engine.restore(e.get("text", ""))}
         if e.get("thinking"):
             item["thinking"] = e["thinking"]
+        if e.get("game"):
+            item["game"] = True
         if e.get("scheduled"):
             item["scheduled"] = True   # a check-in the character sent on its own schedule
         if e.get("role") == "user" and e.get("speaker") != "narrator":
@@ -1643,7 +1677,7 @@ def _export_now(st, user, name, is_group, fmt):
     return _export_text(messages, title, fmt, when)
 
 
-def _run_turn(st, user, name, slot, message, regen=False):
+def _run_turn(st, user, name, slot, message, regen=False, call=False):
     # Run one turn on a worker thread and yield SSE events.
     #
     # Gemini calls block, so they never run on the event loop. Events, in order:
@@ -1700,7 +1734,11 @@ def _run_turn(st, user, name, slot, message, regen=False):
                         slot.engine.offscreen_text = ""
                     elif not regen:
                         _offscreen_start(st, user["id"], name, slot)
-                    result = slot.engine.send(processed, on_delta=on_delta, on_think=on_think)
+                    slot.engine.call_mode = bool(call)
+                    try:
+                        result = slot.engine.send(processed, on_delta=on_delta, on_think=on_think)
+                    finally:
+                        slot.engine.call_mode = False
                     if regen and result.ok:
                         slot.engine.finish_regenerate()
                     model_used = result.replies[-1].model if result.replies else slot.engine.model_name
@@ -1764,7 +1802,13 @@ def _run_turn(st, user, name, slot, message, regen=False):
 
     threading.Thread(target=worker, daemon=True).start()
     while True:
-        item = events.get()
+        try:
+            item = events.get(timeout=15)
+        except queue.Empty:
+            # A comment keeps a quiet stream alive through proxies and phone radios while the model thinks.
+            # The browser ignores blocks with no event, and the turn still saves if it disconnects.
+            yield ": ping\n\n"
+            continue
         if item is _END:
             return
         yield _sse(*item)
@@ -2019,20 +2063,63 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         resp = await call_next(request)
-        resp.headers["Content-Security-Policy"] = CSP
+        # A game's uploaded files are served as they were received. If one of them is an SVG, its own
+        # document policy must be the strict one, not the page's, or it could run a same-origin script.
+        asset = request.url.path.startswith("/api/minigames/asset/")
+        resp.headers["Content-Security-Policy"] = ASSET_CSP if asset else CSP
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
-        resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+        resp.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=(), payment=()"
         if COOKIE_SECURE:
             # Only over https: the browser then refuses plain http for this site. Set only when the site is served over https.
             resp.headers["Strict-Transport-Security"] = "max-age=31536000"
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith("/api/") and "Cache-Control" not in resp.headers:
+            # Keep a cache header a route set itself (icons, backgrounds) so they are not re-fetched per page.
             resp.headers["Cache-Control"] = "no-store"
         elif request.url.path == "/" or request.url.path.startswith(("/static/", "/login", "/admin", "/2fa-setup", "/u/")):
             # pages and assets must revalidate, so an old cached copy never hides a new layout
             resp.headers["Cache-Control"] = "no-cache"
         return resp
+
+    # Per-account request rate limit, 30 a second or 600 a minute. Icon and background requests are exempt:
+    # a character grid asks for one per card, so counting them would block a normal page load. A burst gets
+    # a short cooldown with Retry-After, never a permanent block; sign-in has its own failed-attempt limits.
+    _RATE_EXEMPT = ("/api/icon/", "/api/background/", "/api/version", "/api/client/",
+                    "/api/minigames/file", "/api/minigames/asset")
+    _rate_hits = {}
+    _rate_lock = threading.Lock()
+
+    @app.middleware("http")
+    async def rate_limit(request: Request, call_next):
+        path = request.url.path
+        if not path.startswith("/api/") or path.startswith(_RATE_EXEMPT):
+            return await call_next(request)
+        uid = None
+        cookie = request.cookies.get(COOKIE)
+        if cookie:
+            try:
+                u = st.store.session_user(cookie)
+                if u:
+                    uid = u["id"]
+            except Exception:
+                pass
+        ip = client_ip(request)
+        key = (uid, ip) if uid is not None else ("anon", ip)
+        now = time.time()
+        with _rate_lock:
+            hits = _rate_hits.setdefault(key, [])
+            cutoff = now - 60.0
+            while hits and hits[0] < cutoff:
+                hits.pop(0)
+            recent_second = sum(1 for t in hits if t >= now - 1.0)
+            if recent_second >= 30 or len(hits) >= 600:
+                return JSONResponse({"detail": "Too many requests. Please wait a moment."},
+                                    status_code=429, headers={"Retry-After": "2"})
+            hits.append(now)
+            if len(hits) > 2000:
+                _rate_hits.pop(key, None)
+        return await call_next(request)
 
     def page(name):
         return FileResponse(os.path.join(HERE, "static", name), media_type="text/html")
@@ -2070,6 +2157,10 @@ def make_app(client=None, data_dir=None, char_root=None):
         return page("sandboxes.html")
 
     # The maker page for a novel or a group chat. The kind comes from the address; ?id= edits an existing one.
+    @app.get("/balance")
+    def balance_page():
+        return page("balance.html")
+
     @app.get("/create/novel")
     def create_novel_page():
         return page("maker.html")
@@ -2206,13 +2297,16 @@ def make_app(client=None, data_dir=None, char_root=None):
             _ip_note_fail(ip)
             ip_locked = store.record_failed_ip(username, ip)
             lock = store.record_failed_login(username)
+            store.audit("login_fail", username, ip)
             if lock:
                 if lock[0] == "permanent":
                     found = store.find_user(username)
                     if found:
                         store.end_all_sessions(found["id"])
+                    store.audit("account_lock", username, ip, "permanent")
                 raise _lock_error(lock)
             if ip_locked:
+                store.audit("ip_block", username, ip)
                 raise _ip_error()
             raise HTTPException(401, "Wrong username or password.")
         if not user["totp_enabled"]:
@@ -2220,6 +2314,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             # is half of it, so the code step clears them when the code is right.
             store.clear_login_lock(username)
             store.clear_ip_throttle(username, ip)
+            store.audit("login_success", user["username"], ip)
         if needs_rehash(user["pw_hash"]):
             # Hashes made at a lower scrypt cost are upgraded now that the password is known.
             store.upgrade_hash(user["id"], password)
@@ -2273,6 +2368,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         if not ok:
             _ip_note_fail(ip)
             lock = store.record_failed_login(user["username"])
+            store.audit("login_2fa_fail", user["username"], ip)
             if lock:
                 if lock[0] == "permanent":
                     store.end_all_sessions(user["id"])
@@ -2280,6 +2376,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(401, "That code is wrong or was already used. Enter the one showing now.")
         store.clear_login_lock(user["username"])
         store.clear_ip_throttle(user["username"], client_ip(request))
+        store.audit("login_success", user["username"], ip, "2fa")
         if stage == "setup":
             store.set_totp(user["id"], user["totp_secret"], True, True, step)
         else:
@@ -2304,7 +2401,8 @@ def make_app(client=None, data_dir=None, char_root=None):
         info = {"username": user["username"], "is_admin": bool(user["is_admin"]),
                 "must_change": bool(user["must_change"])}
         info["features"] = {"memory": st.store.get_setting("memory_enabled") == "1",
-                            "palace": st.store.get_setting("palace_enabled") == "1"}
+                            "palace": st.store.get_setting("palace_enabled") == "1",
+                            "minigames": st.store.get_setting("minigames_enabled") == "1"}
         if not user["must_change"]:
             info["usage"] = _usage_summary(st, user)
             info["global"] = {"requests_today": store.global_requests_today(),
@@ -2361,6 +2459,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         store.set_password(user["id"], new, must_change=False)
         remember = store.session_remembered(request.cookies.get(COOKIE))
         store.end_all_sessions(user["id"])
+        store.audit("password_change", user["username"], client_ip(request))
         token = store.new_session(user["id"], remember=remember)
         resp = JSONResponse({"ok": True})
         _set_session_cookie(resp, token, remember)
@@ -2522,6 +2621,261 @@ def make_app(client=None, data_dir=None, char_root=None):
         return FileResponse(path, media_type=music.SERVED[os.path.splitext(fname)[1]],
                             headers={"Cache-Control": "private, max-age=300"})
 
+    # ---- speech: reading replies through a local speech server, with per-account voice profiles.
+    def _voice_cfg():
+        return providers.load(st.data_dir)["audio"]
+
+    def _voice_folder_key(user, name):
+        # The on-disk folder of a solo character and the folder id preferences are kept under. A group or novel
+        # has no author voice, so only the id comes back.
+        if not name:
+            return None, ""
+        try:
+            folder, is_group = _resolve_profile(st, name, user)
+        except HTTPException:
+            return None, folder_for(str(name))
+        if is_group:
+            return None, folder
+        try:
+            return editor.folder_of(st.char_root, folder), folder
+        except editor.EditorError:
+            return None, folder
+
+    def _voice_character_view(user, name):
+        folder, _key = _voice_folder_key(user, name)
+        data = voice.load_character(folder) if folder else {"voice": "", "lang": "", "sample": ""}
+        return {"name": _label(st, user, folder_for(str(name))) if name else "",
+                "voice": data["voice"], "lang": data["lang"], "sample": bool(data["sample"])}
+
+    @app.get("/api/voice")
+    def voice_settings(request: Request, character: str = ""):
+        user = require(request)
+        prefs = voice.load_user(st.data_dir, user["id"])
+        cfg = _voice_cfg()
+        _folder, key = _voice_folder_key(user, character)
+        public = voice.public_prefs(st.data_dir, user["id"], prefs)
+        return {"available": bool(cfg.get("enabled") and cfg.get("base_url")),
+                "auto": public["auto"], "rate": public["rate"],
+                "pitch": public["pitch"], "volume": public["volume"],
+                "dialogue_only": public["dialogue_only"],
+                "choice": prefs["charChoices"].get(key, prefs["choice"]),
+                "default_choice": prefs["choice"],
+                "profiles": public["profiles"], "character": _voice_character_view(user, character),
+                "langs": [{"code": k, "name": v} for k, v in voice.LANGS.items()],
+                "voices": list(voice.VOICES)}
+
+    @app.post("/api/voice/prefs")
+    async def voice_prefs_set(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        try:
+            prefs = voice.update_user(st.data_dir, user["id"], body)
+        except voice.VoiceError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "voice": voice.public_prefs(st.data_dir, user["id"], prefs)}
+
+    @app.post("/api/voice/profiles")
+    async def voice_profile_save(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        try:
+            prof = voice.upsert_profile(st.data_dir, user["id"], body)
+        except voice.VoiceError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "profile": voice.public_profile(st.data_dir, user["id"], prof)}
+
+    @app.delete("/api/voice/profiles/{pid}")
+    def voice_profile_remove(pid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        try:
+            voice.remove_profile(st.data_dir, user["id"], pid)
+        except voice.VoiceError as err:
+            raise HTTPException(404, str(err))
+        return {"ok": True}
+
+    @app.post("/api/voice/profiles/{pid}/sample")
+    async def voice_profile_sample(pid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        try:
+            prof = await run_in_threadpool(voice.save_profile_sample, st.data_dir, user["id"], pid,
+                                           await request.body())
+        except voice.VoiceError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "profile": voice.public_profile(st.data_dir, user["id"], prof)}
+
+    @app.get("/api/voice/profiles/{pid}/sample")
+    def voice_profile_sample_file(pid: str, request: Request):
+        user = require(request)
+        path = voice.profile_sample_path(st.data_dir, user["id"], pid)
+        if path is None:
+            raise HTTPException(404, "No sample for that voice.")
+        return FileResponse(path, media_type="audio/wav",
+                            headers={"Cache-Control": "private, max-age=300"})
+
+    @app.get("/api/character-voice/{name}/sample")
+    def character_voice_sample(name: str, request: Request):
+        user = require(request)
+        folder, _key = _voice_folder_key(user, name)
+        path = voice.character_sample_path(folder) if folder else None
+        if path is None:
+            raise HTTPException(404, "No sample for that character.")
+        return FileResponse(path, media_type="audio/wav",
+                            headers={"Cache-Control": "private, max-age=300"})
+
+    def _voice_pick(user, character, speaker):
+        # The voice a line should use, and the reference clip that goes with it. A group speaker is looked up
+        # first, so each member can sound different; otherwise the open chat decides.
+        prefs = voice.load_user(st.data_dir, user["id"])
+        folder, key = _voice_folder_key(user, speaker or character)
+        if folder is None and speaker:
+            folder, key = _voice_folder_key(user, character)
+        resolved = voice.resolve(prefs, key, folder)
+        if resolved["source"] == "profile":
+            sample = voice.profile_sample_path(st.data_dir, user["id"], resolved["profile"])
+        else:
+            sample = voice.character_sample_path(folder) if folder else None
+        return prefs, resolved, sample, folder
+
+    @app.post("/api/voice/speak")
+    async def voice_speak(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        cfg = _voice_cfg()
+        if not (cfg.get("enabled") and cfg.get("base_url")):
+            raise HTTPException(409, "Speech is turned off on this server.")
+        prefs, resolved, sample, _folder = _voice_pick(user, str(body.get("character") or ""),
+                                                       str(body.get("speaker") or ""))
+        dialogue_only = bool(body["dialogue_only"]) if "dialogue_only" in body else prefs["dialogue_only"]
+        strict = bool(body.get("strict_dialogue"))
+        text = str(body.get("text") or "")
+        if dialogue_only:
+            # A voice call reads only the lines inside quotation marks. With strict on, narration alone is silent.
+            text = voice.clean_text(text, dialogue_only=True, strict_dialogue=strict)
+            if not text:
+                return Response(status_code=204)
+            dialogue_only = False
+        try:
+            data = await run_in_threadpool(voice.speak, st.data_dir, cfg, text,
+                                           resolved["voice"], resolved["lang"], sample,
+                                           prefs["rate"], prefs["pitch"], dialogue_only, strict)
+        except voice.VoiceError as err:
+            raise HTTPException(502, str(err))
+        return Response(content=data, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/voice/transcribe")
+    async def voice_transcribe(request: Request, character: str = ""):
+        _csrf(request)
+        user = require(request)
+        cfg = _voice_cfg()
+        if not (cfg.get("enabled") and cfg.get("base_url")):
+            raise HTTPException(409, "Speech is turned off on this server.")
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            declared = 0
+        if declared > voice.STT_MAX:
+            raise HTTPException(413, "That recording is too large.")
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > voice.STT_MAX:
+                raise HTTPException(413, "That recording is too large.")
+        data = bytes(body)
+        if not data:
+            raise HTTPException(400, "There is no audio to transcribe.")
+        _prefs, resolved, _sample, _folder = _voice_pick(user, character, "")
+        try:
+            text = await run_in_threadpool(voice.transcribe, cfg, data, resolved["lang"] or "")
+        except voice.VoiceError as err:
+            raise HTTPException(502, str(err))
+        return {"text": text}
+
+    @app.post("/api/voice/preview")
+    async def voice_preview(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        cfg = _voice_cfg()
+        if not (cfg.get("enabled") and cfg.get("base_url")):
+            raise HTTPException(409, "Speech is turned off on this server.")
+        character = str(body.get("character") or "")
+        pid = str(body.get("profile") or "")
+        prefs = voice.load_user(st.data_dir, user["id"])
+        sample = None
+        voice_name = ""
+        lang = ""
+        if pid and pid in prefs["profiles"]:
+            prof = prefs["profiles"][pid]
+            voice_name, lang = prof["voice"], prof["lang"]
+            sample = voice.profile_sample_path(st.data_dir, user["id"], pid)
+        else:
+            _prefs, resolved, sample, _folder = _voice_pick(user, character, "")
+            voice_name, lang = resolved["voice"], resolved["lang"]
+        label = _label(st, user, folder_for(character)) if character else ""
+        text = f"This is how {label} will sound." if label else "This is how this character will sound."
+        try:
+            data = await run_in_threadpool(voice.speak, st.data_dir, cfg, text, voice_name, lang, sample,
+                                           prefs["rate"], prefs["pitch"], prefs["dialogue_only"])
+        except voice.VoiceError as err:
+            raise HTTPException(502, str(err))
+        return Response(content=data, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+    # ---- prepaid credits (MCC): balance, top-up requests, admin approval
+    @app.get("/api/credits")
+    def credits_view(request: Request):
+        user = require(request)
+        reqs = store.credit_requests_for_user(user["id"])
+        return {"tier": _tier_of(user), "balance": store.credit_balance(user["id"]),
+                "auto_accept": store.get_setting("credits_auto_accept") == "1",
+                "requests": reqs}
+
+    @app.post("/api/credits/request")
+    async def credits_request(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        raw = body.get("tokens")
+        tokens = int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) and float(raw).is_integer() else None
+        price = body.get("price")
+        if tokens is None or tokens <= 0 or tokens > 10_000_000:
+            raise HTTPException(400, "tokens must be a positive whole number.")
+        if not isinstance(price, (int, float)) or isinstance(price, bool) or price < 0:
+            raise HTTPException(400, "price must be a non-negative number.")
+        rid = store.add_credit_request(user["id"], tokens, price)
+        if store.get_setting("credits_auto_accept") == "1":
+            store.decide_credit_request(rid, True, user["id"])
+            store.audit("credit_auto_approved", user["username"], client_ip(request), f"{tokens} tokens")
+            return {"ok": True, "auto": True, "balance": store.credit_balance(user["id"])}
+        store.audit("credit_request", user["username"], client_ip(request), f"{tokens} tokens")
+        return {"ok": True, "auto": False, "request_id": rid}
+
+    @app.get("/api/admin/credit-requests")
+    def admin_credit_requests(request: Request):
+        require(request, admin=True)
+        rows = store.list_credit_requests()
+        users = {u["id"]: u["username"] for u in store.list_users()}
+        return {"requests": [{"id": r["id"], "user_id": r["user_id"],
+                              "username": users.get(r["user_id"], "?"),
+                              "tokens": r["tokens"], "price_mcc": r["price_mcc"],
+                              "status": r["status"], "created_at": r["created_at"]} for r in rows]}
+
+    @app.post("/api/admin/credit-requests/{rid}")
+    async def admin_decide_credit(rid: int, request: Request):
+        _csrf(request)
+        me_ = require(request, admin=True)
+        body = _read_body(await request.json())
+        approve = bool(body.get("approve"))
+        ok = store.decide_credit_request(rid, approve, me_["id"])
+        if not ok:
+            raise HTTPException(404, "No such pending request.")
+        store.audit("credit_decide", me_["username"], client_ip(request), f"req {rid} {'approved' if approve else 'rejected'}")
+        return {"ok": True}
+
     @app.get("/api/account/{username}")
     def account_profile(username: str, request: Request):
         viewer = require(request)
@@ -2546,9 +2900,23 @@ def make_app(client=None, data_dir=None, char_root=None):
         bg_ids = _background_ids_for(st, user, solo, groups)
         private_icons = [i["name"] for i in private_groups.list_for(st.data_dir, user["id"])
                          if editor.icon_path(_private_group_root(st, user["id"]), i["id"]) is not None]
-        return {"solo": [display_for(s) for s in solo], "groups": [{"name": display_for(g), "members": [display_for(x) for x in m]} for g, m in groups.items()]
-                + [{"name": i["name"], "members": [display_for(x) for x in i["members"]], "id": i["id"], "private": True}
-                   for i in private_groups.list_for(st.data_dir, user["id"])],
+        # Group chats and novels carry theme music the same way a character does; the chat page plays it while
+        # one of them is open. A shared group keeps its tracks in its character folder, a private one in its own.
+        group_rows = [{"name": display_for(g), "members": [display_for(x) for x in m],
+                       "music": music.character_tracks(st.char_root, display_for(g))}
+                      for g, m in groups.items()]
+        for i in private_groups.list_for(st.data_dir, user["id"]):
+            folder = os.path.join(_private_group_root(st, user["id"]), i["id"])
+            group_rows.append({"name": i["name"], "members": [display_for(x) for x in i["members"]],
+                               "id": i["id"], "private": True,
+                               "music": music.public(folder, "/api/group-music/%s/file/" % i["id"])})
+        novel_rows = []
+        for n in novels.list_for(st.data_dir, user["id"]):
+            folder = novels.state_root(st.data_dir, user["id"], n["id"])
+            novel_rows.append({"id": n["id"], "name": n["name"],
+                               "members": [display_for(m) for m in n["members"]], "world": n["world"],
+                               "music": music.public(folder, "/api/novel-music/%s/file/" % n["id"])})
+        return {"solo": [display_for(s) for s in solo], "groups": group_rows,
                 "cards": [dict(_card_for(st, s), favourite=display_for(s) in favs,
                         stars=stars.get(display_for(s), 0), messages=totals.get(display_for(s), 0),
                         popular=display_for(s) in pop) for s in ranked],
@@ -2556,8 +2924,7 @@ def make_app(client=None, data_dir=None, char_root=None):
                 "popular": sorted(pop),
                 "stars": stars,
                  "sidebar": [display_for(s) for s in ranked if s in chatted or display_for(s) in favs],
-                "novels": [{"id": n["id"], "name": n["name"], "members": [display_for(m) for m in n["members"]],
-                            "world": n["world"]} for n in novels.list_for(st.data_dir, user["id"])],
+                "novels": novel_rows,
                 "worlds": [{"id": w["id"], "name": w["name"]} for w in _world_store(st, user)["items"]],
                 "world_default": _world_store(st, user)["default"],
                 "personas": _persona_list(st, user), "colors": _colour_map(st.char_root),
@@ -2652,8 +3019,10 @@ def make_app(client=None, data_dir=None, char_root=None):
         user = require(request)
         out = []
         for i in private_groups.list_for(st.data_dir, user["id"]):
+            folder = os.path.join(_private_group_root(st, user["id"]), i["id"])
             out.append({"id": i["id"], "name": i["name"], "has_icon": editor.icon_path(_private_group_root(st, user["id"]), i["id"]) is not None,
                         "has_background": bool(editor.background_ids(_private_group_root(st, user["id"]), i["id"])),
+                        "music": music.public(folder, "/api/group-music/%s/file/" % i["id"]),
                         "members": [{"key": m, "name": display_for(m)} for m in i["members"]],
                         "notes": {display_for(k): v for k, v in private_groups.get_notes(st.data_dir, user["id"], i["id"]).items()}})
         return {"groups": out, "max": private_groups.MAX_GROUPS, "min_members": private_groups.MIN_MEMBERS,
@@ -2728,6 +3097,45 @@ def make_app(client=None, data_dir=None, char_root=None):
         for bid in editor.background_ids(root, gid):
             editor.remove_background(root, gid, bid)
         return {"ok": True, "has_background": False}
+
+    # A private group's theme music: the same three tracks a character can have, kept in the group's folder.
+    @app.post("/api/groups/{gid}/music")
+    async def group_music_add(gid: str, request: Request, title: str = ""):
+        _csrf(request)
+        user = require(request)
+        if private_groups.get(st.data_dir, user["id"], gid) is None:
+            raise HTTPException(404, "That group no longer exists.")
+        folder = os.path.join(_private_group_root(st, user["id"]), gid)
+        os.makedirs(folder, exist_ok=True)
+        try:
+            await run_in_threadpool(music.add, folder, await request.body(), title)
+        except music.MusicError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "music": music.public(folder, "/api/group-music/%s/file/" % gid)}
+
+    @app.delete("/api/groups/{gid}/music/{tid}")
+    def group_music_remove(gid: str, tid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        if private_groups.get(st.data_dir, user["id"], gid) is None:
+            raise HTTPException(404, "That group no longer exists.")
+        folder = os.path.join(_private_group_root(st, user["id"]), gid)
+        try:
+            music.remove(folder, tid)
+        except music.MusicError as err:
+            raise HTTPException(404, str(err))
+        return {"ok": True, "music": music.public(folder, "/api/group-music/%s/file/" % gid)}
+
+    @app.get("/api/group-music/{gid}/file/{fname}")
+    def group_music_file(gid: str, fname: str, request: Request):
+        user = require(request)
+        if private_groups.get(st.data_dir, user["id"], gid) is None:
+            raise HTTPException(404, "Unknown group.")
+        path = music.file_path(os.path.join(_private_group_root(st, user["id"]), gid), fname)
+        if path is None:
+            raise HTTPException(404, "No such track.")
+        return FileResponse(path, media_type=music.SERVED[os.path.splitext(fname)[1]],
+                            headers={"Cache-Control": "private, max-age=300"})
 
     @app.put("/api/groups/{gid}")
     async def group_update(gid: str, request: Request):
@@ -2947,8 +3355,14 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.get("/api/novels")
     def novels_list(request: Request):
         user = require(request)
-        out = [{"id": n["id"], "name": n["name"], "members": [{"key": m, "name": display_for(m)} for m in n["members"]],
-                "world": n["world"]} for n in novels.list_for(st.data_dir, user["id"])]
+        out = []
+        for n in novels.list_for(st.data_dir, user["id"]):
+            folder = novels.state_root(st.data_dir, user["id"], n["id"])
+            ids = editor.background_ids(_private_group_root(st, user["id"]), n["id"])
+            out.append({"id": n["id"], "name": n["name"],
+                        "members": [{"key": m, "name": display_for(m)} for m in n["members"]],
+                        "world": n["world"], "has_background": bool(ids), "backgrounds": ids,
+                        "music": music.public(folder, "/api/novel-music/%s/file/" % n["id"])})
         return {"novels": out, "max": novels.MAX_NOVELS, "min_cast": novels.MIN_CAST, "max_cast": novels.MAX_CAST}
 
     @app.post("/api/novels")
@@ -2995,6 +3409,73 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(400, str(err))
         _drop_slot(st, user, nid)
         return {"ok": True}
+
+    # A novel's background and theme music, kept in the novel's own folder: the background beside it under the
+    # account folder, the music inside it, which is where every chat keeps its tracks.
+    def _novel_dir(user, nid):
+        if novels.get(st.data_dir, user["id"], nid) is None:
+            raise HTTPException(404, "That novel no longer exists.")
+        root = novels.state_root(st.data_dir, user["id"], nid)
+        os.makedirs(root, exist_ok=True)
+        return root
+
+    @app.post("/api/novels/{nid}/background")
+    async def novel_background_save(nid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        _novel_dir(user, nid)
+        root = _private_group_root(st, user["id"])
+        data = await request.body()
+        try:
+            for bid in editor.background_ids(root, nid):
+                editor.remove_background(root, nid, bid)
+            await run_in_threadpool(editor.add_background, root, nid, data)
+        except editor.EditorError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "has_background": True}
+
+    @app.delete("/api/novels/{nid}/background")
+    def novel_background_remove(nid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        _novel_dir(user, nid)
+        root = _private_group_root(st, user["id"])
+        for bid in editor.background_ids(root, nid):
+            editor.remove_background(root, nid, bid)
+        return {"ok": True, "has_background": False}
+
+    @app.post("/api/novels/{nid}/music")
+    async def novel_music_add(nid: str, request: Request, title: str = ""):
+        _csrf(request)
+        user = require(request)
+        root = _novel_dir(user, nid)
+        try:
+            await run_in_threadpool(music.add, root, await request.body(), title)
+        except music.MusicError as err:
+            raise HTTPException(400, str(err))
+        return {"ok": True, "music": music.public(root, "/api/novel-music/%s/file/" % nid)}
+
+    @app.delete("/api/novels/{nid}/music/{tid}")
+    def novel_music_remove(nid: str, tid: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        root = _novel_dir(user, nid)
+        try:
+            music.remove(root, tid)
+        except music.MusicError as err:
+            raise HTTPException(404, str(err))
+        return {"ok": True, "music": music.public(root, "/api/novel-music/%s/file/" % nid)}
+
+    @app.get("/api/novel-music/{nid}/file/{fname}")
+    def novel_music_file(nid: str, fname: str, request: Request):
+        user = require(request)
+        if novels.get(st.data_dir, user["id"], nid) is None:
+            raise HTTPException(404, "Unknown novel.")
+        path = music.file_path(novels.state_root(st.data_dir, user["id"], nid), fname)
+        if path is None:
+            raise HTTPException(404, "No such track.")
+        return FileResponse(path, media_type=music.SERVED[os.path.splitext(fname)[1]],
+                            headers={"Cache-Control": "private, max-age=300"})
 
     # ---- tensions: the open threads of one chat, and when they are read (off, on the nightly dream, or on each memory
     # bank save). The record is held by the chat's engine, so each edit goes through the chat's slot.
@@ -3057,8 +3538,15 @@ def make_app(client=None, data_dir=None, char_root=None):
         user = require(request)
         name, is_group = _resolve_profile(st, character, user)
         slot = _slot(st, user, name, is_group)
-        with slot.lock:
-            return {"messages": _history(slot.engine)}
+        # A refresh must not wait for a turn that is still streaming. Take the lock if it is free; if a turn holds
+        # it, read the committed history directly. A normal turn only appends its two lines after the model returns,
+        # and a regenerate deletes the old tail before the call, so the read is a stable view of what is saved.
+        if slot.lock.acquire(timeout=0.75):
+            try:
+                return {"messages": _history(slot.engine)}
+            finally:
+                slot.lock.release()
+        return {"messages": _history(slot.engine)}
 
     @app.get("/api/context")
     def context_info(request: Request, character: str):
@@ -3088,7 +3576,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             return JSONResponse({"command": result})
         _check_caps(st, user)
         slot = await run_in_threadpool(_slot, st, user, name, is_group)
-        return StreamingResponse(_run_turn(st, user, name, slot, message),
+        return StreamingResponse(_run_turn(st, user, name, slot, message, call=bool(body.get("call"))),
                                  media_type="text/event-stream", headers=SSE_HEADERS)
 
     @app.post("/api/autofill")
@@ -3128,6 +3616,384 @@ def make_app(client=None, data_dir=None, char_root=None):
         except RuntimeError as err:
             raise HTTPException(502, f"Roll failed: {err}")
         return {"event": {"speaker": "Narrator", "text": text}}
+
+    # ---- mini-games: listing, progress, play and mid-game lines ----
+
+    # One writer at a time over the saves and result prefs: both are read-modify-write on one JSON
+    # value, and a save, a finished round and an admin action can arrive from different threads.
+    minigame_lock = threading.Lock()
+
+    def _minigame_dir():
+        return os.path.join(st.data_dir, "minigames")
+
+    def _minigame_registry():
+        # Imported games: [{id, name, description, version, author}] in data/minigames/registry.json.
+        try:
+            with open(os.path.join(_minigame_dir(), "registry.json"), encoding="utf-8") as fh:
+                rows = json.load(fh)
+        except (OSError, ValueError):
+            return []
+        return [r for r in rows if isinstance(r, dict) and minigames.ID_RE.match(str(r.get("id", "")))]
+
+    def _minigame_write_registry(rows):
+        # Written through a temp file: a crash mid-write must not leave a registry the server then
+        # reads as empty, which would quietly hide every imported game from the lists.
+        os.makedirs(_minigame_dir(), exist_ok=True)
+        path = os.path.join(_minigame_dir(), "registry.json")
+        tmp = path + ".part"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(rows, fh, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
+
+    def _minigame_meta(gid):
+        for b in minigames.BUILTINS:
+            if b["id"] == gid:
+                return dict(b, version="", author="")
+        for r in _minigame_registry():
+            if r["id"] == gid:
+                return r
+        return None
+
+    def _minigame_ids():
+        return [b["id"] for b in minigames.BUILTINS] + [r["id"] for r in _minigame_registry()]
+
+    def _minigame_file(gid):
+        if not minigames.ID_RE.match(gid):
+            return None
+        if any(b["id"] == gid for b in minigames.BUILTINS):
+            path = os.path.join(HERE, "static", "games", gid + ".js")
+            return path if os.path.isfile(path) else None
+        if not any(r["id"] == gid for r in _minigame_registry()):
+            return None
+        path = os.path.join(_minigame_dir(), gid + ".js")
+        return path if os.path.isfile(path) else None
+
+    def _enabled_minigames():
+        return minigames.enabled_ids(st.store.get_setting("minigames_on"), _minigame_ids())
+
+    def _minigame_deck(gid):
+        # A card game carries its deck as one of its own files, so the zip that brings the game
+        # brings the cards too. Read per request: an admin can replace the file and the next round
+        # uses it. Anything missing, oversized or malformed reads as an empty deck.
+        path = os.path.join(_minigame_assets_dir(gid), minigames.DECK_NAME)
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read(minigames.DECK_MAX + 1)
+        except OSError:
+            return []
+        if len(raw) > minigames.DECK_MAX:
+            return []
+        try:
+            return minigames.parse_deck(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            return []
+
+    def _minigame_assets_dir(gid):
+        return os.path.join(_minigame_dir(), "assets", gid)
+
+    def _minigame_asset_rows(gid):
+        # [{name, type, size}] for one known game, or None when the game itself is unknown.
+        if not minigames.ID_RE.match(gid) or not _minigame_meta(gid):
+            return None
+        try:
+            names = sorted(os.listdir(_minigame_assets_dir(gid)))
+        except OSError:
+            return []
+        rows = []
+        for fname in names:
+            media = minigames.asset_media(fname)
+            if not media:
+                continue
+            path = os.path.join(_minigame_assets_dir(gid), fname)
+            if os.path.isfile(path):
+                rows.append({"name": fname, "type": media, "size": os.path.getsize(path)})
+        return rows
+
+    def _minigame_asset_path(gid, name):
+        media = minigames.asset_media(name)
+        if not media or _minigame_asset_rows(gid) is None:
+            return None
+        path = os.path.join(_minigame_assets_dir(gid), name)
+        return path if os.path.isfile(path) else None
+
+    def _minigame_saves(uid):
+        return minigames.load_json(st.store.get_pref(uid, "minigame_saves"), {})
+
+    def _minigame_put_state(uid, game, character, state):
+        key = minigames.save_key(game, character)
+        with minigame_lock:
+            saves = _minigame_saves(uid)
+            if state is None:
+                saves.pop(key, None)
+            else:
+                minigames.touch_saves(saves, key, state)
+                minigames.trim_saves(saves)
+            st.store.set_pref(uid, "minigame_saves", json.dumps(saves, ensure_ascii=False))
+
+    def _minigame_result_get(uid, result_id, now):
+        with minigame_lock:
+            raw = st.store.get_pref(uid, "minigame_done")
+        return minigames.lookup_result(raw, result_id, now)
+
+    def _minigame_result_put(uid, result_id, response, now):
+        with minigame_lock:
+            raw = st.store.get_pref(uid, "minigame_done")
+            st.store.set_pref(uid, "minigame_done", minigames.remember_result(raw, result_id, response, now))
+
+    @app.get("/api/minigames")
+    def minigames_list(request: Request):
+        require(request)
+        on = set(_enabled_minigames())
+        games = [{"id": b["id"], "name": b["name"], "description": b["description"],
+                  "version": "", "author": "", "source": "built-in", "on": b["id"] in on}
+                 for b in minigames.BUILTINS]
+        for r in _minigame_registry():
+            games.append({"id": r["id"], "name": str(r.get("name") or r["id"]),
+                          "description": str(r.get("description") or ""),
+                          "version": str(r.get("version") or ""), "author": str(r.get("author") or ""),
+                          "source": "imported", "on": r["id"] in on})
+        return {"enabled": st.store.get_setting("minigames_enabled") == "1", "games": games}
+
+    @app.get("/api/minigames/file/{gid}")
+    def minigames_file(gid: str):
+        # Public on purpose: the sandboxed game frame cannot carry the session cookie, and the source
+        # holds no user data — it is the same code every player runs.
+        path = _minigame_file(gid)
+        if not path:
+            raise HTTPException(404, "Unknown game.")
+        return FileResponse(path, media_type="application/javascript")
+
+    @app.get("/api/minigames/assets/{gid}")
+    def minigame_assets(gid: str):
+        # Public for the same reason as the game file: the frame cannot carry a cookie, and an asset
+        # is one picture, sound or clip that every player of that game receives alike.
+        rows = _minigame_asset_rows(gid)
+        if rows is None:
+            raise HTTPException(404, "Unknown game.")
+        return {"assets": rows}
+
+    @app.get("/api/minigames/asset/{gid}/{name}")
+    def minigame_asset(gid: str, name: str):
+        # The page reads these itself (with the session) and hands them to the game as data URLs;
+        # the route stays public for a frame that asks on its own, with no account data in the file.
+        path = _minigame_asset_path(gid, name)
+        if not path:
+            raise HTTPException(404, "No such asset.")
+        return FileResponse(path, media_type=minigames.asset_media(name),
+                            headers={"Cache-Control": "public, max-age=3600"})
+
+    @app.get("/api/minigames/save")
+    def minigames_save_get(request: Request, character: str, game: str):
+        user = require(request)
+        name, is_group = _resolve_profile(st, character, user)
+        if is_group:
+            raise HTTPException(400, "Games are for solo chats.")
+        if not _minigame_meta(game):
+            raise HTTPException(404, "Unknown game.")
+        return {"state": _minigame_saves(user["id"]).get(minigames.save_key(game, name))}
+
+    @app.get("/api/minigames/saves")
+    def minigames_saves(request: Request, character: str):
+        user = require(request)
+        name, is_group = _resolve_profile(st, character, user)
+        if is_group:
+            raise HTTPException(400, "Games are for solo chats.")
+        out = {}
+        for key in _minigame_saves(user["id"]):
+            if key.endswith("::" + name):
+                out[key.split("::", 1)[0]] = True
+        return {"saves": out}
+
+    @app.post("/api/minigames/save")
+    async def minigames_save_post(request: Request):
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
+        if is_group:
+            raise HTTPException(400, "Games are for solo chats.")
+        game = str(body.get("game", ""))
+        if not _minigame_meta(game):
+            raise HTTPException(404, "Unknown game.")
+        try:
+            state = minigames.validate_state(body.get("state"))
+        except ValueError as err:
+            raise HTTPException(400, str(err))
+        _minigame_put_state(user["id"], game, name, state)
+        return {"ok": True}
+
+    @app.post("/api/minigames/play")
+    async def minigames_play(request: Request):
+        # One finished round. The final state is written before any limit is enforced, so the score
+        # survives a refused play; the rewards, the quota and the record of this round then move
+        # together, and the chat note comes last. A result id the server has already answered is
+        # returned as it was, so a lost response never pays for the round twice.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
+        if is_group:
+            raise HTTPException(400, "Games are for solo chats.")
+        if st.store.get_setting("minigames_enabled") != "1":
+            raise HTTPException(403, "Mini-games are turned off on this server.")
+        game = str(body.get("game", ""))
+        meta = _minigame_meta(game)
+        if not meta or game not in _enabled_minigames():
+            raise HTTPException(403, "That game is not switched on.")
+        outcome = str(body.get("outcome", ""))
+        if outcome not in minigames.OUTCOMES:
+            raise HTTPException(400, "Outcome must be win, loss or draw.")
+        # A scored game also sends the counts of its round. They are checked before the result id is
+        # looked up, so a score the rules cannot allow is refused even when the round is a retry.
+        rule = minigames.SCORE_RULES.get(game)
+        score = None
+        if rule:
+            try:
+                score = minigames.validate_score(rule, body.get("score"))
+            except ValueError as err:
+                raise HTTPException(400, str(err))
+        now = time.time()
+        result_id = str(body.get("resultId") or "")[:64]
+        seen = _minigame_result_get(user["id"], result_id, now)
+        if seen is not None:
+            out = dict(seen)
+            out["replayed"] = True
+            return out
+        if "state" in body:
+            try:
+                final_state = minigames.validate_state(body.get("state"))
+            except ValueError as err:
+                raise HTTPException(400, str(err))
+            _minigame_put_state(user["id"], game, name, final_state)
+        ok, reason, plays = minigames.check_play(st.store.get_pref(user["id"], "minigame_plays"), now, name)
+        if not ok:
+            raise HTTPException(429, reason)
+        mood_on = st.store.get_setting("mood_enabled") == "1"
+        att_on = st.store.get_setting("attitude_enabled") == "1"
+        mood_state = None
+        if mood_on:
+            mood_state = mood.advance(mood.load(st.store.mood_get(user["id"], name), now), now)
+        att_state = attitude.load(st.store.attitude_get(user["id"], name)) if att_on else None
+        with minigame_lock:
+            changes = minigames.load_changes(st.store.get_pref(user["id"], "minigame_changes"))
+            new_mood, new_att, rewards = (minigames.apply_score(rule, score, mood_state, att_state, now, changes, name)
+                                          if score is not None
+                                          else minigames.apply_rewards(outcome, mood_state, att_state, now, changes, name))
+            if new_mood is not None:
+                st.store.mood_save(user["id"], name, new_mood)
+            if new_att is not None:
+                st.store.attitude_save(user["id"], name, attitude.to_row(new_att))
+            st.store.set_pref(user["id"], "minigame_changes", json.dumps(changes))
+        note = minigames.note_text(meta["name"], name, outcome)
+        out = {"note": note, "rewards": rewards}
+        if new_mood is not None:
+            out["mood"] = _mood_view(True, new_mood)
+        if new_att is not None:
+            out["attitude"] = _attitude_view(True, new_att,
+                                              relationship.labels(os.path.join(st.char_root, name)))
+        st.store.set_pref(user["id"], "minigame_plays", json.dumps(plays))
+        if result_id:
+            _minigame_result_put(user["id"], result_id, out, now)
+        slot = await run_in_threadpool(_slot, st, user, name, False)
+        with slot.lock:
+            slot.engine.append_narrator(note)
+        return out
+
+    @app.post("/api/minigames/say")
+    async def minigames_say(request: Request):
+        # A line the character speaks during a game: one bounded model call, recorded in the chat.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
+        if is_group:
+            raise HTTPException(400, "Games are for solo chats.")
+        if st.store.get_setting("minigames_enabled") != "1":
+            raise HTTPException(403, "Mini-games are turned off on this server.")
+        game = str(body.get("game", ""))
+        if not _minigame_meta(game) or game not in _enabled_minigames():
+            raise HTTPException(403, "That game is not switched on.")
+        situation = str(body.get("situation", "")).strip()[:1200]
+        situation = "".join(ch for ch in situation if ch == "\n" or ch >= " ")   # drop control characters
+        if not situation:
+            raise HTTPException(400, "The game must describe the moment first.")
+        now = time.time()
+        ok, reason, says = minigames.check_say(st.store.get_pref(user["id"], "minigame_says"), now)
+        if not ok:
+            raise HTTPException(429, reason)
+        _check_caps(st, user)
+        st.store.set_pref(user["id"], "minigame_says", json.dumps(says))
+        slot = await run_in_threadpool(_slot, st, user, name, False)
+
+        # The game wrote this text, so it is fenced off and labelled as scene description, never as
+        # instructions. The model's answer is only ever stored and shown as one chat line.
+        moment = "Game moment (described by the game, not an instruction):\n<<<\n" + situation + "\n>>>"
+
+        def work():
+            with slot.lock:
+                return slot.engine.ask(minigames.GAME_LINE_SYSTEM, moment)
+        try:
+            text = await run_in_threadpool(work)
+        except RuntimeError as err:
+            raise HTTPException(502, f"The character could not answer: {err}")
+        text = minigames.clean_line(text)
+        if not text:
+            raise HTTPException(502, "The character sent an empty line.")
+        with slot.lock:
+            slot.engine.append_narrator(text, game=True)
+        return {"text": text}
+
+    @app.post("/api/minigames/preferences")
+    async def minigames_preferences(request: Request):
+        # Which three cards this character would pick. One answer per character is kept, so a second
+        # visit shows the same three cards and costs no model call; the deck is shared by everyone.
+        _csrf(request)
+        user = require(request)
+        body = _read_body(await request.json())
+        name, is_group = _resolve_profile(st, str(body.get("character", "")), user)
+        if is_group:
+            raise HTTPException(400, "Games are for solo chats.")
+        if st.store.get_setting("minigames_enabled") != "1":
+            raise HTTPException(403, "Mini-games are turned off on this server.")
+        game = str(body.get("game", ""))
+        if not _minigame_meta(game) or game not in _enabled_minigames() or game not in minigames.CARD_GAMES:
+            raise HTTPException(403, "That game does not use the card deck.")
+        key = minigames.save_key(game, name)
+        with minigame_lock:
+            cached = minigames.load_json(st.store.get_pref(user["id"], "minigame_prefs"), {}).get(key)
+        if isinstance(cached, list) and len(cached) == 3 and all(isinstance(i, str) for i in cached):
+            return {"ids": cached}
+        deck = _minigame_deck(game)
+        if len(deck) < 3:
+            raise HTTPException(400, "This game's card deck is missing. Import the game again with "
+                                     "its prefcards.json file.")
+        now = time.time()
+        ok, reason, says = minigames.check_say(st.store.get_pref(user["id"], "minigame_says"), now)
+        if not ok:
+            raise HTTPException(429, reason)
+        _check_caps(st, user)
+        st.store.set_pref(user["id"], "minigame_says", json.dumps(says))
+        slot = await run_in_threadpool(_slot, st, user, name, False)
+        prompt = ("Your card:\n" + _card_text(st, name)[:3000] + "\n\nPreference cards:\n"
+                  + minigames.deck_prompt(deck))
+
+        def work():
+            with slot.lock:
+                return slot.engine.ask(minigames.CARD_PREF_SYSTEM, prompt)
+        try:
+            text = await run_in_threadpool(work)
+        except RuntimeError as err:
+            raise HTTPException(502, f"The character could not choose cards: {err}")
+        ids = minigames.parse_preferences(text, [c["id"] for c in deck])
+        if not ids:
+            raise HTTPException(502, "The character could not choose three cards.")
+        with minigame_lock:
+            prefs = minigames.load_json(st.store.get_pref(user["id"], "minigame_prefs"), {})
+            prefs[key] = ids
+            while len(prefs) > 128:
+                prefs.pop(next(iter(prefs)))
+            st.store.set_pref(user["id"], "minigame_prefs", json.dumps(prefs))
+        return {"ids": ids}
 
     @app.post("/api/regenerate")
     async def regenerate(request: Request):
@@ -3689,6 +4555,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         except ValueError as err:
             raise HTTPException(400, str(err))
         log(f"user {username} created by {me_['username']}")
+        store.audit("admin_create_user", me_["username"], client_ip(request), username)
         return {"id": uid, "username": username}
 
     @app.post("/api/admin/users/{uid}")
@@ -3733,9 +4600,11 @@ def make_app(client=None, data_dir=None, char_root=None):
                 raise HTTPException(400, weak)
             store.set_password(uid, new, must_change=True)
             store.end_all_sessions(uid)
+            store.audit("admin_reset_password", me_["username"], client_ip(request), target["username"])
         if body.get("unlock_sign_in"):
             store.unlock_account(target["username"])
             log(f"sign-in lock cleared for {target['username']} by {me_['username']}")
+            store.audit("admin_unlock", me_["username"], client_ip(request), target["username"])
         if "require_2fa" in body:
             # Requiring it turns the account's two-factor sign-in on; it's set up at the next password sign-in.
             # Requiring it on an account that isn't set up yet ends its sessions: it must finish the set-up page first.
@@ -4121,12 +4990,72 @@ def make_app(client=None, data_dir=None, char_root=None):
         return FileResponse(path, media_type=music.SERVED[os.path.splitext(fname)[1]],
                             headers={"Cache-Control": "private, max-age=300"})
 
+    # ---- the voice an author gives a character: a default voice, a language and an optional reference clip.
+    @app.get("/api/admin/characters/{name}/voice")
+    def editor_voice_get(name: str, request: Request):
+        _require_editor(require(request), name)
+        data = voice.load_character(_character_folder(name))
+        return {"voice": data["voice"], "lang": data["lang"], "sample": bool(data["sample"])}
+
+    @app.put("/api/admin/characters/{name}/voice")
+    async def editor_voice_set(name: str, request: Request):
+        _csrf(request)
+        _require_editor(require(request), name)
+        body = _read_body(await request.json())
+        try:
+            data = voice.save_character(_character_folder(name), body)
+        except voice.VoiceError as err:
+            raise HTTPException(400, str(err))
+        return {"voice": data["voice"], "lang": data["lang"], "sample": bool(data["sample"])}
+
+    @app.post("/api/admin/characters/{name}/voice/sample")
+    async def editor_voice_sample(name: str, request: Request):
+        _csrf(request)
+        _require_editor(require(request), name)
+        try:
+            data = await run_in_threadpool(voice.save_character_sample, _character_folder(name),
+                                           await request.body())
+        except voice.VoiceError as err:
+            raise HTTPException(400, str(err))
+        return {"voice": data["voice"], "lang": data["lang"], "sample": bool(data["sample"])}
+
+    @app.delete("/api/admin/characters/{name}/voice/sample")
+    def editor_voice_sample_remove(name: str, request: Request):
+        _csrf(request)
+        _require_editor(require(request), name)
+        data = voice.remove_character_sample(_character_folder(name))
+        return {"voice": data["voice"], "lang": data["lang"], "sample": bool(data["sample"])}
+
+    @app.post("/api/admin/characters/{name}/voice/preview")
+    async def editor_voice_preview(name: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        _require_editor(user, name)
+        cfg = _voice_cfg()
+        if not (cfg.get("enabled") and cfg.get("base_url")):
+            raise HTTPException(409, "Speech is turned off on this server.")
+        folder = _character_folder(name)
+        data = voice.load_character(folder)
+        label = _label(st, user, folder_for(name))
+        text = f"This is how {label} will sound." if label else "This is how this character will sound."
+        try:
+            audio = await run_in_threadpool(voice.speak, st.data_dir, cfg, text, data["voice"],
+                                            data["lang"], voice.character_sample_path(folder),
+                                            1.0, 1.0, False)
+        except voice.VoiceError as err:
+            raise HTTPException(502, str(err))
+        return Response(content=audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
     @app.get("/api/background/{name}")
     def character_background(name: str, request: Request, b: str = ""):
         user = require(request)
         private = private_groups.find_by_key(st.data_dir, user["id"], folder_for(name), folder_for)
         try:
-            if private is not None:
+            if novels.is_novel(name):
+                if novels.get(st.data_dir, user["id"], name) is None:
+                    raise HTTPException(404, "Unknown novel.")
+                path = editor.background_path(_private_group_root(st, user["id"]), name, b or None)
+            elif private is not None:
                 path = editor.background_path(_private_group_root(st, user["id"]), private["id"], b or None)
             else:
                 path = editor.background_path(st.char_root, name, b or None)
@@ -4151,6 +5080,21 @@ def make_app(client=None, data_dir=None, char_root=None):
         with st.slots_lock:
             st.slots.clear()                           # cached engines still hold the old client
         return providers.public_view(cfg)
+
+    @app.post("/api/admin/voice/models")
+    async def admin_voice_models(request: Request):
+        _csrf(request)
+        require(request, admin=True)
+        body = _read_body(await request.json())
+        cfg = providers.load(data_dir)["audio"]
+        base_url = str(body.get("base_url") or cfg.get("base_url") or "").strip()
+        style = "openai" if str(body.get("style") or cfg.get("style")).strip().lower() == "openai" else "llama"
+        api_key = str(body.get("api_key") or "").strip() or str(cfg.get("api_key") or "")
+        try:
+            models = await run_in_threadpool(voice.list_models, base_url, style, api_key)
+        except voice.VoiceError as err:
+            raise HTTPException(502, str(err))
+        return {"models": models}
 
     @app.get("/api/admin/settings")
     def admin_settings_get(request: Request):
@@ -4246,6 +5190,161 @@ def make_app(client=None, data_dir=None, char_root=None):
         for key, val in body.items():
             store.set_setting(key, ("1" if val else "0") if key in SWITCHES else val)
         return store.all_settings()
+
+    @app.post("/api/admin/minigames")
+    async def admin_minigames_set(request: Request):
+        # Which games players may open. The master switch saves with the other settings forms.
+        _csrf(request)
+        require(request, admin=True)
+        body = _read_body(await request.json())
+        ids = body.get("enabled")
+        if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+            raise HTTPException(400, "enabled must be a list of game ids.")
+        known = set(_minigame_ids())
+        unknown = [i for i in ids if i not in known]
+        if unknown:
+            raise HTTPException(400, "Unknown game: %s" % unknown[0])
+        ids = list(dict.fromkeys(ids))
+        store.set_setting("minigames_on", json.dumps(ids))
+        return {"enabled": ids}
+
+    @app.post("/api/admin/minigames/import")
+    async def admin_minigame_import(request: Request):
+        # Accepts the game file as text; only the first-line header is read, never the code itself.
+        _csrf(request)
+        user = require(request, admin=True)
+        body = _read_body(await request.json())
+        try:
+            meta = minigames.validate_import(body.get("code"), set(_minigame_ids()))
+        except ValueError as err:
+            raise HTTPException(400, str(err))
+        os.makedirs(_minigame_dir(), exist_ok=True)
+        with open(os.path.join(_minigame_dir(), meta["id"] + ".js"), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(body.get("code"))
+        registry = _minigame_registry() + [meta]
+        _minigame_write_registry(registry)
+        log("mini-game %s imported by %s" % (meta["id"], user["username"]))
+        return meta
+
+    @app.post("/api/admin/minigames/import-zip")
+    async def admin_minigame_import_zip(request: Request):
+        # A whole game in one archive: the .js alone or in a folder, plus its pictures, sounds and
+        # clips. Nothing in it runs here; the first line names the game and the rest is stored as is.
+        # The body is not JSON, so the shared JSON limit does not cover it: read it against ZIP_MAX.
+        _csrf(request)
+        user = require(request, admin=True)
+        limit = minigames.ZIP_MAX
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            raise HTTPException(400, "Bad content length.")
+        if declared > limit:
+            raise HTTPException(413, "That archive is over 32 MB.")
+        chunks = []
+        total = 0
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > limit:
+                raise HTTPException(413, "That archive is over 32 MB.")
+            chunks.append(chunk)
+        data = b"".join(chunks)
+        if not data:
+            raise HTTPException(400, "That archive is empty.")
+        try:
+            code, assets = minigames.read_zip(data)
+            meta = minigames.validate_import(code, set(_minigame_ids()))
+        except ValueError as err:
+            raise HTTPException(400, str(err))
+        os.makedirs(_minigame_dir(), exist_ok=True)
+        path = os.path.join(_minigame_dir(), meta["id"] + ".js")
+        tmp = path + ".part"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(code)
+        os.replace(tmp, path)
+        folder = _minigame_assets_dir(meta["id"])
+        if assets:
+            os.makedirs(folder, exist_ok=True)
+        for asset_name, blob in assets:
+            apath = os.path.join(folder, asset_name)
+            atmp = apath + ".part"
+            with open(atmp, "wb") as fh:
+                fh.write(blob)
+            os.replace(atmp, apath)
+        registry = _minigame_registry() + [meta]
+        _minigame_write_registry(registry)
+        log("mini-game %s imported from a zip by %s (%d files)"
+            % (meta["id"], user["username"], len(assets)))
+        return dict(meta, assets=len(assets))
+
+    @app.post("/api/admin/minigames/{gid}/asset/{name}")
+    async def admin_minigame_asset_put(gid: str, name: str, request: Request):
+        # One asset file per request, sent as raw bytes: an image, sound or clip the game reads as a
+        # data URL. The extension chooses what the file may be; the browser's type is only a hint.
+        _csrf(request)
+        require(request, admin=True)
+        if not _minigame_meta(gid):
+            raise HTTPException(404, "Unknown game.")
+        if minigames.asset_media(name) is None:
+            raise HTTPException(400, "An asset must be a simple name like board.png, with an image, sound or video extension.")
+        limit = minigames.ASSET_MAX
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            raise HTTPException(400, "Bad content length.")
+        if declared > limit:
+            raise HTTPException(413, "That asset is over 6 MB.")
+        chunks = []
+        total = 0
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > limit:
+                raise HTTPException(413, "That asset is over 6 MB.")
+            chunks.append(chunk)
+        data = b"".join(chunks)
+        if not data:
+            raise HTTPException(400, "That file is empty.")
+        rows = _minigame_asset_rows(gid) or []
+        other = [r for r in rows if r["name"] != name]
+        if len(other) >= minigames.ASSET_COUNT_MAX and name not in {r["name"] for r in rows}:
+            raise HTTPException(413, "A game may have %d files at most." % minigames.ASSET_COUNT_MAX)
+        if sum(r["size"] for r in other) + len(data) > minigames.ASSETS_MAX:
+            raise HTTPException(413, "That game's files are over 24 MB altogether.")
+        folder = _minigame_assets_dir(gid)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, name)
+        tmp = path + ".part"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+        return {"ok": True, "name": name, "size": len(data)}
+
+    @app.delete("/api/admin/minigames/{gid}/asset/{name}")
+    def admin_minigame_asset_delete(gid: str, name: str, request: Request):
+        _csrf(request)
+        require(request, admin=True)
+        path = _minigame_asset_path(gid, name)
+        if not path:
+            raise HTTPException(404, "No such asset.")
+        os.remove(path)
+        return {"ok": True}
+
+    @app.delete("/api/admin/minigames/{gid}")
+    def admin_minigame_delete(gid: str, request: Request):
+        _csrf(request)
+        require(request, admin=True)
+        if any(b["id"] == gid for b in minigames.BUILTINS):
+            raise HTTPException(400, "Built-in games cannot be removed.")
+        registry = _minigame_registry()
+        keep = [r for r in registry if r["id"] != gid]
+        if len(keep) == len(registry):
+            raise HTTPException(404, "Unknown game.")
+        _minigame_write_registry(keep)
+        path = os.path.join(_minigame_dir(), gid + ".js")
+        if os.path.isfile(path):
+            os.remove(path)
+        shutil.rmtree(_minigame_assets_dir(gid), ignore_errors=True)
+        store.set_setting("minigames_on", json.dumps(_enabled_minigames()))
+        return {"ok": True}
 
     def _character_dir(name):
         try:
