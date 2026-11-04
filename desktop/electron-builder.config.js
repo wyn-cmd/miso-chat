@@ -18,6 +18,8 @@ module.exports = {
   win: {
     target: [{ target: "nsis", arch: ["x64"] }, { target: "msi", arch: ["x64"] }],
     icon: "build/icon.png",
+    // One name for the installer on disk and in latest.yml, so the update check finds it.
+    artifactName: "Miso-Chat-Setup-${version}.${ext}",
   },
   nsis: { oneClick: false, allowToChangeInstallationDirectory: true, perMachine: false },
   msi: { oneClick: false, perMachine: false, runAfterFinish: true },
@@ -34,5 +36,6 @@ module.exports = {
     target: [{ target: "AppImage", arch: ["x64"] }],
     category: "Network",
     icon: "build/icon.png",
+    artifactName: "Miso-Chat-${version}.${ext}",
   },
 };
