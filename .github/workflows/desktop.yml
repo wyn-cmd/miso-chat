@@ -1,0 +1,118 @@
+name: desktop
+
+# Builds the desktop package on each OS. PyInstaller cannot cross-compile and macOS tooling only
+# exists on macOS, so one runner per platform is the only way to get all three from one place.
+#
+# Runs:
+#   - when a release is published: the packages are attached to that release, which is where the
+#     app's own update check looks for a newer version;
+#   - when a v* tag is pushed, or from the Actions tab: the packages are kept as workflow artifacts.
+#
+# Packages are unsigned: Windows shows a SmartScreen warning, the macOS app needs a right-click,
+# Open the first time, and only the NSIS and AppImage builds can install an update on their own.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+            platform: win
+            args: --win --x64
+          - os: ubuntu-22.04
+            label: linux-x64
+            platform: linux
+            args: --linux --x64
+          - os: macos-latest
+            label: macos-arm64
+            platform: mac
+            args: --mac dir --arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: install the server and build requirements
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r desktop/requirements-build.txt
+
+      - name: build the backend
+        run: python desktop/build_backend.py
+
+      - name: draw the app icon
+        run: python desktop/tools/make_icon.py
+
+      - name: take the version from VERSION
+        working-directory: desktop
+        shell: bash
+        run: npm pkg set version="$(tr -d '\r\n' < ../VERSION)"
+
+      - name: install the shell
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+
+      - name: build the package
+        working-directory: desktop
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --config electron-builder.config.js ${{ matrix.args }} --publish never
+
+      - name: sign the macOS app ad hoc and zip it
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          app="$(find dist/desktop -maxdepth 2 -name '*.app' -type d | head -1)"
+          codesign --force --deep --sign - "$app"
+          ditto -c -k --keepParent "$app" "dist/desktop/Miso-Chat-macos-arm64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: miso-chat-${{ matrix.label }}
+          path: |
+            dist/desktop/*.exe
+            dist/desktop/*.msi
+            dist/desktop/*.AppImage
+            dist/desktop/*.zip
+            dist/desktop/latest*.yml
+            dist/desktop/*.blockmap
+          if-no-files-found: error
+
+      # A published release is where the app's update check looks, so the packages and the update
+      # files land on the release itself. The tag push and manual runs stop at the artifact above.
+      - name: attach the packages to the release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: |
+            dist/desktop/*.exe
+            dist/desktop/*.msi
+            dist/desktop/*.AppImage
+            dist/desktop/*.zip
+            dist/desktop/latest*.yml
+            dist/desktop/*.blockmap

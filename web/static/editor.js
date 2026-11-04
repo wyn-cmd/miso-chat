@@ -137,6 +137,7 @@ async function openEditor(name) {
   setIconPreview(name, data.has_icon);
   setBgPreview(name, data.backgrounds || []);
   setMusicPreview(name, data.music || []);
+  loadVoice(name);
   $("edColourText").classList.remove("invalid");
   $("edSandbox").closest("label").hidden = !(me && me.is_admin);   // sandboxes are an admin feature
   updateRelationshipPreview();
@@ -819,6 +820,144 @@ async function removeMusic(id) {
   }
 }
 
+// ---- the voice a character gives the speech server: a default voice, a language and an optional clip.
+const VOICE_SAMPLE_MAX = 20 * 1024 * 1024;
+let voicePreviewAudio = null;
+
+function stopVoicePreview() {
+  if (!voicePreviewAudio) return;
+  try { voicePreviewAudio.pause(); } catch (e) { /* already stopped */ }
+  if (voicePreviewAudio.src) {
+    try { URL.revokeObjectURL(voicePreviewAudio.src); } catch (e) { /* already revoked */ }
+  }
+  voicePreviewAudio = null;
+}
+
+function voiceBase() {
+  return "/api/admin/characters/" + encodeURIComponent(editing) + "/voice";
+}
+
+function fillVoiceLangs() {
+  const sel = $("edVoiceLang");
+  if (!sel || sel.dataset.filled) return;
+  sel.dataset.filled = "1";
+  const list = window.ttsLanguages || [{ code: "en", name: "English" }];
+  sel.appendChild(new Option(tr("Server default"), ""));
+  for (const item of list) sel.appendChild(new Option(item.name + " (" + item.code + ")", item.code));
+}
+
+async function loadVoice(name) {
+  fillVoiceLangs();
+  stopVoicePreview();
+  $("edVoiceErr").textContent = "";
+  $("edVoiceFile").value = "";
+  $("edVoiceSave").disabled = true;
+  $("edVoiceRemove").hidden = true;
+  $("edVoiceNote").textContent = "";
+  try {
+    const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(name) + "/voice");
+    $("edVoiceVoice").value = data.voice || "";
+    $("edVoiceLang").value = data.lang || "";
+    $("edVoiceRemove").hidden = !data.sample;
+    $("edVoiceNote").textContent = data.sample
+      ? tr("A reference clip is saved.")
+      : tr("No clip. The voice and language above are used on their own.");
+  } catch (err) {
+    $("edVoiceErr").textContent = err.message;
+  }
+}
+
+async function saveVoice() {
+  if (!editing) return;
+  $("edVoiceErr").textContent = "";
+  try {
+    const data = await api("PUT", voiceBase(), { voice: $("edVoiceVoice").value, lang: $("edVoiceLang").value });
+    $("edVoiceNote").textContent = data.sample
+      ? tr("Voice saved.")
+      : tr("Voice saved. It is used without a clip.");
+  } catch (err) {
+    $("edVoiceErr").textContent = err.message;
+  }
+}
+
+// The voice and language are enough to hear the result, so a clip is not needed to check the settings.
+async function previewVoice() {
+  if (!editing) return;
+  const btn = $("edVoicePreview");
+  $("edVoiceErr").textContent = "";
+  stopVoicePreview();
+  btn.disabled = true;
+  try {
+    const r = await fetch(voiceBase() + "/preview", {
+      method: "POST", credentials: "same-origin",
+      headers: { "X-Requested-With": "roleplay" },
+    });
+    if (!r.ok) {
+      let detail = tr("The speech server could not be reached.");
+      try {
+        const j = await r.json();
+        if (j.detail) detail = typeof j.detail === "string" ? j.detail : detail;
+      } catch (e) { /* not json */ }
+      throw new Error(detail);
+    }
+    const audio = new Audio(URL.createObjectURL(await r.blob()));
+    voicePreviewAudio = audio;
+    audio.addEventListener("ended", () => { if (voicePreviewAudio === audio) stopVoicePreview(); });
+    await audio.play();
+  } catch (err) {
+    $("edVoiceErr").textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function onVoiceFileChosen() {
+  const file = $("edVoiceFile").files[0];
+  $("edVoiceErr").textContent = "";
+  if (file && file.size > VOICE_SAMPLE_MAX) {
+    $("edVoiceErr").textContent = tr("A voice sample can be up to 20 MB.");
+    $("edVoiceSave").disabled = true;
+    return;
+  }
+  $("edVoiceSave").disabled = !file || !editing;
+}
+
+async function uploadVoice() {
+  const file = $("edVoiceFile").files[0];
+  if (!file || !editing) return;
+  $("edVoiceErr").textContent = "";
+  try {
+    const r = await fetch(voiceBase() + "/sample", {
+      method: "POST", credentials: "same-origin",
+      headers: { "X-Requested-With": "roleplay" }, body: file,
+    });
+    if (!r.ok) {
+      let detail = tr("That clip could not be saved.");
+      try { const j = await r.json(); if (j.detail) detail = typeof j.detail === "string" ? j.detail : detail; } catch (e) { /* not json */ }
+      throw new Error(detail);
+    }
+    const data = await r.json();
+    $("edVoiceRemove").hidden = !data.sample;
+    $("edVoiceFile").value = "";
+    $("edVoiceSave").disabled = true;
+    $("edVoiceNote").textContent = tr("Reference clip saved.");
+  } catch (err) {
+    $("edVoiceErr").textContent = err.message;
+  }
+}
+
+async function removeVoice() {
+  if (!editing) return;
+  $("edVoiceErr").textContent = "";
+  try {
+    await api("DELETE", voiceBase() + "/sample");
+    $("edVoiceRemove").hidden = true;
+    $("edVoiceNote").textContent = tr("Reference clip removed.");
+  } catch (err) {
+    $("edVoiceErr").textContent = err.message;
+  }
+}
+
 // Export downloads the zip through fetch, so a failure shows here instead of as a blank page.
 async function exportCharacter() {
   if (!editing) return;
@@ -845,7 +984,7 @@ async function exportCharacter() {
 }
 
 $("editorForm").addEventListener("submit", saveCharacter);
-$("editorBack").addEventListener("click", () => { showEditor(false); showChat(); renderUsage(); });
+$("editorBack").addEventListener("click", () => { stopVoicePreview(); showEditor(false); showChat(); renderUsage(); });
 $("edExample").addEventListener("click", () => loadExample().catch((e) => { $("edErr").textContent = e.message; }));
 $("edColourText").addEventListener("input", () => syncColour("text"));
 $("edColour").addEventListener("input", () => syncColour("picker"));
@@ -874,6 +1013,12 @@ $("edBgSave").addEventListener("click", uploadBackground);
 $("edBgFile").addEventListener("change", onBgFilesChosen);
 $("edMusicSave").addEventListener("click", uploadMusic);
 $("edMusicFile").addEventListener("change", onMusicFileChosen);
+$("edVoiceVoice").addEventListener("change", saveVoice);
+$("edVoiceLang").addEventListener("change", saveVoice);
+$("edVoicePreview").addEventListener("click", previewVoice);
+$("edVoiceFile").addEventListener("change", onVoiceFileChosen);
+$("edVoiceSave").addEventListener("click", uploadVoice);
+$("edVoiceRemove").addEventListener("click", removeVoice);
 $("edPalaceWho").addEventListener("change", () => { if (editing) loadPalace(editing, $("edPalaceWho").value); });
 
 // ---- Settings: the account's own Mind Palace for the open character. Each account has its own copy.

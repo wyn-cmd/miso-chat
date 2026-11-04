@@ -1,4 +1,4 @@
-/* Moonlit: the third look. It loads over redesign.css, so the layout, ids and behaviour are Spore's, and this sheet
+﻿/* Moonlit: the third look. It loads over redesign.css, so the layout, ids and behaviour are Spore's, and this sheet
    changes the surface. Elevation is a lightness step with no shadow at rest; colour is kept for the data and for the
    reader's own marks; the primary action is an inverted pill (ink on the ground), not an accent fill. Every value is a
    token, and the three rules below (dark, light, and the shared surface) are the whole theme. The sheet is applied by

@@ -10,7 +10,7 @@ This is a personal project. It is built for use on one machine or a private netw
 
 The pictures use seven made-up characters and made-up chats. They show no real account, character or data. The characters have no backgrounds of their own, so each picture shows the default backgrounds for its look.
 
-Miso Chat has four looks, chosen under Settings, Appearance, Theme: Moonlit (the default), Lantern, Dusk and Hyacinth (1.4.1). The pictures show every look on desktop and on a phone.
+Miso Chat has four looks, chosen under Settings, Appearance, Theme: Moonlit (the default), Lantern, Plexiglass and Hyacinth (1.4.1). The pictures show every look on desktop and on a phone.
 
 Desktop, home page, all four looks:
 
@@ -20,7 +20,7 @@ Desktop, home page, all four looks:
     <td align="center"><img src="docs/screenshots/lantern-desktop-home.png" alt="Lantern: home on desktop" width="480"><br>Lantern: home</td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/dusk-desktop-home.png" alt="Dusk: home on desktop" width="480"><br>Dusk: home</td>
+    <td align="center"><img src="docs/screenshots/dusk-desktop-home.png" alt="Plexiglass: home on desktop" width="480"><br>Plexiglass: home</td>
     <td align="center"><img src="docs/screenshots/hyacinth-desktop-home.png" alt="Hyacinth (1.4.1): home on desktop" width="480"><br>Hyacinth (1.4.1): home</td>
   </tr>
 </table>
@@ -33,18 +33,18 @@ Desktop, a chat, all four looks:
     <td align="center"><img src="docs/screenshots/lantern-desktop-chat.png" alt="Lantern: a chat on desktop" width="480"><br>Lantern: a chat</td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/dusk-desktop-chat.png" alt="Dusk: a chat on desktop" width="480"><br>Dusk: a chat</td>
+    <td align="center"><img src="docs/screenshots/dusk-desktop-chat.png" alt="Plexiglass: a chat on desktop" width="480"><br>Plexiglass: a chat</td>
     <td align="center"><img src="docs/screenshots/hyacinth-desktop-chat.png" alt="Hyacinth (1.4.1): a chat on desktop" width="480"><br>Hyacinth (1.4.1): a chat</td>
   </tr>
 </table>
 
-Phone, home, all four looks (left to right: Moonlit, Lantern, Dusk, Hyacinth):
+Phone, home, all four looks (left to right: Moonlit, Lantern, Plexiglass, Hyacinth):
 
 <table>
   <tr>
     <td align="center"><img src="docs/screenshots/moonlit-phone-home.png" alt="Moonlit (default): home on a phone" width="200"><br>Moonlit (default): home</td>
     <td align="center"><img src="docs/screenshots/lantern-phone-home.png" alt="Lantern: home on a phone" width="200"><br>Lantern: home</td>
-    <td align="center"><img src="docs/screenshots/dusk-phone-home.png" alt="Dusk: home on a phone" width="200"><br>Dusk: home</td>
+    <td align="center"><img src="docs/screenshots/dusk-phone-home.png" alt="Plexiglass: home on a phone" width="200"><br>Plexiglass: home</td>
     <td align="center"><img src="docs/screenshots/hyacinth-phone-home.png" alt="Hyacinth (1.4.1): home on a phone" width="200"><br>Hyacinth (1.4.1): home</td>
   </tr>
 </table>
@@ -55,7 +55,7 @@ Phone, a chat, all four looks (same order):
   <tr>
     <td align="center"><img src="docs/screenshots/moonlit-phone-chat.png" alt="Moonlit (default): a chat on a phone" width="200"><br>Moonlit (default): chat</td>
     <td align="center"><img src="docs/screenshots/lantern-phone-chat.png" alt="Lantern: a chat on a phone" width="200"><br>Lantern: chat</td>
-    <td align="center"><img src="docs/screenshots/dusk-phone-chat.png" alt="Dusk: a chat on a phone" width="200"><br>Dusk: chat</td>
+    <td align="center"><img src="docs/screenshots/dusk-phone-chat.png" alt="Plexiglass: a chat on a phone" width="200"><br>Plexiglass: chat</td>
     <td align="center"><img src="docs/screenshots/hyacinth-phone-chat.png" alt="Hyacinth (1.4.1): a chat on a phone" width="200"><br>Hyacinth (1.4.1): chat</td>
   </tr>
 </table>
@@ -125,6 +125,20 @@ The Python packages `pymupdf`, `python-docx` and `pillow` come from `requirement
 Open http://127.0.0.1:8000 in a browser. On a new install the first account is `admin`, with a random one-time password printed once in the server log at first start. Sign in with it and change it before anything else. Create other accounts from the admin page.
 
 Run the web app from the project folder, because character folders are read relative to it.
+
+## Desktop app
+
+The same app can run in its own window, packaged for Windows, macOS and Linux. The window is a small Electron shell that starts the frozen server on a free loopback port and loads it; the server, the pages and the database are the same as the web app.
+
+    python desktop/launcher.py          (the backend alone, for a quick check)
+
+Builds are per OS, because PyInstaller cannot cross-compile: Windows from Windows, macOS from macOS, Linux from Linux. The GitHub workflow `.github/workflows/desktop.yml` builds all three on three runners and uploads the packages. Building by hand:
+
+    pip install -r requirements.txt -r desktop/requirements-build.txt
+    python desktop/build_backend.py
+    cd desktop && npm install && npm run dist:win
+
+The desktop app keeps its data in the per-user application folder rather than in the project, and expects the Gemini key in a `.env` there; the first start writes the template and says where it is. The Windows packages are an NSIS installer and an MSI. Both install the same app; the NSIS one is replaced by the built-in update check, which looks at this repository's releases, ignores beta versions, and installs a newer stable release in the background. Publishing a release builds all three packages on GitHub and attaches them to the release. The packages are unsigned: Windows warns once through SmartScreen, and the macOS app needs a right-click, Open the first time. Full details, including the macOS signing step and the data-folder paths, are in `desktop/README.md`.
 
 ## Configuration
 
@@ -365,7 +379,7 @@ Admins add backgrounds to a character in the character editor. A character can h
 
 - A chat picks one background at random each time it opens.
 - Home cards and the info card cycle through the backgrounds at random. Each change waits 5 to 8 seconds, then fades to the next picture. Reduced-motion settings keep one still picture.
-- A character with no backgrounds uses the default set for the look in use, in `web/static/defaults/`: blurred circles in each look's main colour (`moon-N` for Moonlit, `lantern-N` for Lantern, `classic-N` for Hyacinth; Dusk uses the full list). These cycle the same way.
+- A character with no backgrounds uses the default set for the look in use, in `web/static/defaults/`: blurred circles in each look's main colour (`moon-N` for Moonlit, `lantern-N` for Lantern, `classic-N` for Hyacinth; Plexiglass uses the full list). These cycle the same way.
 - Under Settings, Appearance, two sliders set the background brightness (darker or lighter) and the chat bubble opacity. Each account keeps its own values.
 
 A background is never read by OCR and is never used as the profile picture.
@@ -378,13 +392,17 @@ A track up to 60 MB and 15 minutes long can be an MP3, AAC in M4A, Opus, WebM, O
 
 ## Read aloud
 
-A speaker button under a character reply reads it with the browser's speech synthesis. Press it again to stop. Under Settings, Voice & audio, choose a voice, rate, pitch and volume, test the result, and save a different voice for each character or group. Auto-read is off by default and reads new character replies as they arrive.
+A speaker button under a character reply reads it aloud. Press it again to stop. Under Settings, Voice & audio, choose the voice for the open character, rate, pitch and volume, and test the result. Auto-read is off by default and reads new replies in order as they arrive. "Read only the quoted dialogue" skips narration and reads just the lines inside quotation marks.
 
-These settings are kept in the browser, not the account. The server sends no audio, so the browser or operating system must have voices installed. A browser with no voices shows a status message instead.
+Speech is read by a speech server, which returns audio. It is off until an admin enables it under Admin, Model providers, Speech. The address is a llama.cpp server started with an audio model (the `/tts` endpoint) or any OpenAI-compatible `/v1/audio/speech` endpoint. For an OpenAI-style endpoint, Detect models asks the server for the model ids it offers and puts them in the Model box; a local llama.cpp server answers the same way, though its `/tts` endpoint ignores the model. Nothing is stored beyond a short cache of recent lines, and the text is cleaned of Markdown and stage directions first. Long replies are split at sentence breaks and joined into one clip, because the audio model fails on a few thousand characters at once. When the server is off, replies stay silent and the panel says so.
+
+A character's author can set a default voice and language in the character editor, plus an optional short reference clip. The voice and language are enough on their own; the clip is only a hint, and the editor's preview button works without one. With llama.cpp, the clip is sent as `speaker_ref_b64`, which the audio model uses to match the voice. Each account can also keep its own voice profiles, each with a voice, a language and an optional clip, and choose one per character. Profile clips and choices are kept with the account. Reference clips up to 20 MB are trimmed to 20 seconds and stored as mono 24 kHz WAV; conversion needs ffmpeg on the server.
+
+The speech languages are Arabic, British and American English, Chinese, Danish, Dutch, Finnish, French, German, Greek, Hebrew, Italian, Japanese, Korean, Polish, Portuguese, Spanish, Swedish and Turkish. The audio model offers a female and a male voice.
 
 ## Themes
 
-Four looks ship with this version. **Moonlit** is the default. **Lantern** is an editorial reading room: a warm soot ground, cream text, and an amber edge on your own lines, with squared corners, a serif chat and a single lamp's glow in the corner; the light theme is washi paper. **Dusk** is the calm end of the day: a slate ground, warm bone text and a soft periwinkle accent. **Hyacinth** is the 1.4.1 look, unchanged.
+Four looks ship with this version. **Moonlit** is the default. **Lantern** is an editorial reading room: a warm soot ground, cream text, and an amber edge on your own lines, with squared corners, a serif chat and a single lamp's glow in the corner; the light theme is washi paper. **Plexiglass** is frosted glass over a softly lit ground: translucent, blurred surfaces whose rounded rims are drawn as highlights rather than solid borders, with a cool cyan highlight. **Hyacinth** is the 1.4.1 look, unchanged.
 
 Choose one under Settings, Appearance, Theme. The choice applies to every page, login included, and takes effect at once with no reload and no lost chat state. It is kept per browser, next to the light/dark setting, not per account: two accounts on one browser share it, and a different browser starts on Moonlit.
 
@@ -504,6 +522,7 @@ A basic static check is:
 ## Known limits
 
 - Usage caps and token budgets are checked before each turn. A turn that starts under budget can finish over it.
+- Prepaid credits (MCC) are a balance an admin tops up by hand; no payment processor is wired in. Requests are approved on the balance page, or automatically when that switch is on, and credits are spent only after a tier's daily, weekly or monthly budget is used up.
 - OCR accuracy depends on the picture. Tested with clean rendered text, Tesseract read most characters correctly. Real phone screenshots with heavy blur, emoji or stylised fonts are harder, so check the draft.
 - Drafts are one model call per file. A long file is cut at 30,000 characters before it is sent.
 - Chat branches are full copies, so each one takes up disk space in proportion to the chat it copies.
@@ -520,7 +539,7 @@ A basic static check is:
 The fonts in `web/static/fonts` are all licensed under the SIL Open Font License 1.1. Each licence text sits beside its files.
 
 - Young Serif, a bundled display face: copyright 2023 The Young Serif Project Authors. See `web/static/fonts/OFL-youngserif.txt`.
-- Instrument Sans, the Moonlit and Dusk interface face: copyright 2022 The Instrument Sans Project Authors. See `web/static/fonts/OFL-instrumentsans.txt`.
+- Instrument Sans, the Moonlit and Plexiglass interface face: copyright 2022 The Instrument Sans Project Authors. See `web/static/fonts/OFL-instrumentsans.txt`.
 - Inter, the Hyacinth interface face and a chat font choice: copyright The Inter Project Authors. JetBrains Mono, the monospace choice: copyright JetBrains s.r.o. Both are in `web/static/fonts/OFL-inter-jetbrains-mono.txt`.
 - Merriweather, a serif chat font choice: copyright 2024 The Merriweather Project Authors. See `web/static/fonts/OFL.txt`.
 - Literata, a serif chat font choice: copyright 2017 The Literata Project Authors. See `web/static/fonts/OFL-literata.txt`.

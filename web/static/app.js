@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 let me = null;
 let current = null;   // character or group chat currently open
 const creatorMap = new Map();   // solo character -> who made it, and whether that account has a page
+const profileMap = new Map();   // solo character -> headline and info, handed to the game dialog
 let favSet = new Set();            // characters this account has starred
 let popularSet = new Set();        // top 10% of characters by user-sent messages
 let editableSet = new Set();   // characters this account may change (shows the sidebar pencil)
@@ -65,8 +66,9 @@ function hexToRgb(hex) {
 
 // Text colour for a bubble of this colour: white on dark colours (black, navy, purple, crimson, brown),
 // black on light ones (yellow, gold, silver, cyan). A luminance cut-off, not a pure contrast ratio, so
-// mid-dark colours like purple still take white text, as wanted.
-function readableText(hex) {
+// mid-dark colours like purple still take white text, as wanted. Washed bubbles pass a lower cut-off
+// (0.2) because their pale background needs black text well before the raw colour would.
+function readableText(hex, cutoff) {
   const rgb = hexToRgb(hex);
   if (!rgb) return "#e9eff9";
   const [r, g, b] = rgb.map((v) => {
@@ -74,7 +76,30 @@ function readableText(hex) {
     return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
   });
   const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  return lum > 0.3 ? "#111010" : "#ffffff";
+  return lum > (cutoff === undefined ? 0.3 : cutoff) ? "#111010" : "#ffffff";
+}
+
+function mixHex(a, b, t) {
+  const ra = hexToRgb(a), rb = hexToRgb(b);
+  if (!ra || !rb) return a;
+  const m = ra.map((v, i) => Math.round(v * (1 - t) + rb[i] * t));
+  return "#" + m.map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+
+// The background a coloured bubble actually sits on: the speaker colour at the current bubble opacity over
+// the page background, the way the CSS washes it (dark themes mix the colour with black first). Text picked
+// against this pale wash has to go black sooner than it would on the raw colour, hence the 0.2 cut-off.
+function washedSpeaker(hex) {
+  const dark = document.documentElement.dataset.theme !== "light";
+  const base = dark ? mixHex(hex, "#000000", 0.5) : hex;
+  try {
+    const page = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+    const alpha = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--bubble-alpha"));
+    const t = isNaN(alpha) ? 0.4 : Math.max(0, Math.min(1, 1 - alpha / 100));
+    return mixHex(base, hexToRgb(page) ? page : "#ffffff", t);
+  } catch (e) {
+    return base;
+  }
 }
 
 function applyBubbleStyle(mode) {
@@ -89,13 +114,39 @@ function applyBubbleStyle(mode) {
 function colourLine(box, speaker) {
   const hex = colorMap[speaker];
   if (!hex) return;
+  paintSpeaker(box, hex);
+  box.classList.add("coloured");
+}
+
+// --speaker-text / --chip read the raw colour (the solid name badge). --speaker-text2 / --chip2 read the
+// washed background the bubble actually has in bubble mode, so pale tints get black text in the light theme.
+function paintSpeaker(box, hex) {
   const text = readableText(hex);
+  const wash = readableText(washedSpeaker(hex), 0.2);
+  box.dataset.speakerHex = hex;
   box.style.setProperty("--speaker", hex);
   box.style.setProperty("--speaker-text", text);
   // translucent chip for code inside a coloured bubble: darkens on light colours, lightens on dark ones
   box.style.setProperty("--chip", text === "#111010" ? "rgba(0,0,0,.14)" : "rgba(255,255,255,.16)");
-  box.classList.add("coloured");
+  box.style.setProperty("--speaker-text2", wash);
+  box.style.setProperty("--chip2", wash === "#111010" ? "rgba(0,0,0,.14)" : "rgba(255,255,255,.16)");
 }
+
+// The wash follows the theme and the bubble-opacity slider, so both repaint the lines already on screen.
+function repaintColouredLines() {
+  for (const box of document.querySelectorAll("#log .line.coloured")) {
+    const hex = box.dataset.speakerHex;
+    if (hex) paintSpeaker(box, hex);
+  }
+}
+(function watchBubbleLook() {
+  let queued = false;
+  new MutationObserver(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; repaintColouredLines(); });
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style"] });
+})();
 
 
 function setBusy(on) {
@@ -109,6 +160,7 @@ function setBusy(on) {
   for (const b of document.querySelectorAll(".char-item")) b.disabled = on;
   for (const b of document.querySelectorAll(".turn-tools button")) b.disabled = on;
   $("memBtn").disabled = on;
+  $("gamesBtn").disabled = on;
 }
 
 function showPassword(note) {
@@ -138,6 +190,8 @@ function renderUsage() {
   // Memory is an admin switch; hide its button and its Story & memory entry when it is off.
   $("memBtn").hidden = !!(me && me.features && me.features.memory === false);
   $("memStoryLink").hidden = $("memBtn").hidden;
+  // Mini-games are off until an admin turns them on.
+  $("gamesBtn").hidden = !(me && me.features && me.features.minigames);
   if (!me || !me.usage) return;
   const u = me.usage;
   // two forms of the same line: the long one on desktop, a compact one for phones (CSS picks which shows)
@@ -276,10 +330,26 @@ async function openTokenUsage() {
 }
 $("tokenUsageBtn").addEventListener("click", openTokenUsage);
 $("tokenUsageClose").addEventListener("click", () => $("tokenUsageDlg").close());
+$("balanceBtn").addEventListener("click", () => { location.href = "/balance"; });
 
 // Follow new text only while the reader is at the bottom, so scrolling up to read history is not undone.
 function nearBottom(log) {
   return log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+}
+
+// The controls under a message share one row: Edit, Branch, the speaker, then the timestamp on the right.
+function msgTools(box) {
+  let row = box.querySelector(".msg-tools");
+  if (!row) {
+    row = el("div", null, "msg-tools");
+    box.appendChild(row);
+  }
+  return row;
+}
+
+function addTool(box, node) {
+  const row = msgTools(box);
+  row.insertBefore(node, row.querySelector(".speak-btn") || row.querySelector(".stamp"));
 }
 
 function addLine(speaker, text, cls, time) {
@@ -300,7 +370,7 @@ function addLine(speaker, text, cls, time) {
   box.appendChild(body);
   if (speaker && cls && cls.includes("theirs") && window.ttsMessageButton) {
     const speak = window.ttsMessageButton(box, speaker);
-    if (speak) box.appendChild(speak);
+    if (speak) msgTools(box).appendChild(speak);
   }
   if (time) addStamp(box, time);
   const log = $("log");
@@ -349,7 +419,7 @@ function addStamp(box, iso) {
   if (Number.isNaN(d.getTime())) return;
   const s = el("div", stampLabel(iso), "stamp");
   s.title = d.toLocaleString();
-  box.appendChild(s);
+  msgTools(box).appendChild(s);
 }
 
 // The open chat's icon and name above the chat window: the character's icon, or its initial if it has none.
@@ -380,12 +450,14 @@ function renderHistory(messages) {
   } else {
     messages.forEach((m, i) => {
       const isEvent = m.speaker === "Narrator";   // random events are saved as user-side entries, shown as notes
-      const box = addLine(m.speaker, m.text, isEvent ? "note event" : (m.role === "user" ? "mine" : "theirs"), m.time);
+      const isGame = !!m.game;   // a line spoken during a mini-game: stored as narration, shown as the character
+      const box = addLine(m.speaker, m.text,
+        isGame ? "theirs" : isEvent ? "note event" : (m.role === "user" ? "mine" : "theirs"), m.time);
       if (m.scheduled) box.prepend(el("div", tr("Check-in"), "checkin-tag"));   // sent on the character's schedule
       box.dataset.idx = String(i);   // position in the saved chat, used to place the context marker
       addEditButton(box, i, m);
-      addBranchButton(box, i);
-      if (m.role === "user" && !isEvent && me && me.persona) colourLine(box, me.persona.name);
+      addBranchButton(box, i, m);
+      if (m.role === "user" && !isEvent && !isGame && me && me.persona) colourLine(box, me.persona.name);
       if (m.thinking) setThinking(box, m.thinking);
     });
   }
@@ -445,7 +517,7 @@ function addBranchButton(box, i) {
   btn.title = tr("Start a new branch from this message. The current chat stays as it is.");
   btn.setAttribute("aria-label", tr("Branch from this message"));
   btn.addEventListener("click", () => branchFrom(i));
-  box.appendChild(btn);
+  addTool(box, btn);
 }
 
 async function branchFrom(index) {
@@ -484,7 +556,7 @@ function addEditButton(box, i, m) {
   btn.type = "button";
   btn.setAttribute("aria-label", tr("Edit this message"));
   btn.addEventListener("click", () => startEdit(box, i, m));
-  box.appendChild(btn);
+  addTool(box, btn);
 }
 
 function startEdit(box, i, m) {
@@ -1197,6 +1269,8 @@ function markActive() {
   }
   setChatHeader(displayName(current || ""));
   renderCreatorRow();
+  const callBtn = $("callBtn");
+  if (callBtn) callBtn.hidden = !(current && Array.isArray(soloNames) && soloNames.includes(current));
 }
 
 async function loadCharacters(choose = true) {
@@ -1205,13 +1279,17 @@ async function loadCharacters(choose = true) {
   iconSet = new Set(data.icons || []);
   bgIds = data.bg_ids || {};
   musicByName = new Map((data.cards || []).map((card) => [card.name, card.music || []]));
+  for (const g of data.groups || []) musicByName.set(g.name, g.music || []);
+  for (const n of data.novels || []) musicByName.set(n.id, n.music || []);
   defaultArt = data.default_backgrounds || [];
   editableSet = new Set(data.editable || []);
   favSet = new Set(data.favourites || []);
   popularSet = new Set(data.popular || []);
   creatorMap.clear();
+  profileMap.clear();
   for (const card of data.cards || []) {
     creatorMap.set(card.name, { creator: card.creator || "admin", linkable: card.creator_profile !== false });
+    profileMap.set(card.name, { headline: card.headline || "", info: card.info || "" });
   }
   soloNames = data.solo || [];   // set before the lists are drawn: the star check reads it
   renderPersonas(data.personas || []);
@@ -1357,13 +1435,14 @@ function clearChatArt(section) {
 async function pickCharacter(name) {
   if (busy) return;
   current = name;
+  if (window.misoCallSetCharacter) window.misoCallSetCharacter(name);
   if (window.ttsSetCharacter) window.ttsSetCharacter(name, soloNames.includes(name));
   if (picking) setPicking(false);   // a pick list belongs to the chat it was made in
   markRead(name);   // opening the chat marks its missed check-ins as read
   localStorage.setItem("rp_character", name);
   markActive();
   applyChatArt(name);
-  // A character's theme music plays while its chat is open. A group, a novel or a character with no tracks is silent.
+  // A chat's theme music plays while it is open: a character's, a group chat's or a novel's own tracks.
   themeMusic.set("char:" + name, musicByName.get(name) || null);
   closeSidebar();
   showMemory(false);
@@ -2753,7 +2832,7 @@ setInterval(refreshUnread, 60000);
   });
 })();
 
-// The look itself: Moonlit, Soft Shadows, Dusk or Hyacinth, the 1.4.1 look. Kept per browser, like the light/dark theme.
+// The look itself: Moonlit, Lantern, Plexiglass or Hyacinth, the 1.4.1 look. Kept per browser, like the light/dark theme.
 (function uiThemePicker() {
   const pick = document.getElementById("uiThemePick");
   if (!pick) return;
@@ -2913,7 +2992,7 @@ setInterval(refreshUnread, 60000);
   const accountSlot = document.getElementById("accountSlot");
   const section = document.getElementById("chatSection");
   // Roll stays in the chat bar beside Tree, Undo and Select at every width, so the four keep one size.
-  const parts = [["chatIcon", "chat"], ["chatTitle", "chat"], ["settingsBtn", "chat"], ["adminLink", "account"], ["pwBtn", "account"], ["logoutBtn", "account"]]
+  const parts = [["chatIcon", "chat"], ["chatTitle", "chat"], ["gamesBtn", "chat"], ["settingsBtn", "chat"], ["adminLink", "account"], ["pwBtn", "account"], ["logoutBtn", "account"]]
     .map(([id, group]) => {
       const node = document.getElementById(id);
       const home = document.createComment("home:" + id);   // where the control belongs on desktop
@@ -2978,6 +3057,74 @@ setInterval(refreshUnread, 60000);
   if (phone.addEventListener) phone.addEventListener("change", placeAll); else phone.addListener(placeAll);
   sync();
   placeAll();
+})();
+
+// Plexiglass packs the chat bar: Tree, Undo, Roll, Select and the name badge move behind one "..." button
+// at the right edge of the bar. The originals stay where they are for the other themes; the sheet's
+// buttons just press them, so all the behaviour and state keep one source of truth.
+(function plexiMore() {
+  const root = document.documentElement;
+  const more = document.getElementById("plexiMoreBtn");
+  const sheet = document.getElementById("plexiSheet");
+  if (!more || !sheet) return;
+  const rows = ["plexiTree", "plexiUndo", "plexiRoll", "plexiSelect"].map((id) => document.getElementById(id));
+  const badgeRows = [...sheet.querySelectorAll("[data-bubble]")];
+  const plexi = () => root.dataset.look === "plexiglass";
+  function close(refocus) {
+    if (sheet.hidden) return;
+    sheet.hidden = true;
+    more.setAttribute("aria-expanded", "false");
+    if (refocus) more.focus();
+  }
+  function press(id) {
+    const node = document.getElementById(id);
+    if (node && !node.hidden && !node.disabled) node.click();
+  }
+  function open() {
+    if (!plexi()) return;
+    const tree = document.getElementById("branchTree");
+    const undo = document.getElementById("undoBtn");
+    const select = document.getElementById("selectBtn");
+    const roll = document.getElementById("rollBtn");
+    const badge = document.getElementById("bubbleSelect");
+    rows[0].hidden = !tree || tree.hidden || tree.disabled;
+    rows[1].disabled = !undo || undo.hidden || undo.disabled;
+    rows[2].disabled = !roll || roll.hidden || roll.disabled;
+    rows[3].setAttribute("aria-pressed", select.getAttribute("aria-pressed") || "false");
+    const style = badge ? badge.value : "badge";
+    for (const row of badgeRows) row.setAttribute("aria-pressed", row.dataset.bubble === style ? "true" : "false");
+    sheet.hidden = false;
+    more.setAttribute("aria-expanded", "true");
+    const first = rows.find((r) => !r.hidden && !r.disabled);
+    if (first) first.focus(); else rows[0].focus();
+  }
+  more.addEventListener("click", open);
+  document.getElementById("plexiClose").addEventListener("click", () => close(true));
+  const proxyIds = { plexiTree: "branchTree", plexiUndo: "undoBtn", plexiRoll: "rollBtn", plexiSelect: "selectBtn" };
+  for (const row of rows) row.addEventListener("click", () => {
+    press(proxyIds[row.id]);
+    close(true);
+  });
+  for (const row of badgeRows) {
+    row.addEventListener("click", () => {
+      const badge = document.getElementById("bubbleSelect");
+      if (!badge) return;
+      badge.value = row.dataset.bubble;
+      badge.dispatchEvent(new Event("change"));
+      for (const r of badgeRows) r.setAttribute("aria-pressed", r === row ? "true" : "false");
+    });
+  }
+  sheet.addEventListener("click", (e) => { if (e.target === sheet) close(true); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || sheet.hidden || document.querySelector("dialog[open]")) return;
+    close(true);
+  });
+  function syncLook() {
+    more.hidden = !plexi();
+    if (!plexi()) close(false);
+  }
+  new MutationObserver(syncLook).observe(root, { attributes: true, attributeFilter: ["data-look"] });
+  syncLook();
 })();
 
 // ---- Private group chats: an account's own groups of solo characters, with a note for each member.

@@ -55,6 +55,27 @@ class EditorError(ValueError):
     pass
 
 
+def _scan_bytes(data):
+    # Best-effort malware scan on Linux servers where clamscan is installed. A missing scanner is not an error.
+    exe = shutil.which("clamscan") or shutil.which("clamdscan")
+    if not exe:
+        return
+    fd, path = tempfile.mkstemp()
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        proc = subprocess.run([exe, "--no-summary", path], capture_output=True, timeout=60)
+        if proc.returncode == 1:
+            raise EditorError("That file was rejected by the server's malware scanner.")
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def valid_name(name):
     # A display name as the admin types it. The folder name is derived from it (charname.folder_for).
     try:
@@ -760,6 +781,7 @@ def portrait_bytes(data):
     # it is returned untouched so it keeps moving. Returns (bytes, extension). Account profile pictures use this too.
     if not data:
         raise EditorError("Choose an image first.")
+    _scan_bytes(data)
     if len(data) > UPLOAD_MAX:
         raise EditorError("Picture uploads can be up to 10 MB.")
     animated, ext = _animated_image(data)

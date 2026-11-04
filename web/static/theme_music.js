@@ -327,10 +327,26 @@ const themeMusic = (function () {
     b.setAttribute("aria-pressed", on ? "true" : "false");
     b.textContent = on ? "Music on" : "Music off";
     b.title = on && tracks[index] ? "Playing: " + tracks[index].title : "Theme music";
+    syncPanel();
   }
 
-  function toggleMuted() {
-    muted = !muted;
+  // The settings panel mirrors the switch: its checkbox follows the button, and the sliders are greyed out while the
+  // music is off, because they would do nothing.
+  function syncPanel() {
+    const off = document.getElementById("tmDisabled");
+    if (off) off.checked = muted;
+    for (const id of ["tmVolume", "tmFadeIn", "tmFadeOut"]) {
+      const ctl = document.getElementById(id);
+      if (ctl) ctl.disabled = muted;
+    }
+  }
+
+  // Turning the music off stops whatever is playing and refuses every later track until it is turned back on. The
+  // choice is held on this browser, beside the volume and fade preferences.
+  function setMuted(value) {
+    const next = !!value;
+    if (next === muted) { updateButton(); return; }
+    muted = next;
     try { localStorage.setItem(OFF_KEY, muted ? "1" : "0"); } catch (e) { /* storage refused: the choice lasts this page */ }
     if (muted) {
       holding = true;
@@ -339,6 +355,10 @@ const themeMusic = (function () {
       start();
     }
     updateButton();
+  }
+
+  function toggleMuted() {
+    setMuted(!muted);
   }
 
   // The volume a slider just changed to reaches the track that is already playing with a short fade.
@@ -381,10 +401,16 @@ const themeMusic = (function () {
         show();
       });
     }
+    const disabled = document.getElementById("tmDisabled");
+    if (disabled && !disabled.dataset.bound) {
+      disabled.dataset.bound = "1";
+      disabled.addEventListener("change", () => setMuted(disabled.checked));
+    }
     volume.value = prefs.level;
     fadeIn.value = prefs.fadeIn;
     fadeOut.value = prefs.fadeOut;
     show();
+    syncPanel();
   }
 
   // A tab that is hidden stops the music, and it starts again, faded in, when the tab is shown.
@@ -477,7 +503,7 @@ const themeMusic = (function () {
     return data;
   }
 
-  return { set, setPage, show, hide, leave, renderList, upload, isMuted: () => muted, initPanel };
+  return { set, setPage, show, hide, leave, renderList, upload, isMuted: () => muted, setMuted, initPanel };
 })();
 
 window.themeMusicInitPanel = themeMusic.initPanel;
