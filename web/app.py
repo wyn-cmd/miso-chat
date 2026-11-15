@@ -1023,7 +1023,10 @@ def _set_mood_stable(slot, text):
 def _mood_start(st, uid, name, slot):
     now = time.time()
     state = mood.advance(mood.load(st.store.mood_get(uid, name), now), now)
-    _set_mood_stable(slot, mood.describe_stable(state))
+    # A chat on DeepSeek leaves the energy and affinity bands out of the prompt. They sit in the system prompt, so each
+    # band crossing rewrites it and the provider bills the whole history behind it at the cache-miss rate. Every other
+    # model keeps them.
+    _set_mood_stable(slot, mood.describe_stable(state, with_bands=not slot.engine.cache_anchored()))
     slot.engine.mood_text = ""   # the per-turn numbers are no longer sent; see describe_stable
 
 

@@ -1,28 +1,29 @@
-Miso Chat 1.7.0 update
+Miso Chat 1.7.1 update
 
-This release brings the server to 1.7.0 from 1.6.1, the last published version. 1.6.2 and 1.6.3 were never published, so this zip carries their changes too: better DeepSeek prompt caching, the DeepSeek request limits, the emotion pictures and agentic mode, OpenRouter as a provider with a pool of free keys, and /redo, /regenerate and /relationship in the terminal client.
+This release brings the server to 1.7.1 from 1.7.0, keeping the DeepSeek prompt stable across the turns that used to break it. It changes no settings and needs no new key.
 
-New in 1.7.0:
-- A solo DeepSeek chat's memory save runs on the model the chat is using, so the history the chat just sent is reused from that model's prompt cache instead of being paid for again at the cache-miss rate. A save over a 34,000-token history costs about a third of what it did, and about a twentieth when the chat itself runs on deepseek-flash.
-- Dreams, tension passes, the story bible, document imports, the off-screen record and the Mind Palace check in a DeepSeek chat run on the Gemini chain again. None of them shares a prompt with the chat, so on DeepSeek they paid the cache-miss rate for every token.
-- A switch between two DeepSeek models saves the memory on the model the chat is leaving, which is the one that still has the history cached.
-- A chat from before 1.6.2 has no recorded model, so switching it to DeepSeek used to send its whole history to a cold cache. It now saves first, and its next message starts from the summary and the last four messages.
-- A memory save no longer pays for the whole anchored history when it falls back to a Gemini model, because the fallback sends the compact save instead.
+New in 1.7.1:
+- Regenerate, /redo and /regenerate re-send the turn's own prompt, so the provider reuses its cache for the whole prompt and only the new reply is billed. Before, the redo rebuilt the Mind Palace and the memory policy, which changed the system text and lost the cache for the entire history.
+- A DeepSeek chat no longer sends the energy and affinity bands in the mood block. The band words sat in the cached system prompt, so each crossing rewrote it and the whole history behind it was billed at the cache-miss rate. In a 100-message simulation this takes the hit share from 88.5% to 93.0% and the peak-rate bill down by about 19%. The emotion and its tone still reach the model, and the settings page still shows both bands.
+- The Mind Palace's constant entries can no longer be pushed out by the entry budget, which used to rewrite the system prompt on some turns.
+- Open tensions now sit at the end of the system prompt, after the running summary and the author's note, so a tension change costs only what follows it.
 
-The server adds no tables and no columns. Existing chats, characters, accounts and settings are kept. The DeepSeek limits are settings that take their defaults until an admin changes them.
+The server adds no tables and no columns. Existing chats, characters, accounts and settings are kept.
 
-The terminal client is 1.7.0. A 1.x client and a 1.x server work together because the major.minor matches, but the client file in this zip is the matching one.
+The terminal client is 1.7.1. A 1.x client and a 1.x server work together because the major.minor matches, but the client file in this zip is the matching one.
 
-If you are coming from 1.6.0 or earlier, read the 1.6.1 notes in CHANGELOG.md first; they still apply.
+If you are coming from 1.6.x or earlier, read the 1.7.0 notes in CHANGELOG.md first; they still apply.
 
 Before you update, note these changes:
-- OpenRouter models are free but have low request limits, and OpenRouter may log prompts. Do not use them for characters you want kept private.
+- A DeepSeek chat's mood block is shorter than the one every other model gets. The energy and affinity bands are no longer sent to a DeepSeek model, so the same character reads slightly less mood detail there.
+- A tension change that arrives on its own, from resolving one in the chat page or from a save whose model wrote no summary, still costs the history behind it.
 - A memory save on a DeepSeek chat sends the chat's own history. It reuses the prompt cache, so it is much cheaper than in 1.6.x, but it is still the largest single call a DeepSeek chat makes.
 - A switch between two DeepSeek models costs one request on the model you are leaving, because the save runs there. A switch into DeepSeek keeps the compact save on the Gemini chain.
 - The rolling window length setting is hidden for a chat on a DeepSeek model. The value you set stays saved and applies again when you switch back to another model.
 - A solo DeepSeek chat's memory saves every 30 turns, not every 10, and each refresh reads the last 60 messages. Memory updates therefore arrive less often on those chats.
 - The DeepSeek daily caps and the 120-a-minute budget are separate from the Gemini ones. An admin's per-account daily cap applies to each provider separately.
 - A DeepSeek chat's memory save, dreams and the other background work run on the Gemini chain and count against the Gemini per-user caps. A DeepSeek account whose Gemini cap is used up has its background work stopped until the cap resets.
+- OpenRouter models are free but have low request limits, and OpenRouter may log prompts. Do not use them for characters you want kept private.
 - The desktop app is not rebuilt by this zip. Download its installer from the release page.
 - Prepaid credits are off until an admin uses them. A tier's quota still applies first; credits are drawn only after it is used up.
 - Mini-games are off until an admin turns them on under Admin, Mini-games, and switches individual games on. A game asks the character for a short line, so it uses the same request and token limits as a chat turn.
@@ -30,7 +31,6 @@ Before you update, note these changes:
 - Calls need a working speech server under Admin, Model providers, Speech, with ffmpeg installed on the server. With speech off, the Call button stays hidden.
 - Calls only work for solo characters, not groups or novels.
 - The browser needs microphone permission. Use headphones so the microphone does not pick up the reply.
-- The Dusk look is replaced by Plexiglass. A saved Dusk choice moves over. The old web/static/dusk.css is no longer used and can be deleted after the update.
 - A new password needs at least 12 characters, with a letter and a digit.
 - State-changing requests must come from the same origin. A reverse proxy that rewrites the Host header may need its forwarded headers kept intact.
 
@@ -44,11 +44,10 @@ Before you update, note these changes:
 
 4. Data: the server adds no tables and no columns. Existing chats, characters, accounts and settings are kept.
 
-5. Start the web app again and sign in. To use DeepSeek with the new limits, set your DeepSeek key under Admin, Model providers, and check the three DeepSeek limits under Admin, Limits.
-   To use OpenRouter, tick Enabled and paste your key or keys under Admin, Model providers, OpenRouter, then save. The free models appear in the model picker. Under Admin, Tiers, tick OpenRouter for any tier that has it saved without it.
+5. Start the web app again and sign in. Nothing needs setting up for this release. A chat on a DeepSeek model picks up the shorter mood block and the steadier prompt on its next message.
 
 6. To use the desktop app, download the package for your system from the release page instead of this zip. The first start asks for a Gemini key by writing a .env in the app's own data folder and naming it.
 
 7. Run the terminal client from this zip. If an old client is still installed, replace it with client/miso_remote.py.
 
-8. Report anything that breaks against the 1.7.0 notes in CHANGELOG.md.
+8. Report anything that breaks against the 1.7.1 notes in CHANGELOG.md.

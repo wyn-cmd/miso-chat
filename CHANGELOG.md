@@ -2,6 +2,32 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.7.1 - 2026-11-15
+
+Built on 1.7.0, keeping the DeepSeek prompt stable across the turns that used to break it: a regenerate, a Mind Palace budget drop, a tension change, and a band crossing. The terminal client is 1.7.1. The server adds no tables or columns.
+
+### Added
+- None.
+
+### Changed
+- **A regenerate sends the turn's own prompt**: `/redo`, `/regenerate` and the Regenerate button now re-send the system text, the palace, the notes and the history exactly as the replaced turn sent them, so the provider's cache still covers the whole prompt and only the new reply is billed. Before, the palace and the memory policy were rebuilt for the redo, which changed the system text and lost the cache for the entire history.
+- **A DeepSeek chat no longer sends the energy and affinity bands**: the mood block keeps the emotion and its tone, and drops the band words. The bands sat in the cached system prompt, so every band crossing rewrote it and the provider billed the whole history behind it at the cache-miss rate. In a 100-message simulation this saves about 18,700 cache-miss tokens, taking the hit share from 88.5% to 93.0% and the peak-rate bill down by about 19%. Every other model keeps the bands, and the settings page still shows them.
+- **The Mind Palace constants always reach the prompt**: the constants are taken from every entry that matched, not from what the entry budget kept, so a constant can no longer be pushed out on the turns a matched entry outranks it. That churn changed the system prompt and cost the history.
+- **Open tensions sit at the end of the system prompt**, after the running summary and the author's note, instead of after the palace. A tension change now costs only what follows it.
+- A regenerate no longer scores the message it is redoing against the memory policy a second time.
+
+### Removed
+- None.
+
+### Fixed
+- A chat whose Mind Palace budget dropped a constant entry no longer rewrites its system prompt from turn to turn.
+
+### Known issues
+- The DeepSeek cost estimate on the stats page is still an estimate from published rates, and this release's saving has not been checked against a DeepSeek bill.
+- A tension change that arrives on its own, from a hand resolve in the chat page or a save whose model wrote no summary, still costs the history behind it. The tension block is the last thing in the system prompt, so there is nothing in front of it left to save.
+- A DeepSeek chat's mood block is shorter than the one every other model gets, so the same character reads slightly less mood detail there.
+- The 1.7.0 known issues still apply.
+
 ## 1.7.0 - 2026-11-15
 
 Built on 1.6.3, which was never published, so this release carries its changes and 1.6.2's too. It moves the DeepSeek memory save onto the model that already holds the chat's prompt cache, and takes the rest of the background work off the DeepSeek key. The terminal client is 1.7.0. The server adds no tables or columns.
