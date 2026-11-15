@@ -10,14 +10,16 @@
   <script src="/static/locales/en.js"></script>
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/base.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic"){document.getElementById("uiTheme").disabled=true;for(const h of ["/static/tokens.css","/static/base.css"]){const l=document.querySelector('link[href="'+h+'"]');if(l)l.disabled=true;}}if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="manifest" href="/static/manifest.webmanifest">
   <meta name="theme-color" content="#0f0a06">
 </head>
-<body>
+<body class="admin">
   <header>
     <span class="brand">Miso Chat admin</span>
     <span class="spacer admin-spacer"></span>
@@ -57,6 +59,9 @@
         <label>Requests per user per day <input id="s_user_daily_cap" type="number" min="1" required></label>
         <label>Requests for all web users per day <input id="s_global_daily_cap" type="number" min="1" required></label>
         <label>Requests per minute for all web users <input id="s_rpm_limit" type="number" min="1" required></label>
+        <label>DeepSeek requests per user per day <input id="s_deepseek_user_daily_cap" type="number" min="1" required></label>
+        <label>DeepSeek requests for all web users per day <input id="s_deepseek_global_daily_cap" type="number" min="1" required></label>
+        <label>DeepSeek requests per minute for all web users <input id="s_deepseek_rpm_limit" type="number" min="1" required></label>
         <label>Shortest reply length users can pick (tokens) <input id="s_reply_min_tokens" type="number" min="10" max="4000" required></label>
         <label>Longest reply length users can pick (tokens) <input id="s_reply_max_tokens" type="number" min="10" max="4000" required></label>
       <label class="inline"><input id="s_memory_enabled" type="checkbox"> Memory bank (memory.md and pinned facts)</label>
@@ -138,18 +143,35 @@
           <p id="p_deepseek_hint" class="muted"></p>
         </fieldset>
         <fieldset class="prov">
+          <legend>OpenRouter</legend>
+          <label class="inline"><input id="p_openrouter_enabled" type="checkbox"> Enabled</label>
+          <label>API keys, one per line <textarea id="p_openrouter_key" rows="3" autocomplete="off" spellcheck="false" placeholder="leave blank to keep the saved keys; any text here replaces them all"></textarea></label>
+  <p id="p_openrouter_hint" class="muted"></p>
+  <p class="muted"><button id="p_openrouter_check" type="button" class="ghost small">Check models</button> <span id="p_openrouter_model_hint"></span></p>
+  <div id="p_openrouter_models_out" class="muted"></div>
+  <p class="muted">Every model OpenRouter offers appears in the picker, and the list refreshes itself. With more than one key, a key that reaches its limit is skipped until it resets and the next key takes over. Paid models are charged to the key, and the provider may log prompts.</p>
+        </fieldset>
+        <fieldset class="prov">
           <legend>Local LLM (OpenAI-style endpoint)</legend>
           <label class="inline"><input id="p_local_enabled" type="checkbox"> Enabled</label>
           <label>Base URL, including /v1 <input id="p_local_url" placeholder="http://127.0.0.1:8000/v1"></label>
           <label>API key (optional) <input id="p_local_key" type="password" autocomplete="off" placeholder="leave blank to keep"></label>
           <p id="p_local_hint" class="muted"></p>
         </fieldset>
-        <fieldset class="prov">
-          <legend>Claude Code (uses the account signed in to the claude CLI)</legend>
-          <label class="inline"><input id="p_claude_enabled" type="checkbox"> Enabled</label>
-          <label>Path to claude (blank = find it on PATH) <input id="p_claude_exe" placeholder="claude"></label>
-          <p id="p_claude_hint" class="muted"></p>
-        </fieldset>
+  <fieldset class="prov">
+    <legend>Claude Code (uses the account signed in to the claude CLI)</legend>
+    <label class="inline"><input id="p_claude_enabled" type="checkbox"> Enabled</label>
+    <label>Path to claude (blank = find it on PATH) <input id="p_claude_exe" placeholder="claude"></label>
+    <p id="p_claude_hint" class="muted"></p>
+  </fieldset>
+  <fieldset class="prov">
+    <legend>Opencode (local opencode CLI, free models only)</legend>
+    <label class="inline"><input id="p_opencode_enabled" type="checkbox"> Enabled</label>
+    <label>Path to opencode (blank = find it on PATH) <input id="p_opencode_exe" placeholder="opencode"></label>
+    <p id="p_opencode_hint" class="muted"></p>
+    <p class="muted"><button id="p_opencode_check" type="button" class="ghost small">Check availability</button> <span id="p_opencode_model_hint"></span></p>
+    <div id="p_opencode_models_out" class="muted"></div>
+  </fieldset>
         <fieldset class="prov">
           <legend>Speech (llama.cpp with an audio model, or an OpenAI-style speech endpoint)</legend>
           <label class="inline"><input id="p_audio_enabled" type="checkbox"> Enabled</label>
@@ -174,6 +196,22 @@
             </select>
           </label>
           <p id="p_audio_hint" class="muted"></p>
+        </fieldset>
+        <fieldset class="prov">
+          <legend>Vision (image description)</legend>
+          <label class="inline"><input id="p_vision_enabled" type="checkbox"> Enabled</label>
+  <label>Fallback vision model <input id="p_vision_model" placeholder="e.g. gemini-3.8-flash or deepseek:deepseek-v4.1-flash" list="p_vision_models"></label>
+  <datalist id="p_vision_models"></datalist>
+  <p class="muted"><button id="p_vision_check" type="button" class="ghost small">Check models</button> <span id="p_vision_model_hint"></span></p>
+  <p class="muted">Used only when the selected chat model cannot see images. A bare model id goes to Gemini; prefix a local or DeepSeek model to use that provider. Leave this off to hide Describe image from users.</p>
+        </fieldset>
+        <fieldset class="prov">
+          <legend>Image generation</legend>
+          <label class="inline"><input id="p_image_enabled" type="checkbox"> Enabled</label>
+  <label>Image model <input id="p_image_model" placeholder="e.g. gemini-3-pro-image-preview" list="p_image_models"></label>
+  <datalist id="p_image_models"></datalist>
+  <p class="muted"><button id="p_image_check" type="button" class="ghost small">Check models</button> <span id="p_image_model_hint"></span></p>
+  <p class="muted">Draws scene pictures for the chat and the Gallery. Use a model that returns images, not a chat model. Leave this off to hide Generate scene and the Gallery from users.</p>
         </fieldset>
         <button type="submit">Save providers</button>
         <p id="providerMsg" class="muted"></p>

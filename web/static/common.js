@@ -74,6 +74,11 @@ function applyUi(name) {
   document.documentElement.dataset.look = look;
   const link = document.getElementById("uiTheme");
   if (link) link.disabled = look === UI_CLASSIC;
+  // tokens.css and base.css are now direct links, so the classic look switches them off with redesign.css.
+  for (const href of ["/static/tokens.css", "/static/base.css"]) {
+    const baseLink = document.querySelector('link[href="' + href + '"]');
+    if (baseLink) baseLink.disabled = look === UI_CLASSIC;
+  }
   // A look's sheet is added the first time it is chosen, after redesign.css, so it wins the cascade; then it is switched.
   let sheet = document.getElementById("lookSheet");
   const href = LOOK_SHEETS[look];
@@ -254,6 +259,26 @@ async function api(method, url, body) {
   if (r.status === 401) sendToLogin();
   if (!r.ok) throw apiError(r.status, data);
   return data;
+}
+
+// Loads a page-specific script the first time a control needs it. The promise is cached, so two
+// quick clicks share one download and a failed load can be retried on the next click.
+const scriptLoads = new Map();
+function loadScript(src) {
+  if (scriptLoads.has(src)) return scriptLoads.get(src);
+  const p = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => {
+      scriptLoads.delete(src);
+      reject(new Error(t("Could not load {name}.", { name: src })));
+    };
+    document.head.appendChild(s);
+  });
+  scriptLoads.set(src, p);
+  return p;
 }
 
 // POST /api/chat (or /api/regenerate) answers with server-sent events. handlers: delta, done, usage, error.

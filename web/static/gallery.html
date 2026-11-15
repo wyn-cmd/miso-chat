@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gallery · Miso Chat</title>
+  <script src="/static/theme-init.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/base.css">
+  <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
+</head>
+<body class="gallery-page">
+  <header>
+    <a class="brand" href="/">Miso Chat</a>
+    <span class="spacer"></span>
+    <a class="ghost" href="/">Back to chat</a>
+    <button id="themeBtn" class="icon-btn" type="button" aria-label="Switch theme">◐</button>
+  </header>
+  <main class="gallery-main">
+    <h1>Gallery</h1>
+    <p class="muted">Scene pictures generated in your chats. Each card keeps the character, the scene context and a description.</p>
+    <p id="galleryMsg" class="muted" aria-live="polite"></p>
+    <div id="galleryGrid" class="gallery-grid"></div>
+  </main>
+  <dialog id="galleryView" class="dlg gallery-view" aria-labelledby="galleryViewTitle">
+    <h2 id="galleryViewTitle">Scene</h2>
+    <img id="galleryViewImg" class="gallery-view-img" alt="">
+    <p id="galleryViewMeta" class="muted"></p>
+    <h3>Description</h3>
+    <p id="galleryViewDescription" class="gallery-view-text"></p>
+    <h3>Context</h3>
+    <p id="galleryViewContext" class="gallery-view-text"></p>
+    <div class="dlg-actions">
+      <button id="galleryViewDelete" class="danger small" type="button">Delete</button>
+      <span class="grow"></span>
+      <button id="galleryViewClose" class="ghost" type="button">Close</button>
+    </div>
+  </dialog>
+  <script src="/static/common.js"></script>
+  <script src="/static/gallery.js"></script>
+</body>
+</html>

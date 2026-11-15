@@ -2,6 +2,95 @@
 
 Notable changes to Miso Chat, newest first. Version numbers follow MAJOR.MINOR.PATCH. The current version is in `VERSION`.
 
+## 1.7.0 - 2026-11-15
+
+Built on 1.6.3, which was never published, so this release carries its changes and 1.6.2's too. It moves the DeepSeek memory save onto the model that already holds the chat's prompt cache, and takes the rest of the background work off the DeepSeek key. The terminal client is 1.7.0. The server adds no tables or columns.
+
+### Added
+- None.
+
+### Changed
+- **A memory save runs on the chat's own model**: in a solo DeepSeek chat the save now goes to the model that answered last, because the prompt it just sent is still cached there. The save reuses that prefix instead of paying the cache-miss rate for the whole anchored history on deepseek-flash. A save over a 34,000-token history costs about $0.003 on deepseek-v4-pro at peak rates, or about $0.0005 when the chat itself runs on flash, against about $0.010 before.
+- **Background work is back on the Gemini chain**: dreams, tension passes, the story bible, document imports, the off-screen director and the Mind Palace check in a DeepSeek or OpenRouter chat run on the fixed Gemini chain again, not on deepseek-flash. None of them sends a prompt the chat has just sent, so a DeepSeek call paid the miss rate for tokens no cache held.
+- A save before a model switch runs where the history is already cached. Between two DeepSeek models it runs on the old model and reuses its cache; a switch into or out of DeepSeek keeps the compact plain save on the Gemini chain, which spends no DeepSeek cache-miss tokens.
+- A chat that has history but no recorded model now saves before it moves to DeepSeek, so a chat from before 1.6.2 no longer sends its whole history to a cold cache.
+- A memory save that falls back to a Gemini model sends the compact plain save, not the anchored history as text.
+
+### Removed
+- The deepseek-flash preference for background work, added in 1.6.2.
+- The hold on a DeepSeek chat's dreams until the off-peak price window, which no longer applies now that a dream does not spend DeepSeek tokens.
+
+### Fixed
+- A DeepSeek switch from a chat with no recorded model no longer pays for the whole history at the cache-miss rate.
+
+### Known issues
+- The DeepSeek cost estimate on the stats page is still an estimate from published rates, and this release's saving has not been checked against a DeepSeek bill. The cache-hit and cache-miss columns come from the provider's own usage fields.
+- A DeepSeek chat's memory save, dreams and other background work now count against the Gemini per-user caps, because they run on the Gemini chain. A DeepSeek account with a used-up Gemini cap has its background work stopped.
+- A switch between two DeepSeek models spends one DeepSeek request on the save, on the model the chat is leaving.
+- The 1.6.3 known issues still apply.
+
+## 1.6.3 - 2026-11-13
+
+Built on 1.6.2, adding OpenRouter as a model provider with free models only and a pool of keys, a memory save when a chat switches models, and a new model picker order. 1.6.2 was never published, so this release carries its changes too. The terminal client is 1.6.3. The server adds no tables or columns.
+
+### Added
+- **OpenRouter provider**: an admin switch and key box under Model providers. Every OpenRouter model that costs nothing for both prompt and reply, and returns text only, appears in the picker as `openrouter:<id>`. The list is fetched from OpenRouter and refreshed every 15 minutes, so new free models appear without an update.
+- **OpenRouter key pool**: the key box takes one key per line. When a key reaches its daily limit the next key takes over, and the first key is tried again after the limit resets at midnight UTC. A per-minute limit parks a key for a minute, and a rejected or out-of-credit key for an hour.
+- **Save before a model switch**: when a solo chat's first model differs from the one it used on its last message, the chat is saved before the next message goes out. The prompt on DeepSeek then starts from the summary and the last four messages, not the whole history. The save runs on the Gemini chain as plain text.
+- **OpenRouter in tiers**: OpenRouter is a provider tick on the Tiers page, on by default for the free tier.
+
+### Changed
+- The model picker and fallback order is Gemini 3.8 Flash, Gemini 3.5 Flash Lite, Gemma 4 31B, then Gemini 3.1 Flash Lite. Memory saves use the same order.
+- Memory saves, dreams and other background work in an OpenRouter chat run on the Gemini chain, not on the free model.
+- A reasoning level is sent to an OpenRouter model only when thinking is on.
+
+### Fixed
+- None.
+
+### Known issues
+- Free OpenRouter models have low request limits and the provider may log prompts. Using several free keys to pass a daily limit may break OpenRouter's terms; check them first.
+- OpenRouter replies, streaming and reasoning output have not been tried against a live key in this release.
+- A chat from before this release has no recorded model, so a switch made before its first message on 1.6.3 does not trigger a save.
+- Gemini and Gemma chats keep their sliding window after a save, so the saving is on a switch to DeepSeek.
+- The 1.6.2 known issues still apply.
+
+## 1.6.2 - 2026-11-13
+
+Built on 1.6.1, adding DeepSeek prompt caching for solo and group chats, DeepSeek-specific request limits, a regenerate command in the terminal client, and the emotion pictures and agentic mode work. The terminal client is 1.6.2. The server adds no tables or columns; the new settings take their defaults until an admin changes them.
+
+### Added
+- **Agentic mode**: a switch on a character's edit page that lets it use tools. It is the home for tool-based features, with the emotion pictures as the first of them.
+- **Emotion pictures**: with agentic mode and emotions on, the model sets one emotion per reply through a tool, and the chat shows that emotion's picture beside the speaker's name. The creator uploads a picture for each of seven emotions on the character's edit page; an emotion without a picture shows a small emoticon instead.
+- **Emotions in group chats**: each member's reply carries its own emotion, so a member with emotion pictures shows the matching one beside its name, and a member with only a picture shows that picture with an emoticon.
+- **Emotions in novels**: the narrator tags each spoken line from a cast member with emotion pictures, and the chat draws that line with the member's face and name inline, leaving the narration as prose.
+- **Regenerate in the terminal client**: `/redo` or `/regenerate` writes a new reply to the last message, and the old reply is kept as an alternative.
+- **DeepSeek admin settings**: three new limits, for DeepSeek calls per user per day (500), for all users per day (1000) and per minute (120).
+- **Budget estimate on the context marker**: on a DeepSeek chat the marker adds a line with the next prompt's budget tokens, counting cached tokens at a tenth.
+- **Relationship in the terminal client**: `/relationship` shows the level, affection, trust and relationship type with the open character, using the same figures as the settings page.
+
+### Changed
+- A solo chat on DeepSeek keeps its history from the last memory save, so the prompt stays the same between saves and the provider can reuse it.
+- A solo chat on DeepSeek saves its memory every 30 turns, and each refresh reads the last 60 messages.
+- The group director on DeepSeek reads the same history from the last save point, so its two picks share it.
+- On DeepSeek, a cached prompt token counts a tenth against the token budget; the input, cached and output counts on the stats page are unchanged.
+- The rolling window length setting is hidden on a DeepSeek model; the stored value is kept and applies again when the model changes.
+- Accounts on a DeepSeek model get 10 requests a second and 900 a minute; other accounts keep 30 and 600.
+- DeepSeek calls have their own minute budget of 120, separate from the 25 shared by Gemini and the other providers.
+- DeepSeek calls are counted against their own daily caps, per user and for all users; Gemini caps count only Gemini and the other providers.
+- An admin's per-account daily cap applies to each provider separately.
+- The mind palace's constant entries and the open tensions of a solo chat sit in the cached system prompt, not in each turn's notes.
+- The request count on the usage line shows the figure for the account's current provider.
+
+### Fixed
+- A DeepSeek group director no longer shifts its history window on every pick, so the provider's cache can reuse most of it.
+
+### Known issues
+- The DeepSeek cache figures come from a simulation; they have not been checked against live DeepSeek billing or the provider's cache.
+- The 0.1 weight for cached tokens in the budget differs from the published rates in the stats page's cost estimate, which still uses those rates.
+- Memory saves, dreams and check-ins still count DeepSeek calls against the Gemini per-user cap of 100, so a heavy DeepSeek user can stop background work.
+- A DeepSeek account that falls back to Gemini has those calls counted against the Gemini limits.
+- The desktop installers for 1.6.2 are built from the release tag by the build workflow, not from this folder.
+
 ## 1.6.1 - 2026-11-05
 
 Built on 1.6.0, adding prepaid credits, voice calls and the Plexiglass look, mini-games, a desktop package for Windows, macOS and Linux, and backgrounds and theme music for novels and group chats. The terminal client is 1.6.1. The server adds two tables, one column and one setting on first start.

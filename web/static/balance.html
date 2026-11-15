@@ -8,8 +8,10 @@
   <script src="/static/locales/en.js"></script>
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/base.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic"){document.getElementById("uiTheme").disabled=true;for(const h of ["/static/tokens.css","/static/base.css"]){const l=document.querySelector('link[href="'+h+'"]');if(l)l.disabled=true;}}if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <style>
     .balance-main { max-width: 560px; margin: 0 auto; padding: var(--space-lg) var(--space-md) var(--space-2xl); }

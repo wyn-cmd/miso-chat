@@ -1,10 +1,7 @@
-﻿/* Hallmark Â· shape: Workbench (app screen) Â· genre: atmospheric Â· theme: Spore, ember (deal 3/3, seed miso-chat-roleplay-chat-ceca.ecf1eb16.2026-10-25.r0) Â· job: continue the story Â· draw: app-shell
+/* Hallmark Â· shape: Workbench (app screen) Â· genre: atmospheric Â· theme: Spore, ember (deal 3/3, seed miso-chat-roleplay-chat-ceca.ecf1eb16.2026-10-25.r0) Â· job: continue the story Â· draw: app-shell
  * hero: none, the chat is the first screen Â· nav: edge-aligned header, brand and one action Â· footer: none Â· imagery: character art in the gallery, chat icon and backgrounds Â· signature: the chat as a candlelit ledger, each exchange a ruled well on warm paper Â· spore: ember
  * axes: dark/roman-serif/warm Â· posture: committed Â· contrast: pass Â· fold: pass Â· v2.0.0 */
 /* Hallmark Â· pre-emit critique: P_ H_ E_ S_ R_ V_ Â· weakest: imagery, the app ships no art of its own, so the gallery leans on the user's pictures and the type carries the rest */
-@import url("./tokens.css");
-@import url("./base.css");
-
 /* labels: body face, a step smaller, sentence case, untracked (never tracked capitals) */
 .sidebar h2, .sheet h2, .example-label, .ctx-label, .usage-window-head, .set-name, .stats h2, .admin h2 {
   font-family: var(--font-body); font-size: var(--text-xs); font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--color-muted);

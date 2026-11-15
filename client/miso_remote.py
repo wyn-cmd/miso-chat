@@ -40,7 +40,7 @@ SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".miso_remote", "settings.
 USAGE_BAR_KINDS = ("daily", "weekly", "monthly")
 DEFAULT_USAGE_BAR = "daily"
 # Keep in step with VERSION at the project root. A server must share this major.minor.
-CLIENT_VERSION = "1.6.1"
+CLIENT_VERSION = "1.7.0"
 
 
 class ApiError(Exception):
@@ -371,6 +371,10 @@ class Client:
         except urllib.error.URLError as err:
             raise ApiError(0, f"request stopped: {err.reason}")
 
+    def attitude(self, character):
+        # The relationship as the settings page shows it, for this account. Read only.
+        return self._json("GET", "/api/character-attitude?character=" + urllib.parse.quote(character))
+
     def check_version(self):
         # Runs before any password is asked for, so a mismatched client never sends one.
         try:
@@ -470,9 +474,16 @@ class Client:
         return self._json("POST", "/api/autofill", {"character": character})
 
     def send(self, character, message, on_event):
+        self._stream("/api/chat", {"character": character, "message": message}, on_event)
+
+    def regenerate(self, character, on_event):
+        # A new reply to the last message. The server keeps the old one as an alternative.
+        self._stream("/api/regenerate", {"character": character}, on_event)
+
+    def _stream(self, path, body, on_event):
         # Each SSE event is `event: <name>` then `data: <json>`, with a blank line after it.
         try:
-            resp = self._request("POST", "/api/chat", {"character": character, "message": message}, stream=True)
+            resp = self._request("POST", path, body, stream=True)
         except urllib.error.HTTPError as err:
             raise ApiError(err.code, _detail(err))
         with resp:
@@ -755,7 +766,7 @@ class KeyReader:
                 ch = pair.encode("utf-16-le", "surrogatepass").decode("utf-16-le")
             except (OSError, UnicodeDecodeError):
                 return ""
-        if ch in ("\r", "\n"):
+        if ch == "\r":
             # The console offers no bracket marks for a paste, so a line break that arrives inside a
             # burst of keys is taken as text rather than a send. A CRLF pair counts once.
             if burst and msvcrt.kbhit():
@@ -768,11 +779,32 @@ class KeyReader:
                     self.pending.insert(0, follow)
                 return "\n"
             return "enter"
+        if ch == "\n":
+            if burst:
+                return "\n"
+            return "shift-enter"
         if ch in ("\x08", "\x7f"):
             return "backspace"
         if ch == "\t":
             return "tab"
         if ch == "\x1b":
+            # Windows Terminal and other modern hosts send Shift+Enter as an escape sequence.
+            # Collect the whole sequence before deciding, so a lone Escape still works.
+            seq = ch
+            end = time.monotonic() + 0.05
+            while True:
+                if msvcrt.kbhit():
+                    seq += msvcrt.getwch()
+                    end = time.monotonic() + 0.05
+                elif time.monotonic() >= end:
+                    break
+                else:
+                    time.sleep(0.01)
+            if seq in ("\x1b\r", "\x1b\n", "\x1b[13;2u"):
+                return "shift-enter"
+            m = re.match(r"\x1b\[(\d+);(\d+)u", seq)
+            if m and m.group(1) == "13" and m.group(2) in ("2", "3", "4", "5", "6"):
+                return "shift-enter"
             return "escape"
         if ch in self.CONTROL:
             return self.CONTROL[ch]
@@ -799,8 +831,10 @@ class KeyReader:
             if c == "\x1b":
                 m = re.match(r"\x1b\[(\d*)(?:;(\d+))?([A-Za-z~])", chars[i:])
                 if m:
-                    first, final = m.group(1), m.group(3)
-                    if final == "~":
+                    first, final, mod = m.group(1), m.group(3), m.group(2)
+                    if final == "u" and first == "13" and mod == "2":
+                        out.append("shift-enter")
+                    elif final == "~":
                         out.append(self.TILDE.get(first, ""))
                     elif first == "1" and final in ("A", "B"):
                         out.append("home" if final == "A" else "end")
@@ -808,7 +842,12 @@ class KeyReader:
                         out.append(self.CSI.get(final, ""))
                     i += m.end()
                     continue
+                if i + 1 < len(chars) and chars[i + 1] in ("\r", "\n"):
+                    out.append("shift-enter")
+                    i += 2
+                    continue
                 out.append("escape")
+
             elif c in ("\r", "\n"):
                 out.append("enter")
             elif c in ("\x7f", "\x08"):
@@ -956,6 +995,10 @@ class Composer:
             self._insert("\n" if key == "enter" else key)
             if not self.keys.pending:   # one redraw for the whole paste, not one per character
                 self._render()
+            return None
+        if key == "shift-enter":
+            self._insert("\n")
+            self._render()
             return None
         if key == "enter":
             line = "".join(self.text).strip()
@@ -1207,7 +1250,9 @@ class Session:
         # plain text to measure the border row it sits in.
         meter = usage_meter(self.usage, self.usage_bar)
         estimate = prompt_estimate(self.estimate, typed)
-        model = clip(self.model or self.pinned_model or "auto", 28)
+        # The model name gets as much room as the window allows, so a wide terminal shows the full id;
+        # it still falls back to a short clip when the window is narrow.
+        model = clip(self.model or self.pinned_model or "auto", max(12, min(60, columns - 40)))
         clock = time.strftime("%H:%M")
         estimate_label = "" if estimate is None else f"~{short_number(estimate)} next"
 
@@ -1264,11 +1309,25 @@ class Session:
             for m in msgs[-2:]:
                 self.print_message(m["speaker"], m["text"], m["role"])
 
-    def show_history(self, character):
+    def show_history(self, character, arg=""):
         msgs = self.client.history(character)
-        print(f"{BOLD}Chat history ({len(msgs)} messages){RESET}")
-        for m in msgs:
+        arg = (arg or "").strip()
+        if arg.lower() == "full":
+            selected = msgs
+        elif arg.isdigit() and int(arg) > 0:
+            selected = msgs[-int(arg):]
+        else:
+            # Default: the last 30 exchanges (user turns), so a long chat does not flood the screen.
+            user_indices = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+            if len(user_indices) <= 30:
+                selected = msgs
+            else:
+                selected = msgs[user_indices[-30]:]
+        print(f"{BOLD}Chat history ({len(selected)} of {len(msgs)} messages){RESET}")
+        for m in selected:
             self.print_message(m["speaker"], m["text"], m["role"])
+        if len(selected) < len(msgs):
+            print(f"{DIM}Showing the last {len(selected)} messages. /history full or /history <n> shows more.{RESET}")
         print(f"{DIM}--- end of chat ---{RESET}")
 
     def show_memory(self, character):
@@ -1292,6 +1351,30 @@ class Session:
             print(f"Already chatting with {name}.")
             return None
         return name
+
+    def show_relationship(self, character):
+        # Level, scores and the categories for this account's relationship with one character.
+        try:
+            data = self.client.attitude(character)
+        except (ApiError, OSError) as err:
+            print(f"{RED}! {err}{RESET}")
+            return
+        if not data.get("enabled"):
+            print(f"{DIM}Relationship tracking is off on this server.{RESET}")
+            return
+        rel = data.get("relationship") or {}
+        rows = [
+            ("level", str(data.get("level", ""))),
+            ("affection", f"{data.get('affection')} of 100 ({rel.get('affection', '')})"),
+            ("trust", f"{data.get('trust')} of 100 ({rel.get('trust', '')})"),
+            ("type", str(rel.get("type", ""))),
+        ]
+        width = max(len(label) for label, _ in rows)
+        print(f"{BOLD}Relationship with {character}{RESET}")
+        for label, value in rows:
+            print(f"  {label.ljust(width)}  {value}")
+        if data.get("tone"):
+            print(f"  {DIM}{data['tone']}{RESET}")
 
     def show_usage(self):
         # Requests and every token window, read fresh from the server so the figures are current.
@@ -1367,6 +1450,58 @@ class Session:
                 print(f"Reply length target set to {self.reply_length} tokens.")
         else:
             print("Reply length target cleared; each reply follows the character's own length.")
+
+    def set_model(self, arg):
+        # Pin or clear the account's model. With no argument, show a numbered list of every model
+        # the server offers (Gemini fallback plus the provider models) and let one be picked.
+        try:
+            me = self.refresh_me()
+        except (ApiError, OSError) as err:
+            print(f"{RED}! {err}{RESET}")
+            return
+        models = (me.get("models") or {}).get("extra") or []
+        current = self.pinned_model or ""
+        if not arg:
+            print(f"{BOLD}Models{RESET} (you are {self.user_name})")
+            mark = "  <- current" if not current else ""
+            print(f"   0. automatic (Gemini fallback chain){mark}")
+            for i, name in enumerate(models, 1):
+                mark = "  <- current" if name == current else ""
+                print(f"  {i:>2}. {name}{mark}")
+            raw = input("Model (number or name, blank to keep): ").strip()
+            if not raw:
+                return
+            if raw == "0" or raw.lower() in ("auto", "none", "default", "off"):
+                choice = ""
+            elif raw.isdigit() and 1 <= int(raw) <= len(models):
+                choice = models[int(raw) - 1]
+            else:
+                matches = [m for m in models if m.lower() == raw.lower()]
+                if not matches and raw.lower() not in ("auto", "none", "default", "off"):
+                    print("No such model.")
+                    return
+                choice = matches[0] if matches else ""
+        else:
+            if arg.lower() in ("auto", "none", "default", "off", "0"):
+                choice = ""
+            elif arg in models:
+                choice = arg
+            else:
+                matches = [m for m in models if m.lower() == arg.lower()]
+                if not matches:
+                    print("No such model. Run /model with no argument to see the list.")
+                    return
+                choice = matches[0]
+        try:
+            res = self.client.set_settings({"model": choice})
+        except (ApiError, OSError) as err:
+            print(f"{RED}! {err}{RESET}")
+            return
+        self.pinned_model = res.get("model") or ""
+        if self.pinned_model:
+            print(f"Model pinned to {self.pinned_model}.")
+        else:
+            print("Model set to automatic (Gemini fallback chain).")
 
     def set_usage_bar(self, arg):
         # Which of the three token windows the prompt's bar follows. A terminal-only preference, kept
@@ -1540,9 +1675,11 @@ class Session:
                 ("/message-length [n]", "show or set the reply length in tokens"),
                 ("/model [name|auto]", "show or pin the model (server)"),
                 ("/back or /undo", "remove the last exchange (server)"),
+                ("/redo or /regenerate", "write a new reply to the last message (server)"),
                 ("/history", "print the whole chat"),
                 ("/portrait", "show this character's picture"),
                 ("/memory", "show the memory bank and pinned facts"),
+                ("/relationship", "show your relationship with this character"),
                 ("/persona", "pick the persona you play as"),
                 ("/clear", "clear the screen"),
                 ("/switch", "go back to the character list"),
@@ -1623,16 +1760,24 @@ class Session:
                 elif word == "/memory-palace":
                     self.add_palace_entry(character, arg)
                 elif word == "/history":
-                    self.show_history(character)
+                    self.show_history(character, arg)
+                elif word == "/relationship":
+                    self.show_relationship(character)
                 elif word == "/memory":
                     self.show_memory(character)
                 elif word == "/persona":
                     self.pick_persona()
                 elif word == "/portrait":
                     self.show_portrait(character)
-                elif word in ("/save", "/back", "/undo", "/model", "/verbose"):
+                elif word == "/model":
+                    self.set_model(arg)
+                elif word in ("/save", "/back", "/undo", "/verbose"):
                     # Server commands: no message bubble, only the server's notice.
                     self.send(character, text, show_user=False)
+                    continue
+                elif word in ("/redo", "/regenerate"):
+                    # A new reply to the last message, from the server. No message bubble is shown for the command.
+                    self.send(character, text, show_user=False, regenerate=True)
                     continue
                 elif word == "/clear":
                     _out(CLEAR)
@@ -1645,7 +1790,7 @@ class Session:
         finally:
             self.composer = None
 
-    def send(self, character, text, show_user=True):
+    def send(self, character, text, show_user=True, regenerate=False):
         state = {"speaker": None, "writer": None, "shown": {}, "replies": [], "started": time.time(), "model": None}
         # The composer was lifted to get the line; put the message into the transcript in its place.
         # A server command is not a message, so show_user is off for those.
@@ -1704,7 +1849,10 @@ class Session:
                     print(f"{DIM}(chat changed on the server; /history shows it){RESET}")
 
         try:
-            self.client.send(character, text, on_event)
+            if regenerate:
+                self.client.regenerate(character, on_event)
+            else:
+                self.client.send(character, text, on_event)
         except ApiError as err:
             if err.status == 401:
                 raise

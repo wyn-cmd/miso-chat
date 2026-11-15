@@ -11,13 +11,21 @@ const cardCycleEdge = typeof IntersectionObserver === "function" ? new Intersect
     const stack = entry.target;
     if (!stack.isConnected) { cardCycleEdge.unobserve(stack); continue; }
     stack.__inView = entry.isIntersecting;
-    if (entry.isIntersecting && stack.__wake) {
+    if (!entry.isIntersecting) continue;
+    // The first picture loads only once the card is near the viewport. A gallery of fifty cards used
+    // to fetch every background (and start every video) before the reader had scrolled at all.
+    if (stack.__start) {
+      const start = stack.__start;
+      stack.__start = null;
+      start();
+    }
+    if (stack.__wake) {
       const wake = stack.__wake;
       stack.__wake = null;
       wake();
     }
   }
-}) : null;
+}, { rootMargin: "300px 0px" }) : null;
 
 function cardById(id) { return document.getElementById(id); }
 
@@ -67,11 +75,12 @@ function buildArt(host, name, ids, container, meta) {
 
   const cycle = ids.length > 1 && !CARD_REDUCE_MOTION;
   stack.__wake = null;
-  if (cycle && cardCycleEdge) cardCycleEdge.observe(stack);
+  stack.__start = null;
   let current = ids[Math.floor(Math.random() * ids.length)];
   let front = 0;
   let timer = null;
   let stopped = false;
+  let started = false;
   let cancelFinish = null;
 
   function cancelPending() {
@@ -100,7 +109,7 @@ function buildArt(host, name, ids, container, meta) {
   }
 
   function advance() {
-    if (stopped || !stack.isConnected) return;
+    if (!started || stopped || !stack.isConnected) return;
     if (document.hidden) { timer = setTimeout(advance, 1000); return; }
     if (stack.__inView === false) { timer = null; stack.__wake = advance; return; }
     cancelPending();
@@ -126,18 +135,32 @@ function buildArt(host, name, ids, container, meta) {
     watch(filled);
   }
 
+  // The first picture, and the cycle timer, wait until the card is near the viewport. The observer
+  // also handles cards inside a hidden panel: nothing loads until that panel is shown.
+  function start() {
+    if (started || stopped) return;
+    started = true;
+    const filled = fillArtLayer(layers[0], name, current, meta, !cycle);
+    layers[0].classList.add("on");
+    setArtPlaying(layers[0], true);
+    if (cycle) watch(filled);
+  }
+  if (cardCycleEdge) {
+    stack.__start = start;
+    cardCycleEdge.observe(stack);
+  } else {
+    start();
+  }
+
   const stop = () => {
     stopped = true;
+    stack.__start = null;
+    stack.__wake = null;
     cancelPending();
     if (cardCycleEdge) cardCycleEdge.unobserve(stack);
   };
   if (!cardArtRuns.has(container)) cardArtRuns.set(container, []);
   cardArtRuns.get(container).push(stop);
-
-  const filled = fillArtLayer(layers[0], name, current, meta, !cycle);
-  layers[0].classList.add("on");
-  setArtPlaying(layers[0], true);
-  if (cycle) watch(filled);
 }
 
 function creatorHandle(name, linkable) {
@@ -180,6 +203,8 @@ function renderCard(card, container, opts) {
   if (card.has_icon) {
     const img = document.createElement("img");
     img.alt = "";
+    img.loading = "lazy";
+    img.decoding = "async";
     img.src = "/api/icon/" + encodeURIComponent(card.name);
     avatar.appendChild(img);
   } else {

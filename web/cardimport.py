@@ -10,7 +10,7 @@ import re
 import struct
 import zlib
 
-from web import palace, profiles, examples
+from web import editor, palace, profiles, examples
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_TEXT = 2_000_000        # largest card text accepted, after any decompression
@@ -62,17 +62,25 @@ def _png_texts(data):
 
 # The card object from an uploaded file, by its name and content.
 def read_card(filename, data):
-    if len(data) > MAX_TEXT:
-        raise CardError("The card file is too large.")
     if data.startswith(PNG_SIGNATURE):
+        # The PNG's own picture can be larger than the card text, so the text is what is capped, not
+        # the file: the upload route already refuses anything over its file limit.
         texts = _png_texts(data)
         for key in ("ccv3", "chara"):
             if key in texts:
                 try:
-                    return json.loads(base64.b64decode(texts[key]).decode("utf-8"))
+                    blob = base64.b64decode(texts[key], validate=False)
+                except (ValueError, TypeError):
+                    raise CardError("The card in this PNG could not be read.") from None
+                if len(blob) > MAX_TEXT:
+                    raise CardError("The card text is too large.")
+                try:
+                    return json.loads(blob.decode("utf-8"))
                 except (ValueError, UnicodeDecodeError):
                     raise CardError("The card in this PNG could not be read.") from None
         raise CardError("This PNG has no character card in it.")
+    if len(data) > MAX_TEXT:
+        raise CardError("The card file is too large.")
     try:
         card = json.loads(data.decode("utf-8-sig"))
     except (ValueError, UnicodeDecodeError):
@@ -196,6 +204,11 @@ def to_draft(card, filename=""):
     examples_raw = _text(f.get("mes_example"))
     example_pairs = _example_pairs(examples_raw, name)
     instructions = _macros(_text(f.get("system_prompt")), name)
+    # SillyTavern's post-history instructions are what it appends after the chat history; Miso's author's
+    # note goes in the newest message near the end of the prompt, so that is the closest equivalent.
+    author_note = _macros(_text(f.get("post_history_instructions")), name).strip()[:editor.AUTHOR_NOTE_MAX]
+    if author_note:
+        notes.append("The card's post-history instructions became the author's note. Check it before you create.")
 
     parts = [f"Character Persona: {name}"]
     if description:
@@ -255,6 +268,7 @@ def to_draft(card, filename=""):
         "name": name,
         "character": card_text,
         "context": context,
+        "author_note": author_note,
         "examples": example_pairs,
         "headline": _headline(description),
         "info": info,

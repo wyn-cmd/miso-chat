@@ -2,7 +2,7 @@
 #
 # Admin only. A character is a folder under the character root with character.md (persona, with a
 # 'Colour:' line), optional context.md (memories, locations, situations), optional author_note.md (an
-# instruction sent near the end of the prompt, separate from the card) and optional icon.png.
+# instruction kept in the cached system prompt, separate from the card) and optional icon.png.
 # Names are restricted to one folder level so nothing can be written outside the character root.
 import io
 import json
@@ -90,6 +90,49 @@ def folder_of(root, name):
     if os.path.dirname(os.path.realpath(path)) != os.path.realpath(root):
         raise EditorError("That name points outside the character folder.")
     return path
+
+
+def rename_character(root, old_name, new_name, data_dir=None):
+    old_name = valid_name(old_name)
+    new_name = valid_name(new_name)
+    if old_name == new_name:
+        return read_card(root, new_name)
+    old_folder = folder_of(root, old_name)
+    new_folder = folder_of(root, new_name)
+    if not os.path.isdir(old_folder):
+        raise EditorError("No such character.")
+    if os.path.exists(new_folder):
+        raise EditorError("A character with that name already exists.")
+    os.rename(old_folder, new_folder)
+    old_base = os.path.basename(old_folder)
+    new_base = os.path.basename(new_folder)
+    if data_dir:
+        users_root = os.path.join(data_dir, "users")
+        if os.path.isdir(users_root):
+            for uid in os.listdir(users_root):
+                udir = os.path.join(users_root, uid)
+                if not os.path.isdir(udir):
+                    continue
+                old_path = os.path.join(udir, old_base)
+                new_path = os.path.join(udir, new_base)
+                if os.path.exists(old_path) and not os.path.exists(new_path):
+                    try:
+                        os.rename(old_path, new_path)
+                    except OSError:
+                        pass
+        db = os.path.join(data_dir, "app.db")
+        if os.path.isfile(db):
+            import sqlite3
+            conn = sqlite3.connect(db)
+            try:
+                for table in ("attitudes", "moods", "checkins", "dreams", "directors"):
+                    conn.execute(f"UPDATE {table} SET character=? WHERE character=?", (new_name, old_name))
+                conn.execute("UPDATE favourites SET name=? WHERE name=?", (new_name, old_name))
+                conn.execute("UPDATE char_messages SET name=? WHERE name=?", (new_name, old_name))
+                conn.commit()
+            finally:
+                conn.close()
+    return read_card(root, new_name)
 
 
 def read_card(root, name):
@@ -787,6 +830,17 @@ def portrait_bytes(data):
     animated, ext = _animated_image(data)
     if animated is not None and ext != ".png":   # APNG pictures are flattened for icons, which name no .apng file
         return animated, ext.lstrip(".")
+    return _shrink_icon(data)
+
+
+def shrink_picture(data):
+    # A checked upload cropped to a centred square and lowered to a WebP under 512 KB. Used for emotion
+    # pictures, which are small and never animated. Returns (bytes, extension).
+    if not data:
+        raise EditorError("Choose an image first.")
+    _scan_bytes(data)
+    if len(data) > UPLOAD_MAX:
+        raise EditorError("Picture uploads can be up to 10 MB.")
     return _shrink_icon(data)
 
 

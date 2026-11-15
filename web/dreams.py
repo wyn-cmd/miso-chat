@@ -118,9 +118,17 @@ def tick(store, fire, zone_for, now, every_days=1, log=lambda m: None):
             due_rows.append(dict(row, local_day=local.strftime("%Y-%m-%d")))
     for row in order(due_rows):
         uid, name = row["user_id"], row["character"]
-        store.dream_update(uid, name, last_day=row["local_day"])
         try:
-            if fire(uid, name):
-                log(f"dream ran for {name} (user {uid})")
+            result = fire(uid, name)
         except Exception as err:   # one failed dream must not stop the others
+            store.dream_update(uid, name, last_day=row["local_day"])
             log(f"dream for {name} (user {uid}) failed: {err}")
+            continue
+        if result == "delay":
+            # The dream is due, but its provider bills cheaper later; leave it due and look again on
+            # the next tick instead of marking it done for the night.
+            log(f"dream for {name} (user {uid}) held until off-peak")
+            continue
+        store.dream_update(uid, name, last_day=row["local_day"])
+        if result:
+            log(f"dream ran for {name} (user {uid})")

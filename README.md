@@ -1,6 +1,6 @@
 # Miso Chat
 
-[![Visitors](https://hits.sh/github.com/wyn-cmd/miso-chat.svg?style=flat&label=visitors&color=blue)](https://hits.sh/github.com/wyn-cmd/miso-chat/) ![Stars](https://img.shields.io/github/stars/wyn-cmd/miso-chat?style=flat&v=2) ![Forks](https://img.shields.io/github/forks/wyn-cmd/miso-chat?style=flat&v=2) ![Last commit](https://img.shields.io/github/last-commit/wyn-cmd/miso-chat?style=flat&v=2) ![License](https://img.shields.io/github/license/wyn-cmd/miso-chat?style=flat&v=2) ![Release](https://img.shields.io/github/v/release/wyn-cmd/miso-chat?style=flat&v=2) ![Top language](https://img.shields.io/github/languages/top/wyn-cmd/miso-chat?style=flat&v=2) ![Repo size](https://img.shields.io/github/repo-size/wyn-cmd/miso-chat?style=flat&v=2)
+[![Visitors](https://hits.sh/github.com/wyn-cmd/miso-chat.svg?style=flat&label=visitors&color=blue)](https://hits.sh/github.com/wyn-cmd/miso-chat/) ![Stars](https://img.shields.io/github/stars/wyn-cmd/miso-chat?style=flat) ![Forks](https://img.shields.io/github/forks/wyn-cmd/miso-chat?style=flat) ![Last commit](https://img.shields.io/github/last-commit/wyn-cmd/miso-chat?style=flat) ![License](https://img.shields.io/github/license/wyn-cmd/miso-chat?style=flat) ![Release](https://img.shields.io/github/v/release/wyn-cmd/miso-chat?style=flat) ![Top language](https://img.shields.io/github/languages/top/wyn-cmd/miso-chat?style=flat) ![Repo size](https://img.shields.io/github/repo-size/wyn-cmd/miso-chat?style=flat)
 
 Miso Chat is a roleplay chat app that talks to Gemini, with optional DeepSeek, local OpenAI-style server and Claude Code backends. It is a FastAPI web app for several accounts: each account has its own chat history, memory and persona choice, and the admin manages accounts, usage caps, token budgets, providers, character cards and icons, and a stats page.
 
@@ -424,6 +424,15 @@ Each character is a folder in the project root.
 - `backgrounds/` (optional) holds up to 10 pictures, one JPEG file each, added and removed in the editor. A chat, a home card and the info card use them. An older `background.jpg` still works.
 - `palace.json` holds the Mind Palace entries.
 - `examples.json` holds the example messages: up to 12 exchanges of a sample user line and the character's reply, written to show how the character speaks. They sit after the card in the system prompt and are never sent as chat history, so they do not appear in exports of the conversation. Edit them in the character editor under Example messages. A SillyTavern card's example dialogue is read into this section on import.
+- `agentic.json` (optional) holds the agentic mode and emotion picture switches. `expressions/` holds one picture per emotion.
+
+### Agentic mode and emotion pictures
+
+Agentic mode is a switch in the character editor that lets a character use tools. It is off unless the creator turns it on, and only the character's creator or an admin can change it.
+
+Emotion pictures are the first tool-based feature under it. With agentic mode and emotion pictures on, the model picks one emotion for each reply through a tool, and the chat shows that emotion's picture beside the speaker's name. The seven emotions are relaxed (the default), happy, sad, angry, confused, flustered and steamy. The creator uploads a picture for each one in the editor; a still image is cropped to a square and stored as WebP, and a new picture replaces the old one.
+
+An emotion without a picture shows a small emoticon instead, so a character can use the feature with only some of the pictures. In a group chat each member's reply carries its own emotion: a member with pictures shows the matching one, and a member without shows its own picture and an emoticon. In a novel the narrator tags each spoken line from a cast member with pictures (`[[Name|emotion]]`), and that line is drawn with the member's face and name inline while the narration stays prose; the tags are kept in the saved text, so a reload draws the same lines.
 
 A group chat is a folder with a `group_config.json` that lists its members.
 

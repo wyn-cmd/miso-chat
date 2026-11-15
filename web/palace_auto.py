@@ -167,5 +167,5 @@ def run(engine, pdir):
         return None
     window = [str(m.get("text") or "") for m in engine.full_history[-WINDOW:] if m.get("text")]
     prompt, _full = build_prompt(entries, cfg["auto"]["limit"])
-    reply = parse(engine.ask(SYSTEM, prompt))
+    reply = parse(engine.ask(SYSTEM, prompt, background=True))
     return apply(pdir, reply, window, entries, cfg)

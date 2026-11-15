@@ -193,6 +193,7 @@ function fillCard(data) {
   if (data.name && !$("wzName").value.trim()) $("wzName").value = data.name;
   $("wzCard").value = data.character || "";
   if (typeof data.context === "string") $("wzContext").value = data.context;
+  if (typeof data.author_note === "string" && data.author_note) $("wzAuthorNote").value = data.author_note;
   if (data.examples) renderExamples(data.examples);
   $("wzHeadline").value = data.headline || "";
   $("wzInfo").value = data.info || "";
@@ -232,7 +233,7 @@ async function importCard() {
   $("wzImportBtn").disabled = true;
   try {
     const data = await sendFile("/api/admin/character-import", file, { filename: true, fallback: tr("The card could not be imported.") });
-    if (!canReplaceText(tr("Replace the card, context, headline, summary and tags with the imported card? A name you typed is kept."))) {
+    if (!canReplaceText(tr("Replace the card, context, author's note, headline, summary and tags with the imported card? A name you typed is kept."))) {
       $("wzImportMsg").textContent = tr("Kept your text. Nothing was changed.");
       return;
     }

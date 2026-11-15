@@ -148,6 +148,9 @@ async function loadSettings() {
   $("s_user_daily_cap").value = s.user_daily_cap;
   $("s_global_daily_cap").value = s.global_daily_cap;
   $("s_rpm_limit").value = s.rpm_limit;
+  $("s_deepseek_user_daily_cap").value = s.deepseek_user_daily_cap;
+  $("s_deepseek_global_daily_cap").value = s.deepseek_global_daily_cap;
+  $("s_deepseek_rpm_limit").value = s.deepseek_rpm_limit;
   $("s_reply_min_tokens").value = s.reply_min_tokens;
   $("s_reply_max_tokens").value = s.reply_max_tokens;
   $("s_memory_enabled").checked = s.memory_enabled === "1";
@@ -195,6 +198,9 @@ $("settingsForm").addEventListener("submit", async (ev) => {
       user_daily_cap: parseInt($("s_user_daily_cap").value, 10),
       global_daily_cap: parseInt($("s_global_daily_cap").value, 10),
       rpm_limit: parseInt($("s_rpm_limit").value, 10),
+      deepseek_user_daily_cap: parseInt($("s_deepseek_user_daily_cap").value, 10),
+      deepseek_global_daily_cap: parseInt($("s_deepseek_global_daily_cap").value, 10),
+      deepseek_rpm_limit: parseInt($("s_deepseek_rpm_limit").value, 10),
       reply_min_tokens: parseInt($("s_reply_min_tokens").value, 10),
       reply_max_tokens: parseInt($("s_reply_max_tokens").value, 10),
       memory_enabled: $("s_memory_enabled").checked,
@@ -292,10 +298,15 @@ async function loadTiers() {
     }
     tr.appendChild(provCell);
     const modelCell = el("td");
+    modelCell.style.minWidth = "320px";
+    modelCell.style.whiteSpace = "normal";
+    modelCell.style.verticalAlign = "top";
     if (!data.models.length) modelCell.appendChild(el("span", window.tr("no models set up"), "muted"));
     for (const m of data.models) {
       const label = el("label", "");
       label.className = "inline";
+      label.style.whiteSpace = "normal";
+      label.style.wordBreak = "break-all";
       const box = el("input");
       box.type = "checkbox";
       box.value = m;

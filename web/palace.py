@@ -178,10 +178,6 @@ def load_all(folder):
         return [], validate_settings({})
 
 
-def load(folder):
-    return load_all(folder)[0]
-
-
 def copy_starting(src_folder, dst_folder):
     # First use copies the character's starting palace into the account's own folder. Later edits stay there.
     src = os.path.join(src_folder, FILE)
@@ -361,12 +357,6 @@ def match_entries(entries, texts, budget=DEFAULT_BUDGET, recursive=False, weight
     # Lower order first in the prompt, so higher order lands nearer the end (as in SillyTavern).
     kept.sort(key=lambda e: e["order"])
     return kept
-
-
-def match(entries, texts, budget=DEFAULT_BUDGET, recursive=False, weights=None):
-    # texts: recent messages, oldest first, the message being sent last. Each entry scans only its own depth.
-    # Returns the matched entries' text. When the budget runs out, the lowest order is dropped first.
-    return [block_for(e) for e in match_entries(entries, texts, budget, recursive, weights)]
 
 
 # The key the caller scores an entry under: its id, or a hash of its content when it has none.

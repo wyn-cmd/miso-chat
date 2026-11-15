@@ -32,11 +32,11 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 
 from google import genai
-from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_TEMPERATURE, GROUP_TEMPERATURE, REASONING_LEVELS
+from rp_core import Engine, MAX_REGENERATIONS, SOLO_WINDOW, GROUP_WINDOW, SOLO_TEMPERATURE, GROUP_TEMPERATURE, REASONING_LEVELS, DEFAULT_FALLBACKS, IDLE_SAVE_HOURS
 from charname import display_for, folder_for
 import sandbox
 import llm_backends
-from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_audit, palace_auto, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude, novels, worlds, tensions, passwords, scenarios, search, offscreen, relationship, story_bible, docextract, memory_bank, music, voice, minigames
+from web import providers, editor, profiles, recommend, transfer, ocr, palace, palace_audit, palace_auto, lorebook, draft, branches, private_groups, secure, backup, user_personas, account_profiles, pricing, exporting, checkins, cardimport, dreams, mood, attitude, novels, worlds, tensions, passwords, scenarios, search, offscreen, relationship, story_bible, docextract, memory_bank, music, voice, minigames, expressions, vision, gallery
 import pytz
 from web.store import REMEMBER_SECONDS, Store, DEFAULT_SETTINGS, TIERS, TIER_MONTHLY_TOKENS, budget_days, recent_days, verify_password, needs_rehash, ADMIN_NAME
 
@@ -69,6 +69,7 @@ COOKIE = "__Host-rp_session" if COOKIE_SECURE else "rp_session"
 LOGIN_CHECKS = 4
 MAX_MESSAGE = 4000
 MAX_DELETE = 500         # most messages one delete call may remove
+HISTORY_PAGE_MAX = 2000  # most messages one history read returns when a page size is asked for
 MIN_PASSWORD = 12
 # Sign-in input limits. No account can have a longer name, and no password this long can be a real one: such input is
 # refused before any lookup or hash. Passwords set from now on are capped too; longer ones set earlier still sign in.
@@ -86,7 +87,7 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{2,32}$")
 TOKEN_DISPLAY_LIMIT = 1_000_000
 MEMORY_LIMIT = 20_000        # characters allowed in memory.md or pinned.md
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-       "img-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; "
+       "img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; "
        "base-uri 'none'; form-action 'self'")
 # Imported game assets may be SVG, which is a document when opened on its own. This policy keeps that
 # document from running any script or reaching the network, so an uploaded picture cannot act as a page.
@@ -276,6 +277,20 @@ def _extra_models(st):
     return out
 
 
+def _chat_model_for(st, user):
+    # The model a user pinned, or the usual first Gemini fallback when they let the server choose.
+    return st.store.get_pref(user["id"], "model") or DEFAULT_FALLBACKS[0]
+
+
+def _media_features(st, user):
+    # What the chat page may offer this account. A vision action needs a model that can see; an image
+    # action needs the dedicated image model. Both are hidden when the admin has not connected them.
+    cfg = providers.load(st.data_dir)
+    chat = _chat_model_for(st, user)
+    image = vision.image_model(cfg)
+    return {"vision": bool(vision.choose_vision_model(chat, cfg)), "image": bool(image), "gallery": bool(image)}
+
+
 def client_ip(request):
     # Behind the tunnel every request arrives from localhost, so the real address comes from Cloudflare's
     # header. It is trusted only from localhost, because anyone else could send it.
@@ -440,15 +455,22 @@ class Slot:
 
 
 def build_client(gemini, data_dir):
-    # One client that routes provider model ids (deepseek:, local:, claude:) and passes bare ids to Gemini.
+    # One client that routes provider model ids (deepseek:, local:, claude:, openrouter:) and passes bare ids to Gemini.
     cfg = providers.load(data_dir)
     extra = {}
     if cfg["deepseek"]["enabled"] and cfg["deepseek"]["api_key"]:
         extra["deepseek"] = llm_backends.OpenAIStyleClient("DeepSeek", llm_backends.DEEPSEEK_BASE_URL,
                                                               cfg["deepseek"]["api_key"], "deepseek")
+    if cfg["openrouter"]["enabled"] and providers.openrouter_keys(cfg):
+        extra["openrouter"] = llm_backends.OpenAIStyleClient("OpenRouter", llm_backends.OPENROUTER_BASE_URL,
+                                                                providers.openrouter_keys(cfg), "openrouter")
     if cfg["local"]["enabled"] and cfg["local"]["base_url"]:
         extra["local"] = llm_backends.OpenAIStyleClient("local model", cfg["local"]["base_url"],
                                                            cfg["local"]["api_key"], "local")
+    if cfg["opencode"]["enabled"]:
+        exe = cfg["opencode"]["exe"] or shutil.which("opencode")
+        if exe:
+            extra["opencode"] = llm_backends.OpencodeClient(exe)
     if cfg["claude"]["enabled"]:
         exe = cfg["claude"]["exe"] or shutil.which("claude")
         if exe:
@@ -466,7 +488,8 @@ class AppState:
         self.char_root = char_root
         self.slots = {}                       # (user_id, profile) -> Slot
         self.slots_lock = threading.Lock()
-        self.rpm = collections.deque()        # timestamps of recent Gemini calls
+        self.rpm = collections.deque()        # timestamps of recent calls to Gemini and the other providers
+        self.rpm_ds = collections.deque()     # timestamps of recent DeepSeek calls, with their own minute budget
         self.rpm_lock = threading.Lock()
 
 
@@ -513,22 +536,80 @@ def require(request, allow_change=False, admin=False):
     return user
 
 
-def _effective_cap(st, user):
+def _effective_cap(st, user, deepseek=False):
+    # An admin's figure for the account applies to either provider. Without one, DeepSeek has its own daily cap.
     if user["daily_cap"] is not None:
         return int(user["daily_cap"])
-    return int(st.store.get_setting("user_daily_cap"))
+    return int(st.store.get_setting("deepseek_user_daily_cap" if deepseek else "user_daily_cap"))
 
 
-PROVIDER_ALL = ["gemini", "deepseek", "local", "claude"]
-TIER_PROVIDERS_DEFAULT = {"free": ["gemini", "local"], "lite": PROVIDER_ALL, "standard": PROVIDER_ALL, "pro": PROVIDER_ALL}
+# The minute budget a call takes a slot in: DeepSeek calls have their own, every other provider shares the first.
+def _minute_slots(st, model):
+    return st.rpm_ds if provider_of(model) == "deepseek" else st.rpm
+
+
+PROVIDER_ALL = ["gemini", "deepseek", "local", "claude", "openrouter", "opencode"]
+# OpenRouter models come from the key, so the free tier may use it.
+TIER_PROVIDERS_DEFAULT = {"free": ["gemini", "local", "openrouter", "opencode"], "lite": PROVIDER_ALL, "standard": PROVIDER_ALL, "pro": PROVIDER_ALL}
 # Daily and weekly token budgets, as a percentage of the monthly budget, when the admin sets no figure for an account.
 DEFAULT_DAILY_PCT = 10
 DEFAULT_WEEKLY_PCT = 20
 
 
 def _tier_config(st):
-    # Each tier's monthly token cap, daily and weekly shares of it, the providers it may use, and models it may not use.
+    # Each tier's monthly token cap, daily and weekly limits (percent of the monthly cap), the providers it may use, and models it may not use.
     # Saved by the admin Tiers page.
+    # One-time migration: older installs saved a tier_config before OpenRouter existed, so its providers lists
+    # omit openrouter and the free models never appear in the picker. Add it once; the admin can remove it later.
+    try:
+        _migrated = st.store.get_setting("tier_config_openrouter_migrated")
+    except KeyError:
+        _migrated = None
+    if not _migrated:
+        try:
+            raw0 = st.store.get_setting("tier_config") or ""
+            saved0 = json.loads(raw0) if raw0 else {}
+            if isinstance(saved0, dict):
+                changed = False
+                for t in TIERS:
+                    s = saved0.get(t)
+                    if isinstance(s, dict) and isinstance(s.get("providers"), list):
+                        if "openrouter" not in s["providers"]:
+                            s["providers"] = list(s["providers"]) + ["openrouter"]
+                            changed = True
+                if changed:
+                    st.store.set_setting("tier_config", json.dumps(saved0))
+        except (ValueError, Exception):
+            pass
+        try:
+            st.store.set_setting("tier_config_openrouter_migrated", "1")
+        except Exception:
+            pass
+    # One-time migration for opencode provider.
+    try:
+        _mig = st.store.get_setting("tier_config_opencode_migrated")
+    except KeyError:
+        _mig = None
+    if not _mig:
+        try:
+            raw0 = st.store.get_setting("tier_config") or ""
+            saved0 = json.loads(raw0) if raw0 else {}
+            if isinstance(saved0, dict):
+                changed = False
+                for t in TIERS:
+                    s = saved0.get(t)
+                    if isinstance(s, dict) and isinstance(s.get("providers"), list):
+                        if "opencode" not in s["providers"]:
+                            s["providers"] = list(s["providers"]) + ["opencode"]
+                            changed = True
+                if changed:
+                    st.store.set_setting("tier_config", json.dumps(saved0))
+        except (ValueError, Exception):
+            pass
+        try:
+            st.store.set_setting("tier_config_opencode_migrated", "1")
+        except Exception:
+            pass
     raw = st.store.get_setting("tier_config") or ""
     try:
         saved = json.loads(raw) if raw else {}
@@ -569,8 +650,10 @@ def _tier_of(user):
 
 
 def _usage_summary(st, user):
+    # The request figures are for the provider the account's saved model uses, so they match the chat's own check.
+    ds = _deepseek_chosen(st, user)
     used = st.store.usage_today(user["id"])
-    return {"requests_today": used["requests"], "request_cap": _effective_cap(st, user),
+    return {"requests_today": st.store.user_requests_today(user["id"], ds), "request_cap": _effective_cap(st, user, ds),
             "tokens_today": used["tokens"], "token_display_limit": TOKEN_DISPLAY_LIMIT,
             "token_budgets": _budget_view(st, user)}
 
@@ -695,6 +778,7 @@ DREAM_TICK_SECONDS = 300
 MOOD_TICK_SECONDS = 600
 # How often the off-screen director checks for chats whose day has not been written yet, in seconds.
 OFFSCREEN_TICK_SECONDS = 600
+IDLE_TICK_SECONDS = 300     # how often the idle-save check looks at the chats on disk
 
 
 # The dream settings as the page shows them, with the last dream's record when there is one.
@@ -735,7 +819,8 @@ def _is_novel_name(name):
 
 
 # Runs one dream for an account's character. It holds the chat's lock, so it never overlaps a reply, and it is
-# counted against the server's dream cap, not the user's requests or tokens. Returns True when a dream ran.
+# counted against the server's dream cap, not the user's requests or tokens. Returns True when a dream ran and False
+# when there was nothing to do.
 # A novel dreams under its own switch, dreams_in_novels, which does not depend on dreams_enabled.
 def _dream_fire(st, uid, name):
     switch = "dreams_in_novels" if _is_novel_name(name) else "dreams_enabled"
@@ -782,14 +867,22 @@ def _offscreen_folder(st, uid, name):
     return os.path.join(st.data_dir, "users", str(uid), name)
 
 
+# Sets a chat's off-screen block. It sits in the system prompt, which is rebuilt only when the text changes, so the
+# cached part of the prompt keeps it for the whole session.
+def _set_offscreen(slot, text):
+    if slot.engine.offscreen_text != text:
+        slot.engine.offscreen_text = text
+        slot.engine._build_system_prompt()
+
+
 # Puts the newest off-screen fragments and twist in the prompt for the next reply, when the chat's switch is on.
 def _offscreen_start(st, uid, name, slot):
     row = st.store.director_get(uid, name)
     if not row or not row["enabled"]:
-        slot.engine.offscreen_text = ""
+        _set_offscreen(slot, "")
         return
     block = offscreen.prompt_block(offscreen.load(_offscreen_folder(st, uid, name)))
-    slot.engine.offscreen_text = ("\n\n" + block) if block else ""
+    _set_offscreen(slot, ("\n\n" + block) if block else "")
 
 
 # The off-screen settings and recent moments as the page shows them.
@@ -846,6 +939,61 @@ def _offscreen_fire(st, uid, name):
 
 # Walks every chat with off-screen life on and writes the day once. The day is marked before the pass, so a
 # failed pass is not retried all day.
+def _idle_save_one(st, user, name):
+    # Saves one chat that has been idle, if it is a DeepSeek solo chat. The chat's slot is loaded for the save and
+    # its lock is held, so no turn runs during it. Skipped when the user is at the daily request cap.
+    try:
+        name, is_group = _resolve_profile(st, name, user)
+    except HTTPException:
+        # A chat whose character is no longer on disk has nothing to save with; it is skipped without a log line.
+        return
+    if is_group:
+        return
+    if st.store.usage_today(user["id"])["requests"] >= _effective_cap(st, user):
+        return
+    slot = _slot(st, user, name, False)
+    if not slot.lock.acquire(timeout=60):
+        return
+    try:
+        if slot.engine.idle_save():
+            log(f"idle save for {name} (user {user['id']}) after {IDLE_SAVE_HOURS} hours without a message")
+    finally:
+        slot.lock.release()
+
+
+# Looks for chats whose history was last written at least IDLE_SAVE_HOURS ago, and which have no state written since.
+# Writing the state after a check is what stops a chat being saved again until its next message.
+def _idle_save_tick(st):
+    if st.store.get_setting("memory_enabled") != "1":
+        return
+    root = os.path.join(st.data_dir, "users")
+    if not os.path.isdir(root):
+        return
+    now = time.time()
+    for uid_text in os.listdir(root):
+        if not uid_text.isdigit():
+            continue
+        user_dir = os.path.join(root, uid_text)
+        for name in os.listdir(user_dir):
+            folder = os.path.join(user_dir, name)
+            history = os.path.join(folder, "memory.json")
+            if not os.path.isfile(history):
+                continue
+            written = os.path.getmtime(history)
+            if now - written < IDLE_SAVE_HOURS * 3600:
+                continue
+            state = os.path.join(folder, "summary.json")
+            if os.path.exists(state) and os.path.getmtime(state) >= written:
+                continue
+            user = st.store.get_user(int(uid_text))
+            if not user:
+                continue
+            try:
+                _idle_save_one(st, user, name)
+            except Exception as err:   # one chat's failure must not stop the others
+                log(f"idle save failed for {name} (user {uid_text}): {err}")
+
+
 def _offscreen_tick(st):
     if st.store.get_setting("offscreen_enabled") != "1":
         return
@@ -865,10 +1013,18 @@ def _offscreen_tick(st):
 
 # Moves a character's state to now and puts it in the prompt for the next reply. Not saved here: the exchange is
 # counted after the reply, by _mood_settle.
+def _set_mood_stable(slot, text):
+    # The mood's emotion and bands sit in the system prompt, which is rebuilt only when that text changes.
+    if slot.engine.mood_stable != text:
+        slot.engine.mood_stable = text
+        slot.engine._build_system_prompt()
+
+
 def _mood_start(st, uid, name, slot):
     now = time.time()
     state = mood.advance(mood.load(st.store.mood_get(uid, name), now), now)
-    slot.engine.mood_text = "\n\n" + mood.describe(state)
+    _set_mood_stable(slot, mood.describe_stable(state))
+    slot.engine.mood_text = ""   # the per-turn numbers are no longer sent; see describe_stable
 
 
 # Messages a lite account can send in a day, from the lite tier's daily token share and the daily request cap. A
@@ -881,9 +1037,12 @@ def _lite_allowance(st):
 
 # Counts one exchange after a reply. It loads the stored state again rather than using the one from the start of the
 # turn, so a lonely check-in or another write made meanwhile is kept.
-def _mood_settle(st, uid, name, text=""):
+def _mood_settle(st, uid, name, text="", reply=""):
     now = time.time()
-    state = mood.on_exchange(mood.load(st.store.mood_get(uid, name), now), now, _lite_allowance(st), text)
+    state = mood.on_exchange(mood.load(st.store.mood_get(uid, name), now), now, _lite_allowance(st), text, reply)
+    # With relationships on, mood drifts a little toward the relationship's affection, one way only.
+    if st.store.get_setting("attitude_enabled") == "1" and st.store.attitude_get(uid, name):
+        state = mood.link_to(state, attitude.load(st.store.attitude_get(uid, name))["affection"])
     st.store.mood_save(uid, name, state)
 
 
@@ -894,18 +1053,28 @@ def _att_multipliers(st, name):
     return relationship.multiplier(values["trust"]), relationship.multiplier(values["affection"])
 
 
+def _set_attitude_stable(slot, text):
+    # The relationship level and tone sit in the system prompt, which is rebuilt only when the text changes.
+    if slot.engine.attitude_stable != text:
+        slot.engine.attitude_stable = text
+        slot.engine._build_system_prompt()
+
+
 def _att_start(st, uid, name, slot, text):
     trust_mult, affection_mult = _att_multipliers(st, name)
     state, result = attitude.apply(attitude.load(st.store.attitude_get(uid, name)), text,
                                    affection_multiplier=affection_mult, trust_multiplier=trust_mult)
-    slot.engine.attitude_text = "\n\n" + attitude.describe(state, result)
+    _set_attitude_stable(slot, attitude.describe_stable(state))
+    changes = attitude.describe_changes(state, result)
+    slot.engine.attitude_text = ("\n\n" + changes) if changes else ""
 
 
 # Applies the same message to the stored scores after a reply. It loads the row again, as _mood_settle does.
-def _att_settle(st, uid, name, text):
+def _att_settle(st, uid, name, text, reply=""):
     trust_mult, affection_mult = _att_multipliers(st, name)
     state, _result = attitude.apply(attitude.load(st.store.attitude_get(uid, name)), text,
-                                    affection_multiplier=affection_mult, trust_multiplier=trust_mult)
+                                    affection_multiplier=affection_mult, trust_multiplier=trust_mult,
+                                    char_text=reply)
     st.store.attitude_save(uid, name, attitude.to_row(state))
 
 
@@ -990,20 +1159,13 @@ def _budget_block(st, user):
     return None
 
 
-def _count_model_call(st, uid, model):
-    # One model call made for this user. Counts toward their usage and the per-minute limit.
-    st.store.add_usage(uid, requests=1, provider=provider_of(model), model=model)
-    with st.rpm_lock:
-        st.rpm.append(time.time())
-
-
 def _count_system_call(st, model):
     # A model call the server makes for no one's chat (auto profiles, card drafts, the profile writer). It is recorded
     # under the system account, so the stats total includes it, but it is billed to no user's quota. It still takes a
     # slot under the per-minute limit.
     st.store.add_system_usage(requests=1, provider=provider_of(model), model=model)
     with st.rpm_lock:
-        st.rpm.append(time.time())
+        _minute_slots(st, model).append(time.time())
 
 
 def _usage_sink(st, uid):
@@ -1164,8 +1326,11 @@ def _queue_missing_profiles(st, user, folders):
 
 def _check_caps(st, user):
     # Pre-turn check. Group turns can overshoot a little: each member is one call.
-    used = st.store.usage_today(user["id"])["requests"]
-    cap = _effective_cap(st, user)
+    # A DeepSeek account (its saved model is DeepSeek) is checked against the DeepSeek caps; every other account
+    # against the Gemini caps, which are unchanged. Each is counted by the provider the call actually used.
+    ds = _deepseek_chosen(st, user)
+    used = st.store.user_requests_today(user["id"], ds)
+    cap = _effective_cap(st, user, ds)
     if used >= cap:
         # Prepaid credits: drain one token instead of blocking, when a balance exists.
         if st.store.credit_balance(user["id"]) > 0:
@@ -1178,15 +1343,16 @@ def _check_caps(st, user):
     blocked = _budget_block(st, user)
     if blocked:
         raise HTTPException(429, {"code": "budget_reached", "message": blocked})
-    if st.store.global_requests_today() >= int(st.store.get_setting("global_daily_cap")):
+    if st.store.global_requests_by(ds) >= int(st.store.get_setting("deepseek_global_daily_cap" if ds else "global_daily_cap")):
         raise HTTPException(429, {"code": "global_cap",
                                   "message": "The server's daily budget is used up for today."})
-    limit = int(st.store.get_setting("rpm_limit"))
+    limit = int(st.store.get_setting("deepseek_rpm_limit" if ds else "rpm_limit"))
+    slots = st.rpm_ds if ds else st.rpm
     now = time.time()
     with st.rpm_lock:
-        while st.rpm and now - st.rpm[0] > 60:
-            st.rpm.popleft()
-        busy = len(st.rpm) >= limit
+        while slots and now - slots[0] > 60:
+            slots.popleft()
+        busy = len(slots) >= limit
     if busy:
         raise HTTPException(429, {"code": "busy",
                                   "message": "Too many requests right now. Wait a few seconds."})
@@ -1304,7 +1470,7 @@ def _slot(st, user, name, is_group):
     def on_request(model=None):
         st.store.add_usage(uid, requests=1, provider=provider_of(model), model=model)
         with st.rpm_lock:
-            st.rpm.append(time.time())
+            _minute_slots(st, model).append(time.time())
 
     def on_tokens(n, model=None, detail=None):
         # detail carries the input/cached/output split and the turn's seconds, when the provider reports them.
@@ -1327,7 +1493,7 @@ def _slot(st, user, name, is_group):
     engine.thinking = thinking
     engine.reasoning = reasoning
     engine.reasoning_levels = reasoning_levels
-    engine.window_override = _pref_int(st.store.get_pref(uid, "window"))
+    engine.window_override = None if _deepseek_chosen(st, user) else _pref_int(st.store.get_pref(uid, "window"))
     # Solo chats quench only once the account turns it on. Group chats are quenched by default; an account that has
     # switched it off (stored as "0") keeps it off everywhere.
     quench_pref = st.store.get_pref(uid, "quench")
@@ -1362,7 +1528,7 @@ def _drop_slot(st, user, name):
             st.slots.pop(k, None)
 
 
-PROVIDER_KEYS = ["gemini", "deepseek", "local", "claude"]   # each provider uses its own key
+PROVIDER_KEYS = PROVIDER_ALL   # the same list; each provider uses its own API key
 
 
 def provider_of(model):
@@ -1465,6 +1631,8 @@ def _history(engine):
         item = {"speaker": speaker, "role": role, "text": engine.restore(e.get("text", ""))}
         if e.get("thinking"):
             item["thinking"] = e["thinking"]
+        if e.get("emotion"):
+            item["emotion"] = e["emotion"]
         if e.get("game"):
             item["game"] = True
         if e.get("scheduled"):
@@ -1477,6 +1645,16 @@ def _history(engine):
             item["time"] = e["ts"]
         out.append(item)
     return out
+
+
+# The last page of a saved chat, with the absolute position of its first line. A limit of zero keeps
+# the whole history for older clients; the page is capped so one request cannot pull an unbounded list.
+def _history_page(messages, limit):
+    if limit <= 0:
+        return {"messages": messages}
+    keep = min(max(limit, 1), HISTORY_PAGE_MAX)
+    start = max(0, len(messages) - keep)
+    return {"messages": messages[start:], "start": start, "total": len(messages), "has_more": start > 0}
 
 
 def _read_body(body):
@@ -1637,11 +1815,18 @@ def _reply_target(st, uid):
     return max(lo, min(hi, raw))
 
 
+# True when the account's saved model is a DeepSeek one. DeepSeek reuses cached prompt tokens well, so the rolling window
+# length is not set by the user for it: the setting is hidden and the stored value is not applied.
+def _deepseek_chosen(st, user):
+    return provider_of(st.store.get_pref(user["id"], "model") or "") == "deepseek"
+
+
 def _chat_settings_payload(st, user, name, is_group):
     return {"character": _label(st, user, name), "is_group": bool(is_group),
             "temperature": _pref_float(st.store.get_pref(user["id"], "temp:" + name)),
             "temperature_default": GROUP_TEMPERATURE if is_group else SOLO_TEMPERATURE,
             "window": _pref_int(st.store.get_pref(user["id"], "window")),
+            "window_hidden": _deepseek_chosen(st, user),
             "window_default": GROUP_WINDOW if is_group else SOLO_WINDOW,
             "window_defaults": {"solo": SOLO_WINDOW, "group": GROUP_WINDOW}}
 
@@ -1677,6 +1862,35 @@ def _export_now(st, user, name, is_group, fmt):
     return _export_text(messages, title, fmt, when)
 
 
+# Memory saves that run after a reply, keyed by (user id, character). Each is an Event that is set when its save is
+# done. A message on the same chat waits for it, and the save takes the chat's lock, so the two never overlap.
+_SAVES_PENDING = {}
+_SAVES_GUARD = threading.Lock()
+SAVE_WAIT_SECONDS = 300
+
+
+def _wait_for_save(uid, name):
+    with _SAVES_GUARD:
+        done = _SAVES_PENDING.get((uid, name))
+    if done is not None:
+        done.wait(timeout=SAVE_WAIT_SECONDS)
+
+
+def _save_after_reply(st, user, name, slot, done):
+    try:
+        # Waits here until the turn that started the save has released the chat's lock.
+        with slot.lock:
+            if st.store.usage_today(user["id"])["requests"] < _effective_cap(st, user):
+                slot.engine.update_memory_bank()
+    except Exception as err:  # memory refresh is best-effort
+        log(f"memory refresh failed for {name} (user {user['id']}): {err}")
+    finally:
+        with _SAVES_GUARD:
+            if _SAVES_PENDING.get((user["id"], name)) is done:
+                del _SAVES_PENDING[(user["id"], name)]
+        done.set()
+
+
 def _run_turn(st, user, name, slot, message, regen=False, call=False):
     # Run one turn on a worker thread and yield SSE events.
     #
@@ -1694,6 +1908,7 @@ def _run_turn(st, user, name, slot, message, regen=False, call=False):
 
     def worker():
         try:
+            _wait_for_save(user["id"], name)
             with slot.lock:
                 # re-check under the lock: two requests can pass the pre-check together
                 cap = _effective_cap(st, user)
@@ -1722,16 +1937,18 @@ def _run_turn(st, user, name, slot, message, regen=False, call=False):
                     mood_on = st.store.get_setting("mood_enabled") == "1" and not slot.engine.is_group
                     if not mood_on:
                         slot.engine.mood_text = ""   # an admin switch off clears the state from the prompt at once
+                        _set_mood_stable(slot, "")
                     elif not regen:
                         _mood_start(st, user["id"], name, slot)
                     att_on = st.store.get_setting("attitude_enabled") == "1" and not slot.engine.is_group
                     if not att_on:
                         slot.engine.attitude_text = ""
+                        _set_attitude_stable(slot, "")
                     elif not regen:
                         _att_start(st, user["id"], name, slot, processed)
                     off_on = st.store.get_setting("offscreen_enabled") == "1" and not slot.engine.is_group
                     if not off_on:
-                        slot.engine.offscreen_text = ""
+                        _set_offscreen(slot, "")
                     elif not regen:
                         _offscreen_start(st, user["id"], name, slot)
                     slot.engine.call_mode = bool(call)
@@ -1755,9 +1972,11 @@ def _run_turn(st, user, name, slot, message, regen=False, call=False):
                     events.put(("error", {"code": "model_failed", "message": f"No model answered: {detail}"}))
                     return
                 if mood_on and result.replies and not regen:
-                    _mood_settle(st, user["id"], name, processed)
+                    _mood_settle(st, user["id"], name, processed,
+                                 reply=(result.replies[-1].text if result.replies else ""))
                 if att_on and result.replies and not regen:
-                    _att_settle(st, user["id"], name, processed)
+                    _att_settle(st, user["id"], name, processed,
+                                reply=(result.replies[-1].text if result.replies else ""))
                 if result.replies and not regen:   # a new user message was accepted: count it for the character
                     _count_character_message(st, user, name)
                 if result.replies and not regen and slot.engine.palace_enabled and slot.engine.palace_dir:
@@ -1772,7 +1991,7 @@ def _run_turn(st, user, name, slot, message, regen=False, call=False):
                 _check_budget_alerts(st, user)
                 events.put(("done", {
                     "replies": [{"speaker": r.speaker, "color": r.color, "text": r.display, "model": r.model,
-                                 "thinking": r.thinking}
+                                 "thinking": r.thinking, "emotion": r.emotion}
                                 for r in result.replies],
                     "selected": result.selected,
                     "selector_note": result.selector_note,
@@ -1792,10 +2011,12 @@ def _run_turn(st, user, name, slot, message, regen=False, call=False):
                     except Exception as err:   # the automatic check is best-effort
                         log(f"palace check failed for {name}: {err}")
                 if result.memory_due and st.store.usage_today(user["id"])["requests"] < _effective_cap(st, user):
-                    try:
-                        slot.engine.update_memory_bank()
-                    except Exception as err:  # memory refresh is best-effort
-                        log(f"memory refresh failed for {name}: {err}")
+                    # The save runs once the reply is sent, on its own thread. It keeps the chat's lock until it is
+                    # done, so the next message on this chat waits for it.
+                    done = threading.Event()
+                    with _SAVES_GUARD:
+                        _SAVES_PENDING[(user["id"], name)] = done
+                    threading.Thread(target=_save_after_reply, args=(st, user, name, slot, done), daemon=True).start()
                 events.put(("usage", _usage_summary(st, user)))
         finally:
             events.put(_END)
@@ -1879,7 +2100,7 @@ def _run_command(st, user, name, is_group, word, arg):
                 return {"notice": "No history to save yet."}
             if st.store.usage_today(user["id"])["requests"] >= _effective_cap(st, user):
                 return {"notice": "Daily request cap reached, so memory.md was not refreshed."}
-            eng.update_memory_bank()
+            eng.update_memory_bank()   # this command already holds the chat's lock (see above)
             _drop_slot(st, user, name)   # the next reply reloads the new memory.md
             return {"notice": "memory.md refreshed."}
     return {"notice": "Nothing to do."}
@@ -1922,7 +2143,6 @@ def _backfill_character_messages(st):
     key = "char_messages_backfilled_v2"
     if st.store.get_setting(key) == "1":
         return
-    import json, os
     solo, groups = scan_characters(st.char_root)
     root = os.path.join(st.data_dir, "users")
     totals = {}
@@ -2001,17 +2221,14 @@ class BodyLimit:
 
 
 class StaticGzip:
-    # Compresses the static scripts and styles, the largest files a page loads. Chat replies stream as they are
-    # written, and a compressor would hold them back, so only /static/ paths pass through the compressor.
+    # Compresses text responses: the static scripts and styles, the HTML pages and the JSON API. The
+    # middleware leaves streaming replies (text/event-stream), images, fonts and audio alone, so chat
+    # replies still stream as they are written and media is never buffered or compressed twice.
     def __init__(self, app):
-        self.app = app
         self.gzip = GZipMiddleware(app, minimum_size=512)
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and scope["path"].startswith("/static/"):
-            await self.gzip(scope, receive, send)
-        else:
-            await self.app(scope, receive, send)
+        await self.gzip(scope, receive, send)
 
 
 async def _plain_reply(send, status, text):
@@ -2074,15 +2291,22 @@ def make_app(client=None, data_dir=None, char_root=None):
         if COOKIE_SECURE:
             # Only over https: the browser then refuses plain http for this site. Set only when the site is served over https.
             resp.headers["Strict-Transport-Security"] = "max-age=31536000"
-        if request.url.path.startswith("/api/") and "Cache-Control" not in resp.headers:
+        if request.url.path.startswith("/static/fonts/"):
+            # Fonts change only with a release; a week keeps revalidation off the hot path.
+            resp.headers["Cache-Control"] = "public, max-age=604800"
+        elif request.url.path.startswith(("/static/defaults/", "/static/icon", "/static/apple-touch-icon.png",
+                                          "/static/favicon-32.png")):
+            # Shipped art and icons are stable between releases.
+            resp.headers["Cache-Control"] = "public, max-age=86400"
+        elif request.url.path.startswith("/api/") and "Cache-Control" not in resp.headers:
             # Keep a cache header a route set itself (icons, backgrounds) so they are not re-fetched per page.
             resp.headers["Cache-Control"] = "no-store"
-        elif request.url.path == "/" or request.url.path.startswith(("/static/", "/login", "/admin", "/2fa-setup", "/u/")):
+        elif not request.url.path.startswith("/api/") and "Cache-Control" not in resp.headers:
             # pages and assets must revalidate, so an old cached copy never hides a new layout
             resp.headers["Cache-Control"] = "no-cache"
         return resp
 
-    # Per-account request rate limit, 30 a second or 600 a minute. Icon and background requests are exempt:
+    # Per-account request rate limit: 30 a second and 600 a minute, or 10 and 900 on a DeepSeek account. Icon and background requests are exempt:
     # a character grid asks for one per card, so counting them would block a normal page load. A burst gets
     # a short cooldown with Retry-After, never a permanent block; sign-in has its own failed-attempt limits.
     _RATE_EXEMPT = ("/api/icon/", "/api/background/", "/api/version", "/api/client/",
@@ -2106,6 +2330,9 @@ def make_app(client=None, data_dir=None, char_root=None):
                 pass
         ip = client_ip(request)
         key = (uid, ip) if uid is not None else ("anon", ip)
+        # An account whose saved model is DeepSeek gets the higher limits; everyone else keeps the original ones.
+        ds = uid is not None and provider_of(st.store.get_pref(uid, "model") or "") == "deepseek"
+        per_second, per_minute = (10, 900) if ds else (30, 600)
         now = time.time()
         with _rate_lock:
             hits = _rate_hits.setdefault(key, [])
@@ -2113,7 +2340,7 @@ def make_app(client=None, data_dir=None, char_root=None):
             while hits and hits[0] < cutoff:
                 hits.pop(0)
             recent_second = sum(1 for t in hits if t >= now - 1.0)
-            if recent_second >= 30 or len(hits) >= 600:
+            if recent_second >= per_second or len(hits) >= per_minute:
                 return JSONResponse({"detail": "Too many requests. Please wait a moment."},
                                     status_code=429, headers={"Retry-After": "2"})
             hits.append(now)
@@ -2131,6 +2358,10 @@ def make_app(client=None, data_dir=None, char_root=None):
     @app.get("/chat")
     def chat_page():
         return page("app.html")
+
+    @app.get("/gallery")
+    def gallery_page():
+        return page("gallery.html")
 
     @app.get("/u/{username}")
     def account_profile_page(username: str):
@@ -2402,7 +2633,8 @@ def make_app(client=None, data_dir=None, char_root=None):
                 "must_change": bool(user["must_change"])}
         info["features"] = {"memory": st.store.get_setting("memory_enabled") == "1",
                             "palace": st.store.get_setting("palace_enabled") == "1",
-                            "minigames": st.store.get_setting("minigames_enabled") == "1"}
+                            "minigames": st.store.get_setting("minigames_enabled") == "1",
+                            **_media_features(st, user)}
         if not user["must_change"]:
             info["usage"] = _usage_summary(st, user)
             info["global"] = {"requests_today": store.global_requests_today(),
@@ -2427,6 +2659,121 @@ def make_app(client=None, data_dir=None, char_root=None):
         if store.session_remembered(token):
             _set_session_cookie(resp, token, True)   # refreshes the persistent cookie as the session slides
         return resp
+
+    @app.post("/api/vision/describe")
+    async def vision_describe(request: Request):
+        # A standalone image description. It does not add a chat turn: the page shows the text and the
+        # reader decides whether to use it. The model is the chat model when it can see, else the admin's
+        # fallback vision model.
+        _csrf(request)
+        user = require(request)
+        cfg = providers.load(st.data_dir)
+        model = vision.choose_vision_model(_chat_model_for(st, user), cfg)
+        if not model:
+            raise HTTPException(400, "No vision model is connected on this server.")
+        raw = await request.body()
+        if len(raw) > vision.MAX_IMAGE_BYTES:
+            raise HTTPException(413, "Images can be up to 10 MB.")
+        try:
+            image, mime = vision.prepare_image(raw, request.headers.get("content-type", ""))
+        except vision.BackendError as err:
+            raise HTTPException(400, str(err))
+        try:
+            description = await run_in_threadpool(vision.describe, model, image, mime, cfg)
+        except vision.BackendError as err:
+            raise HTTPException(502, str(err))
+        st.store.add_usage(user["id"], requests=1, provider=provider_of(model), model=model)
+        return {"description": description}
+
+    def _gallery_dir(user):
+        return os.path.join(st.data_dir, "users", str(user["id"]))
+
+    @app.post("/api/image/scene")
+    async def image_scene(request: Request):
+        # Draw the scene from the last two messages and the character's setting, then save it to this
+        # account's gallery. The image model is the dedicated one from the admin provider settings.
+        _csrf(request)
+        user = require(request)
+        cfg = providers.load(st.data_dir)
+        model = vision.image_model(cfg)
+        if not model:
+            raise HTTPException(400, "No image model is connected on this server.")
+        body = _read_body(await request.json())
+        name = str(body.get("character") or "").strip()
+        if not name:
+            raise HTTPException(400, "Open a character or group first.")
+        try:
+            slot = _slot(st, user, name, _is_group_name(st, name))
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(404, "That character or group is not available.")
+        engine = slot.engine
+        recent = [m for m in engine.full_history
+                  if m.get("role") in ("user", "model") and str(m.get("text") or "").strip()][-2:]
+        lines = []
+        for m in recent:
+            if m["role"] == "user":
+                who = engine.user_display_name
+            elif m.get("speaker"):
+                who = display_for(m["speaker"])
+            else:
+                who = engine.character_name
+            lines.append(f"{who}: {str(m['text'])[:700]}")
+        context = "\n".join(lines)
+        setting = (engine.character_prompt or engine.system_prompt or "")[:1200]
+        prompt = vision.SCENE_PROMPT
+        if setting:
+            prompt += f"Setting: {setting}\n\n"
+        prompt += context or f"A portrait of {engine.character_name}."
+        try:
+            raw, mime = await run_in_threadpool(vision.generate, model, prompt[:4000], cfg)
+            image, mime = await run_in_threadpool(vision.prepare_image, raw, mime)
+        except vision.BackendError as err:
+            raise HTTPException(502, str(err))
+        st.store.add_usage(user["id"], requests=1, provider=provider_of(model), model=model)
+        # A written caption for the gallery card: describe the picture when a vision model is available,
+        # otherwise keep the scene context as the description.
+        vmodel = vision.choose_vision_model(_chat_model_for(st, user), cfg)
+        description = ""
+        if vmodel:
+            try:
+                description = await run_in_threadpool(vision.describe, vmodel, image, mime, cfg)
+                st.store.add_usage(user["id"], requests=1, provider=provider_of(vmodel), model=vmodel)
+            except vision.BackendError:
+                description = ""
+        if not description:
+            description = context[:300] or f"A scene with {engine.character_name}."
+        item = gallery.add(_gallery_dir(user), image, mime, engine.character_name, context, description)
+        return {"item": item, "url": f"/api/gallery/{item['id']}/image"}
+
+    @app.get("/api/gallery")
+    def gallery_list(request: Request):
+        user = require(request)
+        items = gallery.list_items(_gallery_dir(user))
+        return {"items": [{**item, "url": f"/api/gallery/{item['id']}/image"} for item in items],
+                "max": gallery.MAX_ITEMS}
+
+    @app.get("/api/gallery/{item_id}/image")
+    def gallery_image(item_id: str, request: Request):
+        user = require(request)
+        try:
+            path, mime = gallery.image_path(_gallery_dir(user), item_id)
+        except KeyError:
+            raise HTTPException(404, "No such picture.")
+        return FileResponse(path, media_type=mime, headers={
+            "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "inline"})
+
+    @app.post("/api/gallery/{item_id}/delete")
+    async def gallery_delete(item_id: str, request: Request):
+        _csrf(request)
+        user = require(request)
+        try:
+            gallery.remove(_gallery_dir(user), item_id)
+        except KeyError:
+            raise HTTPException(404, "No such picture.")
+        return {"ok": True}
 
     @app.post("/api/password")
     async def change_password(request: Request):
@@ -2898,6 +3245,12 @@ def make_app(client=None, data_dir=None, char_root=None):
         stars = st.store.favourite_counts()
         pop = _popular_set(totals)
         bg_ids = _background_ids_for(st, user, solo, groups)
+        # Emotion pictures a character has, for the chat page: a member of a group chat keeps its own.
+        expression_map = {}
+        for n in solo:
+            info = expressions.public(os.path.join(st.char_root, n))
+            if info:
+                expression_map[display_for(n)] = info
         private_icons = [i["name"] for i in private_groups.list_for(st.data_dir, user["id"])
                          if editor.icon_path(_private_group_root(st, user["id"]), i["id"]) is not None]
         # Group chats and novels carry theme music the same way a character does; the chat page plays it while
@@ -2916,6 +3269,13 @@ def make_app(client=None, data_dir=None, char_root=None):
             novel_rows.append({"id": n["id"], "name": n["name"],
                                "members": [display_for(m) for m in n["members"]], "world": n["world"],
                                "music": music.public(folder, "/api/novel-music/%s/file/" % n["id"])})
+        # The level alone, for the small married tag beside a name in the sidebar and the chat log.
+        # One read per request; the scores and the tone are not needed here.
+        levels = {}
+        if st.store.get_setting("attitude_enabled") == "1":
+            known = set(solo)
+            levels = {display_for(name): level for name, level in st.store.attitude_levels(user["id"]).items()
+                      if name in known}
         return {"solo": [display_for(s) for s in solo], "groups": group_rows,
                 "cards": [dict(_card_for(st, s), favourite=display_for(s) in favs,
                         stars=stars.get(display_for(s), 0), messages=totals.get(display_for(s), 0),
@@ -2923,6 +3283,7 @@ def make_app(client=None, data_dir=None, char_root=None):
                 "favourites": sorted(favs),
                 "popular": sorted(pop),
                 "stars": stars,
+                "attitude_levels": levels,
                  "sidebar": [display_for(s) for s in ranked if s in chatted or display_for(s) in favs],
                 "novels": novel_rows,
                 "worlds": [{"id": w["id"], "name": w["name"]} for w in _world_store(st, user)["items"]],
@@ -2930,6 +3291,7 @@ def make_app(client=None, data_dir=None, char_root=None):
                 "personas": _persona_list(st, user), "colors": _colour_map(st.char_root),
                 "icons": [display_for(n) for n in solo + list(groups) + load_personas(st.char_root) if _has_icon(st.char_root, display_for(n))] + private_icons,
                 "backgrounds": list(bg_ids), "default_backgrounds": _default_art(), "bg_ids": bg_ids,
+                "expressions": expression_map,
                 "editable": [display_for(s) for s in solo if can_edit_card(user, os.path.join(st.char_root, s))],
                  "recommended": [{"name": display_for(r["folder"]), "tags": r["tags"]} for r in
                                  recommend.recommend(st.char_root, st.data_dir, user["id"], solo)]}
@@ -3534,19 +3896,23 @@ def make_app(client=None, data_dir=None, char_root=None):
             return {"items": slot.engine.tensions["items"]}
 
     @app.get("/api/history")
-    def history(request: Request, character: str):
+    def history(request: Request, character: str, limit: int = 0):
         user = require(request)
         name, is_group = _resolve_profile(st, character, user)
         slot = _slot(st, user, name, is_group)
+
+        def read():
+            return _history_page(_history(slot.engine), limit)
+
         # A refresh must not wait for a turn that is still streaming. Take the lock if it is free; if a turn holds
         # it, read the committed history directly. A normal turn only appends its two lines after the model returns,
         # and a regenerate deletes the old tail before the call, so the read is a stable view of what is saved.
         if slot.lock.acquire(timeout=0.75):
             try:
-                return {"messages": _history(slot.engine)}
+                return read()
             finally:
                 slot.lock.release()
-        return {"messages": _history(slot.engine)}
+        return read()
 
     @app.get("/api/context")
     def context_info(request: Request, character: str):
@@ -4774,6 +5140,7 @@ def make_app(client=None, data_dir=None, char_root=None):
         except editor.EditorError as err:
             raise HTTPException(404, str(err))
         out["music"] = music.character_tracks(st.char_root, name)
+        out["agentic"] = expressions.view(_character_folder(name))
         return out
 
     @app.post("/api/admin/characters")
@@ -4798,6 +5165,13 @@ def make_app(client=None, data_dir=None, char_root=None):
         user = require(request)
         _require_editor(user, name)
         body = _read_body(await request.json())
+        new_name = str(body.get("new_name") or "").strip()
+        if new_name and new_name != name:
+            try:
+                editor.rename_character(st.char_root, name, new_name, st.data_dir)
+            except editor.EditorError as err:
+                raise HTTPException(400, str(err))
+            name = new_name
         try:
             out = editor.write_card(st.char_root, name, body.get("card", ""),
                                     body.get("context", ""), body.get("colour", ""), creating=False,
@@ -4990,6 +5364,61 @@ def make_app(client=None, data_dir=None, char_root=None):
         return FileResponse(path, media_type=music.SERVED[os.path.splitext(fname)[1]],
                             headers={"Cache-Control": "private, max-age=300"})
 
+    # ---- agentic mode and the emotion pictures under it. The switches and the pictures live in the
+    # character folder, so they travel with the character and a creator can change them from its editor.
+
+    @app.get("/api/admin/characters/{name}/agentic")
+    def editor_agentic_get(name: str, request: Request):
+        _require_editor(require(request), name)
+        return expressions.view(_character_folder(name))
+
+    @app.put("/api/admin/characters/{name}/agentic")
+    async def editor_agentic_set(name: str, request: Request):
+        _csrf(request)
+        _require_editor(require(request), name)
+        body = _read_body(await request.json())
+        folder = _character_folder(name)
+        try:
+            expressions.set_state(folder, bool(body.get("agentic")), bool(body.get("emotions")))
+        except OSError as err:
+            raise HTTPException(400, str(err))
+        return expressions.view(folder)
+
+    @app.post("/api/admin/characters/{name}/expression/{emotion}")
+    async def editor_expression_set(name: str, emotion: str, request: Request):
+        _csrf(request)
+        _require_editor(require(request), name)
+        folder = _character_folder(name)
+        try:
+            await run_in_threadpool(expressions.save_image, folder, emotion, await request.body(),
+                                    editor.shrink_picture)
+        except (expressions.ExpressionError, editor.EditorError) as err:
+            raise HTTPException(400, str(err))
+        return expressions.view(folder)
+
+    @app.delete("/api/admin/characters/{name}/expression/{emotion}")
+    def editor_expression_remove(name: str, emotion: str, request: Request):
+        _csrf(request)
+        _require_editor(require(request), name)
+        folder = _character_folder(name)
+        try:
+            expressions.remove_image(folder, emotion)
+        except expressions.ExpressionError as err:
+            raise HTTPException(400, str(err))
+        return expressions.view(folder)
+
+    @app.get("/api/expression/{name}/{emotion}")
+    def character_expression(name: str, emotion: str, request: Request):
+        require(request)
+        try:
+            path = expressions.image_path(editor.folder_of(st.char_root, name), emotion)
+        except editor.EditorError:
+            path = None
+        if path is None:
+            raise HTTPException(404, "No such picture.")
+        media = "image/gif" if path.endswith(".gif") else "image/webp"
+        return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=300"})
+
     # ---- the voice an author gives a character: a default voice, a language and an optional reference clip.
     @app.get("/api/admin/characters/{name}/voice")
     def editor_voice_get(name: str, request: Request):
@@ -5095,6 +5524,99 @@ def make_app(client=None, data_dir=None, char_root=None):
         except voice.VoiceError as err:
             raise HTTPException(502, str(err))
         return {"models": models}
+
+    @app.post("/api/admin/openrouter/models")
+    async def admin_openrouter_models(request: Request):
+        _csrf(request)
+        require(request, admin=True)
+        body = _read_body(await request.json())
+        cfg = providers.load(data_dir)
+        key_text = str(body.get("api_key") or "").strip()
+        if key_text:
+            keys = [k.strip() for k in key_text.replace(",", "\n").splitlines() if k.strip()]
+        else:
+            keys = providers.openrouter_keys(cfg)
+        client = llm_backends.OpenAIStyleClient("OpenRouter", llm_backends.OPENROUTER_BASE_URL,
+                                                 keys if keys else "", "openrouter")
+        try:
+            models = await run_in_threadpool(client.model_names)
+        except Exception as err:
+            raise HTTPException(502, str(err))
+        return {"models": models}
+
+    def _openrouter_raw(client):
+        data = None
+        if client.keys:
+            try:
+                with client.open("/models", method="GET", timeout=llm_backends.OPENROUTER_LIST_TIMEOUT) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+            except Exception:
+                data = None
+        if data is None:
+            try:
+                with client.open("/models", method="GET", timeout=llm_backends.OPENROUTER_LIST_TIMEOUT, keyless=True) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+            except Exception:
+                return []
+        return [m for m in (data.get("data") or []) if isinstance(m, dict) and m.get("id")]
+
+    @app.post("/api/admin/openrouter/image-models")
+    async def admin_openrouter_image_models(request: Request):
+        _csrf(request)
+        require(request, admin=True)
+        body = _read_body(await request.json())
+        cfg = providers.load(data_dir)
+        key_text = str(body.get("api_key") or "").strip()
+        if key_text:
+            keys = [k.strip() for k in key_text.replace(",", "\n").splitlines() if k.strip()]
+        else:
+            keys = providers.openrouter_keys(cfg)
+        client = llm_backends.OpenAIStyleClient("OpenRouter", llm_backends.OPENROUTER_BASE_URL,
+                                                 keys if keys else "", "openrouter")
+        try:
+            raw = await run_in_threadpool(_openrouter_raw, client)
+        except Exception as err:
+            raise HTTPException(502, str(err))
+        ids = []
+        for m in raw:
+            out = (m.get("architecture") or {}).get("output_modalities")
+            if isinstance(out, list) and "image" in out:
+                ids.append(m["id"])
+        ids = sorted(set(ids))
+        return {"models": ids}
+
+    @app.post("/api/admin/openrouter/vision-models")
+    async def admin_openrouter_vision_models(request: Request):
+        _csrf(request)
+        require(request, admin=True)
+        body = _read_body(await request.json())
+        cfg = providers.load(data_dir)
+        key_text = str(body.get("api_key") or "").strip()
+        if key_text:
+            keys = [k.strip() for k in key_text.replace(",", "\n").splitlines() if k.strip()]
+        else:
+            keys = providers.openrouter_keys(cfg)
+        client = llm_backends.OpenAIStyleClient("OpenRouter", llm_backends.OPENROUTER_BASE_URL,
+                                                 keys if keys else "", "openrouter")
+        try:
+            models = await run_in_threadpool(client.model_names)
+        except Exception as err:
+            raise HTTPException(502, str(err))
+        return {"models": models}
+
+    @app.post("/api/admin/opencode/models")
+    async def admin_opencode_models(request: Request):
+        _csrf(request)
+        require(request, admin=True)
+        body = _read_body(await request.json())
+        cfg = providers.load(data_dir)["opencode"]
+        exe = str(body.get("exe") or "").strip() or str(cfg.get("exe") or "").strip() or "opencode"
+        client = llm_backends.OpencodeClient(exe)
+        try:
+            result = await run_in_threadpool(client.probe_models)
+        except Exception as err:
+            raise HTTPException(502, str(err))
+        return {"models": [{"id": mid, "available": ok} for mid, ok in sorted(result.items())]}
 
     @app.get("/api/admin/settings")
     def admin_settings_get(request: Request):
@@ -5389,6 +5911,43 @@ def make_app(client=None, data_dir=None, char_root=None):
             raise HTTPException(400, str(err))
         return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"]}
 
+    def _merge_lore(entries, incoming):
+        # Append imported entries, skipping exact duplicates and stopping at the palace's entry limit.
+        seen = {(str(e.get("title") or "").strip().lower(), str(e.get("content") or "").strip())
+                for e in entries}
+        out = list(entries)
+        added = 0
+        for entry in incoming:
+            key = (entry["title"].lower(), entry["content"])
+            if key in seen:
+                continue
+            if len(out) >= palace.MAX_ENTRIES:
+                break
+            out.append(entry)
+            seen.add(key)
+            added += 1
+        return out, added
+
+    @app.post("/api/admin/characters/{name}/palace/import")
+    async def palace_import(name: str, request: Request):
+        # A SillyTavern World Info or JanitorAI lorebook file, added to this character's starting palace.
+        # The file is read as JSON here and nothing in it is ever executed.
+        _csrf(request)
+        _require_editor(require(request), name)
+        try:
+            incoming, skipped, notes = lorebook.parse_bytes(await request.body())
+        except lorebook.LorebookError as err:
+            raise HTTPException(400, str(err))
+        folder = _character_dir(name)
+        entries, cfg = palace.load_all(folder)
+        merged, added = _merge_lore(entries, incoming)
+        try:
+            entries, cfg = palace.save(folder, merged, {"recursive": cfg["recursive"], "budget": cfg["budget"]})
+        except palace.PalaceError as err:
+            raise HTTPException(400, str(err))
+        return {"entries": entries, "added": added, "skipped": skipped, "notes": notes,
+                "recursive": cfg["recursive"], "budget": cfg["budget"]}
+
     def _require_editor(user, name):
         # Creators change their own characters; a character made as 'admin' is changed by any admin.
         if not can_edit_card(user, _character_dir(name)):
@@ -5428,6 +5987,30 @@ def make_app(client=None, data_dir=None, char_root=None):
         except palace.PalaceError as err:
             raise HTTPException(400, str(err))
         return {"entries": entries, "recursive": cfg["recursive"], "budget": cfg["budget"], "auto": cfg["auto"],
+                "episodes": cfg["episodes"]}
+
+    @app.post("/api/character-palace/import")
+    async def my_palace_import(request: Request, character: str):
+        # A SillyTavern World Info or JanitorAI lorebook file, added to this account's own palace.
+        _csrf(request)
+        user = require(request)
+        folder = _palace_folder(user, character)
+        pdir = _account_palace_dir(user["id"], folder)
+        palace.copy_starting(os.path.join(st.char_root, folder), pdir)
+        try:
+            incoming, skipped, notes = lorebook.parse_bytes(await request.body())
+        except lorebook.LorebookError as err:
+            raise HTTPException(400, str(err))
+        entries, cfg = palace.load_all(pdir)
+        merged, added = _merge_lore(entries, incoming)
+        settings = {"recursive": cfg["recursive"], "budget": cfg["budget"], "auto": cfg["auto"],
+                    "episodes": cfg["episodes"]}
+        try:
+            entries, cfg = palace.save(pdir, merged, settings)
+        except palace.PalaceError as err:
+            raise HTTPException(400, str(err))
+        return {"entries": entries, "added": added, "skipped": skipped, "notes": notes,
+                "recursive": cfg["recursive"], "budget": cfg["budget"], "auto": cfg["auto"],
                 "episodes": cfg["episodes"]}
 
     def _lore_texts(user, folder):
@@ -5890,6 +6473,17 @@ def make_app(client=None, data_dir=None, char_root=None):
             time.sleep(OFFSCREEN_TICK_SECONDS)
 
     threading.Thread(target=_offscreen_loop, name="offscreen", daemon=True).start()
+
+    # The thread that saves idle DeepSeek chats, so the next message starts from a short history.
+    def _idle_loop():
+        while True:
+            try:
+                _idle_save_tick(st)
+            except Exception as err:
+                log(f"idle save scheduler error: {err}")
+            time.sleep(IDLE_TICK_SECONDS)
+
+    threading.Thread(target=_idle_loop, name="idle-save", daemon=True).start()
 
     # The thread that moves character moods along and sends lonely check-ins. It looks every few minutes.
     def _mood_loop():

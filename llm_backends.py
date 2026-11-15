@@ -6,14 +6,16 @@
 #   DeepSeek     OpenAI-style chat completions at https://api.deepseek.com (API key required)
 #   Local LLM    any OpenAI-style server, e.g. vLLM or llama.cpp at http://host:port/v1 (key optional)
 #   Claude Code  the local `claude` CLI in print mode, using the account it is signed in to
+#   OpenRouter   OpenAI-style chat completions at https://openrouter.ai/api/v1 (API key required)
 #
-# Model ids carry a prefix: 'deepseek:deepseek-flash', 'local:<model>', 'claude:sonnet'. A bare id
+# Model ids carry a prefix: 'deepseek:deepseek-flash', 'local:<model>', 'claude:sonnet', 'openrouter:<id>'. A bare id
 # goes to Gemini, so the existing fallback chain keeps working unchanged.
 #
 # Thinking is off by default. DeepSeek's chat endpoint is thinking-ON by default, so "off" is sent
 # explicitly as {"thinking": {"type": "disabled"}}.
 import json
 import subprocess
+import threading
 import time
 from types import SimpleNamespace
 import urllib.error
@@ -22,12 +24,27 @@ import urllib.request
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODELS = ("deepseek-flash", "deepseek-v4-pro")
 CLAUDE_MODELS = ("sonnet", "opus", "haiku")
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_LIST_TTL = 900     # seconds a fetched free-model list is reused
+OPENROUTER_LIST_TIMEOUT = 10  # the model list is fetched while a page loads, so it gets a short timeout
 TIMEOUT = 180
-PREFIXES = {"deepseek:": "deepseek", "local:": "local", "claude:": "claude"}
+PREFIXES = {"deepseek:": "deepseek", "local:": "local", "claude:": "claude", "openrouter:": "openrouter",
+            "opencode:": "opencode"}
 
 
 class BackendError(RuntimeError):
     pass
+
+
+class KeyRejected(BackendError):
+    # One key of a pool was refused. until is when it may be tried again; the pool moves to the next key.
+    def __init__(self, message, until):
+        super().__init__(message)
+        self.until = until
+
+
+def _next_utc_midnight(now):
+    return (int(now) // 86400 + 1) * 86400
 
 
 def read_config(config):
@@ -112,19 +129,6 @@ class ThinkSplitter:
         return ("", rest) if self.inside else (rest, "")
 
 
-def _models_adapter(client):
-    return SimpleNamespace(
-        list=lambda: [SimpleNamespace(name=m) for m in client.model_names()],
-        generate_content=lambda model=None, contents="", **_: _one_shot(client, model, contents),
-    )
-
-
-def _one_shot(client, model, contents):
-    if not isinstance(contents, str):
-        contents = "\n".join(getattr(p, "text", "") or "" for c in contents for p in (getattr(c, "parts", None) or []))
-    return client.chats.create(model=model, history=None, config=None).send_message(contents)
-
-
 # ---------------------------------------------------------------- OpenAI-style (DeepSeek, local)
 
 class OpenAIStyleClient:
@@ -133,15 +137,23 @@ class OpenAIStyleClient:
     def __init__(self, label, base_url, api_key, style):
         self.label = label
         self.base = (base_url or "").rstrip("/")
-        self.api_key = api_key or ""
+        # api_key may be one key or a list. A list is a pool for style 'openrouter': a key that hits its limit is
+        # skipped until the limit resets, and the call is retried on the next key.
+        keys = [api_key] if isinstance(api_key, str) else list(api_key or [])
+        self.keys = [k for k in keys if k]
+        self.api_key = self.keys[0] if self.keys else ""
+        self._cool = {}               # key -> time it may be used again
+        self._pool_lock = threading.Lock()
         self.style = style
         self.chats = _OpenAIChats(self)
-        self.models = _models_adapter(self)
+        self._models = None           # (fetched_at, [ids]) for style 'openrouter'
+        self._free_lock = threading.Lock()
 
-    def headers(self):
+    def headers(self, key=None):
         h = {"Content-Type": "application/json"}
-        if self.api_key:
-            h["Authorization"] = "Bearer " + self.api_key
+        key = self.api_key if key is None else key
+        if key:
+            h["Authorization"] = "Bearer " + key
         return h
 
     def thinking_fields(self, enabled, reasoning="low"):
@@ -150,28 +162,220 @@ class OpenAIStyleClient:
             if enabled:
                 fields["reasoning_effort"] = reasoning if reasoning in ("low", "medium", "high") else "low"
             return fields
+        if self.style == "openrouter":
+            # Sent only when thinking is on: many free models take no reasoning field at all.
+            if not enabled:
+                return {}
+            return {"reasoning": {"effort": reasoning if reasoning in ("low", "medium", "high") else "low"}}
         return {"chat_template_kwargs": {"enable_thinking": bool(enabled)}}
 
-    def open(self, path, body=None, method="POST"):
+    def open(self, path, body=None, method="POST", timeout=TIMEOUT, keyless=False):
+        if self.style != "openrouter" or keyless:
+            return self._open_once(path, body, method, timeout, "" if keyless else self.api_key)
+        return self._open_pooled(path, body, method, timeout)
+
+    # Tries each key that is not cooling down, in order. A key that is refused for its limit, or as bad, is parked and
+    # the next one is tried. Only when every key is parked does the call fail.
+    def _open_pooled(self, path, body, method, timeout):
+        last = None
+        tried = set()
+        while True:
+            with self._pool_lock:
+                now = time.time()
+                ready = [k for k in self.keys if k not in tried and self._cool.get(k, 0) <= now]
+                key = ready[0] if ready else None
+            if key is None:
+                break
+            tried.add(key)
+            try:
+                return self._open_once(path, body, method, timeout, key)
+            except KeyRejected as err:
+                last = err
+                with self._pool_lock:
+                    self._cool[key] = err.until
+        if last is not None:
+            raise BackendError(f"{self.label}: every key has reached its limit ({last})") from None
+        raise BackendError(f"{self.label}: every key is cooling down after reaching its limit")
+
+    def _open_once(self, path, body, method, timeout, key):
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        req = urllib.request.Request(self.base + path, data=data, headers=self.headers(), method=method)
+        req = urllib.request.Request(self.base + path, data=data, headers=self.headers(key), method=method)
         try:
-            return urllib.request.urlopen(req, timeout=TIMEOUT)
+            return urllib.request.urlopen(req, timeout=timeout)
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:300]
+            if self.style == "openrouter" and e.code in (401, 402, 403, 429):
+                now = time.time()
+                low = detail.lower()
+                if e.code == 429:
+                    # The daily free limit resets at midnight UTC. A per-minute limit clears within a minute.
+                    daily = "per-day" in low or "per day" in low or "daily" in low
+                    until = _next_utc_midnight(now) if daily else now + 60
+                else:
+                    until = now + 3600    # a bad key or one out of credit is retried in an hour
+                raise KeyRejected(f"HTTP {e.code}: {detail[:120]}", until) from None
             raise BackendError(f"{self.label} answered HTTP {e.code}: {detail}") from None
         except (urllib.error.URLError, OSError) as e:
             raise BackendError(f"{self.label} is unreachable ({e.__class__.__name__})") from None
 
+    # Every OpenRouter text model that costs nothing for both prompt and reply. The list is reused for
+    # OPENROUTER_LIST_TTL seconds, and an older copy is kept when a refresh fails, so the picker survives an outage.
+    def _openrouter_models(self):
+        with self._free_lock:
+            now = time.time()
+            if self._models and now - self._models[0] < OPENROUTER_LIST_TTL:
+                return list(self._models[1])
+            # Prefer a real key when one is configured: OpenRouter's catalogue is public, but a key can expose
+            # models (and pricing) that an anonymous request does not. Fall back to an anonymous request, then
+            # to the last good list, if the key is missing or refused.
+            data = None
+            if self.keys:
+                try:
+                    with self.open("/models", method="GET", timeout=OPENROUTER_LIST_TIMEOUT) as r:
+                        data = json.loads(r.read().decode("utf-8"))
+                except (BackendError, ValueError):
+                    data = None
+            if data is None:
+                try:
+                    with self.open("/models", method="GET", timeout=OPENROUTER_LIST_TIMEOUT, keyless=True) as r:
+                        data = json.loads(r.read().decode("utf-8"))
+                except (BackendError, ValueError):
+                    return list(self._models[1]) if self._models else []
+            if not isinstance(data, dict):
+                return list(self._models[1]) if self._models else []
+            ids = []
+            for m in data.get("data", []):
+                if not isinstance(m, dict) or not m.get("id"):
+                    continue
+                out = (m.get("architecture") or {}).get("output_modalities")
+                # Chat replies are text. A model that also makes audio or images (music and image models) is left out.
+                if isinstance(out, list) and out and set(out) != {"text"}:
+                    continue
+                low = str(m.get("id") or "").lower()
+                # Drop models that are not suited to roleplay: safety/guard models, speech models and the small
+                # Liquid LFM models. Both their paid and free variants are skipped.
+                if any(tag in low for tag in ("lfm", "guard", "safeguard", "moderation", "safety",
+                                             "whisper", "tts", "audio", "embedding", "rerank", "fable")):
+                    continue
+                # Aion-Labs ships one dedicated roleplay model; keep that, drop the generic chat ones.
+                if low.startswith("aion-labs/") and "aion-rp" not in low:
+                    continue
+                # Drop the Dots preview model.
+                if "dots-3-note-preview" in low or "dots-studio" in low:
+                    continue
+                # Drop visual-reasoning and coding-reasoning models that are not for roleplay.
+                if low.startswith("elorian/glimpse") or low.startswith("fireworks/ember-1"):
+                    continue
+                # Drop the older Gemma 2 family.
+                if low.startswith("google/gemma-2-"):
+                    continue
+                # Drop IBM Granite 4.2 8B and the InclusionAI Ling family.
+                if low.startswith("ibm-granite/granite-4.2-8b"):
+                    continue
+                if low.startswith("inclusionai/ling-"):
+                    continue
+                # Drop models that are not good for roleplay, by exact id (and any variant).
+                blocked_exact = {
+                    "kt/midm-k-3.0-pro", "mancer/weaver", "meituan/longcat-2.0",
+                    "meta-llama/llama-3.1-70b-instruct", "meta-llama/llama-3.1-8b-instruct",
+                    "meta-llama/llama-3.2-1b-instruct", "meta-llama/llama-3.2-3b-instruct",
+                    "meta-llama/llama-3.3-70b-instruct", "meta-llama/llama-4-maverick",
+                    "meta-llama/llama-4-scout", "inference-net/schematron-v2-turbo",
+                    "inference-net/schematron-v2-small",
+                    "meta/muse-ember", "meta/muse-glimmer-30b", "meta/muse-spark-1.1",
+                    "meta/muse-spark-1.2", "meta/muse-spark-1.3", "meta/muse-spark-open",
+                    "meta/muse-wonder", "microsoft/phi-4", "minimax/minimax-m2.5",
+                    "minimax/minimax-m2.7", "minimax/minimax-m3", "minimax/minimax-m3.1-flash",
+                    "minimax/minimax-m3:batch", "mistralai/codestral-2508", "mistralai/devstral-2512",
+                    "moondream/moondream3-preview", "moondream/moondream3.1-9b-a2b",
+                    "morph/morph-v3-fast", "morph/morph-v3-large", "motif-technologies/motif-3",
+                    "mistralai/ministral-14b-2512", "mistralai/ministral-3b-2512", "mistralai/ministral-8b-2512",
+                    "mistralai/mistral-large", "mistralai/mistral-large-2407", "mistralai/mistral-large-2512",
+                    "mistralai/mistral-large-4-0", "mistralai/mistral-medium-3", "mistralai/mistral-medium-3-5",
+                    "mistralai/mistral-medium-3-5:batch", "mistralai/mistral-medium-3.1", "mistralai/mistral-nemo",
+                    "mistralai/mistral-saba", "mistralai/mistral-small-24b-instruct-2501",
+                    "mistralai/mistral-small-2603", "mistralai/mistral-small-3.1-24b-instruct",
+                    "mistralai/mistral-small-3.2-24b-instruct", "mistralai/mixtral-8x22b-instruct",
+                    "mistralai/voxtral-small-24b-2507",
+                    "nex-agi/nex-n2.5-mini", "nex-agi/nex-n2.5-pro", "nex-agi/nex-n2.6",
+                    "nvidia/nemotron-3-nano-30b-a3b", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+                    "nvidia/nemotron-3.5-super-vl", "nvidia/switchyard",
+                    "openrouter/bodybuilder", "openrouter/free", "openrouter/fusion", "openrouter/pareto-code",
+                    "particle-ai/particle-1", "particle-ai/particle-1:free",
+                    "perceptron/perceptron-mk1", "perceptron/perceptron-mk1.5",
+                    "perplexity/sonar", "perplexity/sonar-deep-research", "perplexity/sonar-pro",
+                    "perplexity/sonar-pro-search", "perplexity/sonar-reasoning-pro",
+                    "prism-ml/ternary-bonsai-2-27b", "prism-ml/ternary-bonsai-2-9b",
+                    "qwen/qwen-2.5-coder-32b-instruct", "qwen/qwen3-coder", "qwen/qwen3-coder-30b-a3b-instruct",
+                    "qwen/qwen3-coder-flash", "qwen/qwen3-coder-next", "qwen/qwen2.5-vl-72b-instruct",
+                    "qwen/qwen3-vl-235b-a22b-instruct", "qwen/qwen3-vl-30b-a3b-instruct",
+                    "qwen/qwen3-vl-30b-a3b-thinking", "qwen/qwen3-vl-8b-instruct",
+                    "qwen/qwen3.8-omni-flash",
+                    "moonshotai/kimi-k2.7-code", "openai/gpt-5.1-codex", "openai/gpt-5.1-codex-max",
+                    "openai/gpt-5.1-codex-mini", "openai/gpt-5.2-codex", "openai/gpt-5.3-codex",
+                    "recursive/flint-v1.0", "reflection/beam-1.0-501b-a23b", "rekaai/reka-edge", "rekaai/reka-flash-3",
+                    "relace/relace-apply-3", "relace/relace-search", "ricursiveai/ripple-65b-preview",
+                    "sakana/fugu-max", "sakana/fugu-ultra", "sakana/fugu-ultra-v2", "scaledown/extract", "scaledown/summarize",
+                    "stepfun/step-3.5-flash", "stepfun/step-3.7-flash", "stepfun/step-5-preview",
+                    "tencent/hunyuan-a13b-instruct", "tencent/hy-mt2-1.8b", "tencent/hy-mt2-30b-a3b",
+                    "tencent/hy-mt2-7b", "tencent/hy3", "tencent/hy3-preview", "tencent/hy4", "tencent/hy4-preview",
+                    "thinkingmachines/inkling", "thinkingmachines/inkling-2-small", "thinkingmachines/inkling-2-small:free",
+                    "thinkingmachines/inkling-small", "thinkingmachines/inkling-small:batch", "typesafe/jev-router",
+                    "unbiased/pareto-26.10", "unbiased/pareto-26.10-preview", "unbiased/pareto-26.9",
+                    "upstage/solar-mini4", "writer/palmyra-x5",
+                    "z-ai/glm-4.5v", "z-ai/glm-4.6v", "z-ai/glm-5v-turbo", "z-ai/glm-5.3-flash:batch",
+                    "z-ai/glm-5.3:batch",
+                }
+                if low.split(":")[0] in blocked_exact:
+                    continue
+                # Drop the code-focused Cohere model and batch-only variants, which are not for live chat.
+                if "north-mini-code" in low:
+                    continue
+                if low.endswith(":batch"):
+                    continue
+                # Amazon models are not kept.
+                if low.startswith("amazon/"):
+                    continue
+                # Baidu and ByteDance models are not kept.
+                if low.startswith("baidu/") or low.startswith("bytedance-seed/") or low.startswith("bytedance/"):
+                    continue
+                # Older Gemini 2.x models are not kept.
+                if low.startswith("google/gemini-2."):
+                    continue
+                # Gemini preview models are not kept.
+                if low.startswith("google/gemini-") and "preview" in low:
+                    continue
+                # Anthropic: only newer models (5.x and up) are kept.
+                if low.startswith("anthropic/"):
+                    import re as _re
+                    mm = _re.search(r"claude-(?:\w+-)?(\d+(?:\.\d+)?)", low)
+                    ver = float(mm.group(1)) if mm else 0.0
+                    if ver < 5.0:
+                        continue
+                ids.append(m["id"])
+            ids.sort()
+            self._models = (now, ids)
+            return list(ids)
+
     def model_names(self):
         if self.style == "deepseek":
             return list(DEEPSEEK_MODELS)
+        if self.style == "openrouter":
+            return self._openrouter_models()
         try:
             with self.open("/models", method="GET") as r:
                 data = json.loads(r.read().decode("utf-8"))
             return [m["id"] for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
         except BackendError:
             return []
+
+
+def _is_zero_price(value):
+    # OpenRouter sends prices as strings such as "0" or "0.0000015"; a missing price is not treated as free.
+    try:
+        return value is not None and float(value) == 0.0
+    except (TypeError, ValueError):
+        return False
 
 
 class _OpenAIChats:
@@ -210,7 +414,7 @@ class OpenAIStyleChat:
         msg = (data.get("choices") or [{}])[0].get("message") or {}
         answer = msg.get("content") or ""
         thought = msg.get("reasoning_content") or msg.get("reasoning") or ""
-        if self.client.style == "local" and "<think>" in answer:
+        if self.client.style in ("local", "openrouter") and "<think>" in answer:
             sp = ThinkSplitter()
             a, t = sp.feed(answer)
             a2, t2 = sp.flush()
@@ -222,7 +426,7 @@ class OpenAIStyleChat:
                                                         u.get("total_tokens"), cached_from_usage(u)))
 
     def send_message_stream(self, text):
-        use_tags = self.client.style == "local"
+        use_tags = self.client.style in ("local", "openrouter")
         sp = ThinkSplitter()
         answer_parts, usage = [], None
         with self.client.open("/chat/completions", self._body(text, True)) as r:
@@ -279,7 +483,6 @@ class ClaudeCodeClient:
         self.exe = exe
         self.workdir = workdir
         self.chats = _ClaudeChats(self)
-        self.models = _models_adapter(self)
 
     def model_names(self):
         return list(CLAUDE_MODELS)
@@ -391,6 +594,9 @@ def _claude_usage(usage):
 
 # ---------------------------------------------------------------- usage of DeepSeek calls
 
+# What one cached DeepSeek prompt token counts for against the token budget, against 1 for every other token.
+CACHED_TOKEN_BUDGET_WEIGHT = 0.05
+
 def with_usage(client, sink):
     # A view of client that reports every DeepSeek call to sink(model, figures, seconds), as the call returns.
     # figures holds input_tokens, cached_tokens, output_tokens and tokens. Other models pass through unchanged,
@@ -456,8 +662,137 @@ class _UsageChat:
         total = int(getattr(usage, "total_token_count", None) or 0) or prompt + output
         if not (prompt or output or total):
             return
+        # The token budget counts a cached prompt token at a tenth of a new one. The input, cached and output columns
+        # keep the raw counts, so the stats page still shows what was sent.
+        budget_tokens = round((prompt - cached) + cached * CACHED_TOKEN_BUDGET_WEIGHT + output)
         self._sink(self._model, {"input_tokens": prompt, "cached_tokens": cached,
-                                 "output_tokens": output, "tokens": total}, round(seconds, 3))
+                                 "output_tokens": output, "tokens": budget_tokens}, round(seconds, 3))
+
+
+# ---------------------------------------------------------------- Opencode (local CLI, free models)
+class OpencodeClient:
+    label = "opencode"
+    style = "opencode"
+    OPENCODE_LIST_TTL = 900
+    OPENCODE_EXHAUSTED_TTL = 900
+
+    def __init__(self, exe="opencode"):
+        self.exe = exe or "opencode"
+        self.chats = _OpencodeChats(self)
+        self._models = None
+        self._models_at = 0.0
+        self._models_lock = threading.Lock()
+        self._exhausted = {}   # model -> time it may be tried again
+
+    def _run_models(self):
+        ids = []
+        try:
+            proc = subprocess.run([self.exe, "models"], capture_output=True, text=True, timeout=30, errors="replace")
+            for line in (proc.stdout or "").splitlines():
+                line = line.strip()
+                if line.startswith("opencode/"):
+                    ids.append(line)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return sorted(set(ids))
+
+    def _raw_models(self):
+        now = time.time()
+        if self._models is not None and now - self._models_at < self.OPENCODE_LIST_TTL:
+            return list(self._models)
+        ids = self._run_models()
+        self._models = ids
+        self._models_at = now
+        return list(ids)
+
+    def model_names(self):
+        with self._models_lock:
+            now = time.time()
+            ids = self._raw_models()
+            return [m for m in ids if self._exhausted.get(m, 0) <= now]
+
+    def mark_exhausted(self, model):
+        if model:
+            with self._models_lock:
+                self._exhausted[model] = time.time() + self.OPENCODE_EXHAUSTED_TTL
+
+    def probe_models(self):
+        # A tiny request against every model. Returns {id: True/False}; failures are marked
+        # exhausted so they leave the picker until the cooldown passes.
+        with self._models_lock:
+            ids = self._raw_models()
+        out = {}
+        for mid in ids:
+            ok = False
+            try:
+                proc = subprocess.run([self.exe, "run", "-m", mid, "--format", "json", "ping"],
+                                      capture_output=True, text=True, timeout=60, errors="replace")
+                ok = proc.returncode == 0 and "text" in (proc.stdout or "")
+            except (OSError, subprocess.SubprocessError):
+                ok = False
+            out[mid] = ok
+            if ok:
+                with self._models_lock:
+                    self._exhausted.pop(mid, None)
+            else:
+                self.mark_exhausted(mid)
+        return out
+
+
+class _OpencodeChats:
+    def __init__(self, client):
+        self.client = client
+
+    def create(self, model=None, history=None, config=None):
+        return OpencodeChat(self.client, model, history, config)
+
+
+class OpencodeChat:
+    def __init__(self, client, model, history, config):
+        self.client = client
+        self.model = model or "opencode/big-pickle"
+        self.system, self.temperature, self.thinking, self.reasoning = read_config(config)
+        self.history = contents_to_messages(history)
+
+    def _prompt(self, text):
+        parts = []
+        if self.system:
+            parts.append(self.system)
+        for m in self.history:
+            parts.append(("User: " if m["role"] == "user" else "Assistant: ") + m["content"])
+        parts.append("User: " + text)
+        return "\n\n".join(parts)
+
+    def send_message(self, text):
+        prompt = self._prompt(text)
+        try:
+            proc = subprocess.run([self.client.exe, "run", "-m", self.model, "--format", "json", prompt],
+                                  capture_output=True, text=True, timeout=300, errors="replace")
+        except (OSError, subprocess.SubprocessError) as err:
+            raise BackendError(f"opencode is unreachable ({err.__class__.__name__})") from None
+        answer = ""
+        for line in (proc.stdout or "").splitlines():
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("type") == "text":
+                answer += (ev.get("part") or {}).get("text") or ""
+        if not answer and proc.returncode != 0:
+            detail = ((proc.stderr or "") + "\n" + (proc.stdout or "")).lower()
+            # A quota or rate-limit failure removes this model from the picker until it refreshes.
+            if any(tag in detail for tag in ("quota", "rate limit", "ratelimit", "429", "exceeded",
+                                             "no credits", "unavailable", "capacity")):
+                self.client.mark_exhausted(self.model)
+            raise BackendError(f"opencode exited with code {proc.returncode}: {(proc.stderr or '')[-200:]}")
+        self.history += [{"role": "user", "content": text}, {"role": "assistant", "content": answer}]
+        return SimpleNamespace(text=answer or None, thought="", usage_metadata=None)
+
+    def send_message_stream(self, text):
+        resp = self.send_message(text)
+        if resp.text:
+            yield SimpleNamespace(text=resp.text, thought=None, usage_metadata=None)
+        yield SimpleNamespace(text=None, thought=None, usage_metadata=None)
 
 
 # ---------------------------------------------------------------- routing
@@ -465,7 +800,7 @@ class _UsageChat:
 class MultiClient:
     # Routes by model id prefix. Bare ids go to Gemini, the google-genai client.
     #
-    # providers maps 'deepseek' / 'local' / 'claude' to a client, or to None when that backend is off.
+    # providers maps 'deepseek' / 'local' / 'claude' / 'openrouter' to a client, or to None when that backend is off.
 
     def __init__(self, gemini, providers):
         self.gemini = gemini
@@ -481,9 +816,6 @@ class MultiClient:
                     raise BackendError(f"{name} is not set up on this server")
                 return client, model[len(prefix):]
         return self.gemini, model
-
-    def configured(self):
-        return {name: (client is not None) for name, client in self.providers.items()}
 
 
 class _MultiChats:
@@ -507,9 +839,3 @@ class _MultiModels:
             prefix = next(p for p, n in PREFIXES.items() if n == name)
             out.extend(SimpleNamespace(name=prefix + m) for m in client.model_names())
         return out
-
-    def generate_content(self, model=None, contents="", **kwargs):
-        client, bare = self.multi.route(model)
-        if client is self.multi.gemini:
-            return client.models.generate_content(model=bare, contents=contents, **kwargs)
-        return client.models.generate_content(model=bare, contents=contents)
