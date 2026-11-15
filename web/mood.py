@@ -234,13 +234,20 @@ def affinity_band(value):
 
 
 # The block the engine puts in the prompt. The numbers are for the character's own tone, not for the user to see.
-def describe_stable(state):
+# with_bands=False leaves the energy and affinity bands out. A chat on DeepSeek turns them off: they sit in the system
+# prompt, so each band crossing rewrites that prompt and the whole history behind it is billed at the cache-miss rate,
+# while the emotion already carries the loudest part of them (a tired character has low energy, a warm one high
+# affinity).
+def describe_stable(state, with_bands=True):
     # The part of the mood that changes only with the emotion or a band (energy low/medium/high, affinity distant to
     # devoted). The numbers change every turn, so they are not sent. This text sits in the system prompt, which is
     # rebuilt only when it changes.
     energy, affinity = round(state["energy"]), round(state["affinity"])
+    line = f"Emotion: {state['emotion']}."
+    if with_bands:
+        line += f" Energy {energy_band(energy)}. Affinity {affinity_band(affinity)}."
     return "\n".join([
         "[How you feel right now]",
-        f"Emotion: {state['emotion']}. Energy {energy_band(energy)}. Affinity {affinity_band(affinity)}.",
+        line,
         TONE[state["emotion"]],
     ])

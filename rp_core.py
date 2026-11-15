@@ -912,13 +912,10 @@ class Engine:
                 self.log(f"[cyan]Loaded memory bank from {self.memory_bank_file}[/cyan]")
             except Exception as e:
                 self.log(f"[yellow]Could not load memory.md: {e}[/yellow]")
-        # The constant Mind Palace entries and the open tensions change only when the palace or the threads change, so
-        # they sit here, in the cached part, rather than in each turn's notes.
+        # The constant Mind Palace entries change only when the palace changes, so they sit here, in the cached part,
+        # rather than in each turn's notes.
         if self.palace_static:
             prompt += "\n\n--- Mind Palace (always on) ---\n" + self.palace_static
-        tension_block = self._tension_block()
-        if tension_block:
-            prompt += "\n\n" + tension_block
         # The off-screen record of a solo chat is the same for the whole session. Its block already starts with blank
         # lines, so it is added as it is. Empty when the chat's switch is off.
         if self.offscreen_text and not self.is_group:
@@ -936,6 +933,12 @@ class Engine:
                        + self.author_note)
         if self.summary_text:
             prompt += "\n\n--- Earlier in this chat (running summary) ---\n" + self.summary_text
+        # The open tensions go last, after the summary: a tension pass or a hand edit can change them on a turn that
+        # changes nothing else, and the provider keeps the prompt only up to its first change. Sitting last, a change
+        # here costs the notes and the newest message, not the whole history behind the block.
+        tension_block = self._tension_block()
+        if tension_block:
+            prompt += "\n\n" + tension_block
         self.system_prompt = prompt
 
     # The notes for one turn: the relationship, the mood, and the palace, episode and event matches. They are sent with
@@ -1108,9 +1111,13 @@ class Engine:
                                         weights, fired=fired)
             self.palace_fired = [palace.palace_key(e) for e in fired]
             # A solo chat's constant entries never change between turns, so they go in the cached system prompt. A group
-            # reads the palace from its notes as before. The matching and the budget are the same either way.
+            # reads the palace from its notes as before. The matching and the budget are the same either way. The
+            # constants come from everything that matched, not from what the budget kept: a constant that lost the
+            # budget to a matched entry would drop out of the system prompt and break the prompt cache for the whole
+            # history behind it, which is far more expensive than the characters it saves.
             matched_all = list(kept)
-            static = [] if self.is_group else [e for e in kept if e.get("constant")]
+            static = [] if self.is_group else sorted((e for e in fired if e.get("constant")),
+                                                     key=lambda e: e["order"])
             static_ids = {id(e) for e in static}
             self.palace_static = "\n\n".join(palace.block_for(e) for e in static)
             kept = [e for e in kept if id(e) not in static_ids]
@@ -1190,13 +1197,19 @@ class Engine:
         return vectors[0]
 
     def send(self, processed, on_delta=None, on_think=None):
-        # The user's new message is also the outcome of the last turn's memories, so it is scored before this turn
-        # decides what to recall. Only then is the new turn's own retrieval recorded.
-        if self.policy_enabled:
-            memory_policy.start_turn(self.policy)
-            memory_policy.settle(self.policy, processed)
-        self.model_switch_save()
-        self._refresh_palace(processed)
+        # A regenerate answers the message the last turn answered, so it sends that turn's prompt again. The palace,
+        # the notes, the system text and the history are left exactly as that turn set them, so the provider's cache
+        # still covers all of it and only the reply's own tokens are new. It also keeps the same message from being
+        # scored twice by the memory policy.
+        regen = self.regen_stash is not None and self._sent_system is not None
+        if not regen:
+            # The user's new message is also the outcome of the last turn's memories, so it is scored before this
+            # turn decides what to recall. Only then is the new turn's own retrieval recorded.
+            if self.policy_enabled:
+                memory_policy.start_turn(self.policy)
+                memory_policy.settle(self.policy, processed)
+            self.model_switch_save()
+            self._refresh_palace(processed)
         # Run one turn (solo or group). Saves history and tracks tokens on success.
         # on_delta(speaker, text_so_far) is called as each reply streams in, if given.
         # on_think(speaker, thinking_so_far) is called as reasoning streams in (only when thinking is on).
@@ -1210,7 +1223,7 @@ class Engine:
             return result
         self._count_tokens(result.turn_tokens, detail=result.usage_detail())
         self.save()
-        if self.policy_enabled:
+        if self.policy_enabled and not regen:
             # The memories that went into this turn's prompt are credited by the user's next message. Scoring is an
             # optimisation, never a reason to fail a turn that already succeeded, so a disk error here is swallowed.
             try:
