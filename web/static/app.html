@@ -10,8 +10,10 @@
   <script src="/static/locales/en.js"></script>
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/base.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic"){document.getElementById("uiTheme").disabled=true;for(const h of ["/static/tokens.css","/static/base.css"]){const l=document.querySelector('link[href="'+h+'"]');if(l)l.disabled=true;}}if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="stylesheet" href="/static/call.css">
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
@@ -27,6 +29,7 @@
     <span id="headerChat" class="header-chat"></span>
     <span id="who" class="muted"></span>
     <span class="spacer"></span>
+    <a id="galleryLink" class="ghost" href="/gallery" hidden>Gallery</a>
     <a id="adminLink" href="/admin" hidden>Admin</a>
     <button id="pwBtn" class="ghost" type="button">Password</button>
     <button id="logoutBtn" class="ghost" type="button">Log out</button>
@@ -174,7 +177,7 @@
         <label>Context: memories, locations, situations
           <textarea id="edContext" rows="8" maxlength="20000" placeholder="Memories, places, and situations to add to this character."></textarea>
         </label>
-        <label>Author's note <span class="muted">optional, sent near the end of every prompt</span>
+        <label>Author's note <span class="muted">optional, kept in the cached part of every prompt</span>
           <textarea id="edAuthorNote" rows="4" maxlength="4000" placeholder="A short instruction for the chat, such as pacing or tone."></textarea>
         </label>
         <p class="muted">Separate from the card. Use it to steer pacing or tone, for example "Keep replies short and tense" or "Let the scene breathe; do not rush the confession", without rewriting the character.</p>
@@ -214,6 +217,21 @@
           <p id="edMusicNote" class="muted"></p>
         </div>
       </div>
+      <div id="edAgenticBox" class="icon-box agentic-box">
+        <div class="stack">
+          <p class="muted">Agentic mode lets this character use tools. It is separate from its emotion pictures: turn this on only when the character should be able to read and write files in its own sandbox.</p>
+          <label class="check-row"><input id="edAgentic" type="checkbox"> Agentic mode (the character may use tools)</label>
+          <p id="edAgenticMsg" class="muted" role="status"></p>
+        </div>
+      </div>
+      <div id="edEmotionBox" class="icon-box emotion-box">
+        <div class="stack">
+          <p class="muted">Emotion pictures show how the character feels on each reply. The model names one emotion at the start of its reply and the chat draws that picture beside its name; a missing picture falls back to a small emoticon. This is a character setting and does not need agentic mode. Upload one picture per emotion; a new picture replaces the old one, and only this character's creator can change them.</p>
+          <label class="check-row"><input id="edEmotions" type="checkbox"> Emotion pictures</label>
+          <div id="edEmotionGrid" class="emotion-grid"></div>
+          <p id="edEmotionMsg" class="muted" role="status"></p>
+        </div>
+      </div>
       <div id="edVoiceBox" class="icon-box voice-box">
         <div class="stack">
           <p class="muted">The voice the speech server uses for this character when a reader leaves the choice on the character's own voice. Pick a voice and a language here; the reference clip below is optional and only helps it match.</p>
@@ -247,6 +265,8 @@
         <div id="edPalaceList" class="palace-list"></div>
         <div class="palace-actions">
           <button id="edPalaceAdd" class="ghost" type="button">Add entry</button>
+          <button id="edPalaceImport" class="ghost" type="button">Import lorebook</button>
+          <input id="edPalaceFile" type="file" accept=".json,application/json" hidden>
           <button id="edPalaceSave" type="button">Save Mind Palace</button>
         </div>
         <p id="edPalaceMsg" class="muted" aria-live="polite"></p>
@@ -269,6 +289,9 @@
           <span id="tokenText" class="muted"></span>
         </span>
           <button id="gamesBtn" class="ghost settings-btn" type="button" aria-label="Games" title="Play a mini-game with this character" aria-haspopup="dialog" aria-controls="gameDlg" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><circle cx="8.5" cy="8.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="8.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="8.5" cy="15.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="15.5" r="1.4" fill="currentColor" stroke="none"/></svg></button>
+          <button id="describeBtn" class="ghost settings-btn" type="button" aria-label="Describe an image" title="Describe an image" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M4 17l5-4 4 3 3-2 4 3"/></svg></button>
+          <button id="sceneBtn" class="ghost settings-btn" type="button" aria-label="Generate a scene image" title="Generate a scene image" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 15l3-4 3 3 2-2 2 3"/><path d="M17 3v3M20 4.5l-2 2M14 4.5l2 2"/></svg></button>
+          <a id="galleryBtn" class="ghost settings-btn" href="/gallery" title="Gallery" aria-label="Gallery" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></a>
           <button id="settingsBtn" class="ghost settings-btn" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-controls="settingsSheet" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke-width="3"/></svg></button>
           <button id="callBtn" class="ghost settings-btn" type="button" aria-label="Call" title="Call this character and talk with your voice" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></button>
           <select id="fontSelect" class="font-select" aria-label="Font" title="Font for the chat and the interface">
@@ -319,6 +342,7 @@
         </div>
         <button id="sendBtn" type="submit" aria-label="Send" title="Send"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/></svg></button>
       </form>
+      <input id="visionFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
       <div id="deskMeters" class="desk-meters"></div>
       <p id="chatErr" class="error"></p>
     </section>
@@ -729,7 +753,7 @@
         <div id="palaceRow" class="sheet-row"><span>Mind Palace (your entries)</span><button id="palaceOpen" class="ghost small" type="button">Open</button></div>
       </section>
       <section class="set-panel" data-panel="history" hidden>
-        <div class="sheet-row slider-row"><label for="winSlider">Rolling window (messages) <span id="winVal" class="muted"></span></label>
+        <div id="winRow" class="sheet-row slider-row"><label for="winSlider">Rolling window (messages)<span id="winVal" class="muted"></span></label>
           <span class="slider-ctl"><input id="winSlider" type="range" min="1" max="100" step="1" aria-label="Rolling window in messages"><button id="winReset" class="ghost small" type="button">Default</button></span>
         </div>
         <p id="winNote" class="muted"></p>
@@ -762,6 +786,19 @@
       <p id="charMsg" class="muted"></p>
     </div>
   </div>
+  <dialog id="visionDlg" class="dlg" aria-labelledby="visionTitle">
+    <h2 id="visionTitle">Describe an image</h2>
+    <p class="muted">The connected vision model describes the picture. Nothing is added to the chat until you insert the text.</p>
+    <div id="visionPreview" class="vision-preview" hidden><img id="visionImg" alt=""></div>
+    <p id="visionText" class="vision-text" hidden></p>
+    <p id="visionMsg" class="muted" aria-live="polite"></p>
+    <div class="dlg-actions">
+      <button id="visionCopy" class="ghost small" type="button" hidden>Copy</button>
+      <button id="visionInsert" class="ghost small" type="button" hidden>Insert into message</button>
+      <span class="grow"></span>
+      <button id="visionClose" class="ghost" type="button">Close</button>
+    </div>
+  </dialog>
   <dialog id="palaceDlg" class="dlg" aria-labelledby="palaceDlgTitle">
     <h2 id="palaceDlgTitle">Mind Palace</h2>
     <p class="muted">Your own entries for this character or group. A character's starting palace was copied to your account the first time you chatted with it. Changes apply from your next message.</p>
@@ -779,6 +816,8 @@
     <p id="palMsg" class="muted" aria-live="polite"></p>
     <div class="dlg-actions">
       <button id="palAdd" class="ghost small" type="button">Add entry</button>
+      <button id="palImport" class="ghost small" type="button">Import lorebook</button>
+      <input id="palFile" type="file" accept=".json,application/json" hidden>
       <button id="palAudit" class="ghost small" type="button" title="Find entries nothing uses, entries that fire constantly and names with no entry">Check entries</button>
       <span class="grow"></span>
       <button id="palClose" class="ghost" type="button">Close</button>
@@ -919,9 +958,6 @@
   <script src="/static/markdown.js"></script>
   <script src="/static/tts.js"></script>
   <script src="/static/app.js"></script>
-  <script src="/static/minigames.js"></script>
-  <script src="/static/call.js"></script>
-  <script src="/static/editor.js"></script>
   <script src="/static/palace_audit.js"></script>
   <script src="/static/security.js"></script>
 </body>

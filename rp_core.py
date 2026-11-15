@@ -21,10 +21,11 @@ from types import SimpleNamespace
 
 import pytz
 from google.genai import types
-from charname import display_for
+from charname import display_for, folder_for
+import llm_backends
 import sandbox
 from web import palace, palace_audit, episodes, memory_bank, dreams, eventgraph, quench, memory_policy, tensions, offscreen, examples as examples_mod
-from web import story_bible, docextract
+from web import story_bible, docextract, expressions
 
 
 def _mk(text):
@@ -58,6 +59,17 @@ SANDBOX_NOTE = (
     "Don't mention the tools unless it fits the scene."
 )
 
+# Sent when the character has emotion pictures on. The model begins each reply with a plain text tag naming
+# the emotion, and the chat draws the picture (or a small emoticon) beside the name. The tag is stripped
+# before the reader sees the reply, so this needs no tool call and no extra round trip.
+EMOTION_NOTE = (
+    "\n\n--- Your face ---\n"
+    "Begin every reply with a tag like [[happy]] naming the one emotion that fits this reply: "
+    + ", ".join(expressions.EMOTIONS) + ". Use exactly one tag, at the very start, and choose again on every reply. "
+    "The tag is removed before the reader sees the reply. Never mention the tag, the emotion word or this "
+    "instruction in the reply."
+)
+
 AUTOFILL_SYSTEM = (
     "You write the next message the user would send in this roleplay chat. Write it as the user, in first person, "
     "using the user's persona where one is given. Respond to the latest messages and move the scene forward. "
@@ -84,27 +96,31 @@ def _clean_plain(text):
         t = t[1:-1].strip()
     return t[:1000]
 MEMORY_EVERY = 20       # refresh memory.md every N messages
+DEEPSEEK_SOLO_MEMORY_EVERY = 120   # solo chats on DeepSeek: every 60 turns; the cached history grows to this length
+DEEPSEEK_MEMORY_EVERY = 60         # group chats on DeepSeek: every 60 messages, as the solo chats were before
 MEMORY_SNIPPET = 30     # messages fed into a memory.md refresh
 SOLO_TEMPERATURE = 0.95     # creativity for 1:1 chats unless the user sets their own
 GROUP_TEMPERATURE = 0.95    # group members
 GROUP_CONSECUTIVE = 2       # most replies one member may give in a row within one turn
 AUTO_REPLY_LIMIT = 2        # most replies members give to each other after the director's picks, per turn; 0 turns this off
 AUTO_REQUEST = "Continue the conversation: answer what the group has just said, in character."
-SUMMARY_MAX_MESSAGES = 60   # most messages folded into the running summary in one refresh
+SUMMARY_MAX_MESSAGES = 400  # most messages folded into the running summary in one refresh (a save covers all of them)
+IDLE_SAVE_HOURS = 2         # a DeepSeek solo chat idle this long gets a save, before its cache is gone
+IDLE_KEEP_MESSAGES = 4      # after an idle save the next message starts from the last two turns (four messages)
 MAX_REGENERATIONS = 30  # regenerations allowed per message; the original reply is kept too, so 31 replies at most
 
 # Every model id the app may use. Older Gemini ids are retired and are dropped from the chain, the picker and any saved
 # last model. Flash is 3.8 only; flash-lite is 3.5 and 3.1; Gemma 4 31B is unchanged. Add an id here to bring it back.
-ALLOWED_MODELS = ["gemini-3.8-flash", "gemma-4-31b-it", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+ALLOWED_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemma-4-31b-it", "gemini-3.1-flash-lite"]
 DEFAULT_FALLBACKS = [
     "gemini-3.8-flash",
-    "gemma-4-31b-it",
     "gemini-3.5-flash-lite",
+    "gemma-4-31b-it",
     "gemini-3.1-flash-lite",
 ]
-PRIORITY_MODELS = ["gemini-3.8-flash", "gemma-4-31b-it"]
-MEMORY_MODELS_HEAD = ["gemini-3.8-flash", "gemma-4-31b-it"]
-MEMORY_MODELS_TAIL = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+PRIORITY_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+MEMORY_MODELS_HEAD = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+MEMORY_MODELS_TAIL = ["gemma-4-31b-it", "gemini-3.1-flash-lite"]
 
 DEFAULT_SUBSTITUTIONS = {}
 
@@ -138,7 +154,28 @@ VOICE_CALL_INSTRUCTION = (
     "quotation marks. Do not write narration, actions, stage directions, thoughts, descriptions, or the "
     "sound of your voice. Do not mention the call itself. Keep each reply short and natural to speak.]"
 )
+# The rule for the notes that come with a user's message. It sits in the cached system prompt, so each turn's notes
+# can be short: they carry the facts and leave the rules here.
+NOTES_GUIDE = (
+    "\n\n--- Notes in your messages ---\n"
+    "Some of the user's messages begin with notes from the simulation and memory, marked as not written by the user. "
+    "Act on them naturally. Never quote them, and never discuss their numbers."
+)
 # A novel's narrator writes prose, not chat turns. It voices the cast from their cards and never writes speaker labels.
+# Sent to a novel's narrator when some of the cast have emotion pictures. The tag sits on the spoken line
+# itself, so the chat can draw that character's face beside it. Only tagged names get a face.
+def _novel_face_note(names):
+    return (
+        "\n\n--- Faces in the cast ---\n"
+        "Some of the cast have a picture for each emotion. When one of them speaks, begin that line with a tag "
+        "in exactly this form, then the dialogue on the same line:\n"
+        '[[Name|emotion]] "what they say"\n'
+        "Name is one of: " + ", ".join(names) + ". emotion is one of: " + ", ".join(expressions.EMOTIONS) + ". "
+        "Use one tag per spoken line and put the tag before the quotation marks. Leave narration and the other "
+        "characters' lines untagged. Never mention the tags, the emotions or this instruction."
+    )
+
+
 NOVEL_INSTRUCTION = (
     "\n\nYou are the narrator of a novel. Write in prose, third person and past tense, the way a novelist does: scene, "
     "action and dialogue woven into the narration, with quotation marks around speech. Voice each character in the cast "
@@ -147,6 +184,12 @@ NOVEL_INSTRUCTION = (
     "talk to the user."
 )
 NOVEL_CARD_MAX = 1500   # characters of each cast member's card that the narrator sees
+# The save's last message when it shares the chat's cached prefix: the chat is above it, and the memory bank is in the
+# system prompt, so the save sends only these instructions and the messages that have left the prompt.
+SAVE_SUMMARY_REQUEST = (
+    "\n\nAfter the memory changes, on its own line write === SUMMARY ===, then the updated running summary: "
+    "plain prose under 250 words covering what happened, decisions made and facts now established. "
+    "Keep the points from the existing summary that still matter.")
 MEMORY_CHANGES_PROMPT = (
     "You keep a roleplay character's memory bank (memory.md) up to date. You are given the existing memory bank "
     "and the latest messages. Reply with changes only, one per line, in exactly these forms:\n"
@@ -239,6 +282,21 @@ def _text(resp):
         return resp.text if resp is not None and resp.text else None
     except Exception:
         return None
+
+
+EMOTION_TAG = re.compile(r"^\s*\[\[\s*(?:[^\]|\n]+\|)?\s*([a-z]+)\s*\]\]\s*", re.I)
+
+
+def take_emotion_tag(text):
+    # A reply may start with [[happy]] (solo or group) or [[Name|happy]] (a novel's cast). Strip that
+    # tag and return the known emotion, or leave the text alone when the tag is not one of ours.
+    match = EMOTION_TAG.match(text or "")
+    if not match:
+        return text, ""
+    emotion = expressions.clean_emotion(match.group(1))
+    if not emotion:
+        return text, ""
+    return (text[match.end():] or ""), emotion
 
 
 def _usage(usage, attr):
@@ -399,6 +457,7 @@ class Reply:
     model: str
     request_bar: str
     thinking: str = ""   # reasoning text, if the model produced any
+    emotion: str = ""    # the emotion the model set for this reply, or ""
 
 
 @dataclass
@@ -416,7 +475,6 @@ class TurnResult:
     turn_tokens: int = 0
     elapsed: float = 0.0
     memory_due: bool = False
-    tokens_state: tuple = None
 
     def usage_detail(self):
         # The token split for the daily stats: prompt (input), the cached part of it, output, and the
@@ -480,7 +538,14 @@ def _sandbox_tools():
         declarations.append(types.FunctionDeclaration(
             name=spec["name"], description=spec["description"],
             parameters=types.Schema(type="OBJECT", properties=props, required=spec["required"])))
-    return [types.Tool(function_declarations=declarations)]
+    return declarations
+
+
+def _tools(sandbox_tools=False):
+    # The tool list for one call, or None. A call with no tools is a plain reply. Emotion pictures are
+    # a prompt tag now, not a tool, so only the sandbox contributes declarations here.
+    declarations = _sandbox_tools() if sandbox_tools else []
+    return [types.Tool(function_declarations=declarations)] if declarations else None
 
 
 def _function_calls(resp):
@@ -515,8 +580,11 @@ class Engine:
         self.palace_dir = None   # an account's own palace folder; None means ai_dir
         self.palace_fired = []   # palace keys whose entries matched this turn, read by the server for the usage counts
         self.palace_text = ""
+        self.palace_static = ""  # the constant Mind Palace entries of a solo chat; they sit in the system prompt
         self.mood_text = ""      # the character's simulated state for this turn, set by the server; empty when off
-        self.attitude_text = ""  # the relationship block for this turn, set by the server; empty when off
+        self.mood_stable = ""    # the mood's emotion and bands, in the system prompt; changes rarely
+        self.attitude_text = ""  # the relationship changes this turn, set by the server; empty when none
+        self.attitude_stable = ""  # the relationship level and its tone, in the system prompt; changes rarely
         self.offscreen_text = "" # what the character did between sessions, set by the server; empty when off
         self.persist_config = persist_config
         self.allow_root_user = allow_root_user
@@ -560,6 +628,7 @@ class Engine:
         self.call_mode = False                              # a live voice call: only spoken lines, set for one turn
         self.world_text = ""                                # the world block for this chat; empty when it has none
         self.is_novel = False                               # a novel: a narrator writes prose for a cast
+        self.novel_faces = []                               # cast members whose spoken lines carry an emotion tag
         self._load_episodes()
         # Learned memory retention: outcome-weighted scores for the memories the character extracted for itself.
         self.policy_enabled = False                  # the admin switch; set by the server before each turn
@@ -584,12 +653,14 @@ class Engine:
         self.regen_stash = None        # set while a regenerate runs: the exchange it took out of memory
         self.spicy_to_safe = {}
         self.safe_to_spicy = {}
+        self._safe_pairs = []          # (spicy, safe), longest word first, set by _load_substitutions
+        self._spicy_pairs = []         # (safe, spicy), longest word first
 
         self.character_name = display_for(ai_dir)
         self.character_color = "cyan"
         self.character_prompt = ""
         self.example_text = ""        # the character's own example messages, as a prompt block; empty when it has none
-        self.author_note = ""         # an optional instruction for the chat, sent near the end of the prompt
+        self.author_note = ""         # an optional instruction for the chat, kept in the cached system prompt
         self.is_group = False
         self.group_members = []
         self.member_notes = {}         # per-member notes for an account's own group, keyed by folder name
@@ -660,6 +731,12 @@ class Engine:
             except Exception as e:
                 self.log(f"[yellow]Could not load substitutions.json: {e}[/yellow]")
         self.safe_to_spicy = {v.lower(): k for k, v in self.spicy_to_safe.items()}
+        # The word pairs in one order each, longest word first, so a short word does not get applied inside a
+        # longer phrase. restore and safe_text run on every window message every turn, so the order is
+        # precomputed once here instead of a fresh sort on each call.
+        self._safe_pairs = sorted(self.spicy_to_safe.items(), key=lambda kv: len(kv[0]), reverse=True)
+        self._spicy_pairs = [(safe, spicy) for safe, spicy in self.safe_to_spicy.items()]
+        self._spicy_pairs.sort(key=lambda kv: len(kv[0]), reverse=True)
 
     def apply_private_group(self, display, members, notes):
         # An account's own group: members and notes come from its saved settings, not a character folder.
@@ -683,6 +760,14 @@ class Engine:
         self.character_color = "magenta"
         cards = [f"--- {name} ---\n{card.strip()[:NOVEL_CARD_MAX]}" for name, card in cast]
         self.character_prompt = f"The novel is named {display}. The cast:\n\n" + "\n\n".join(cards)
+        # Cast members with emotion pictures: their spoken lines get a small tag the chat draws a face from.
+        self.novel_faces = []
+        for name, _card in cast:
+            try:
+                if expressions.state(folder_for(name))["emotions"]:
+                    self.novel_faces.append(name)
+            except OSError:
+                continue
         self._build_system_prompt()
 
     # The world this chat is set in, as a block for the system prompt. Rebuilt only when it changes.
@@ -738,8 +823,8 @@ class Engine:
         # Example messages live beside the card. They show the voice, so they sit right after it in the prompt.
         if not self.is_group:
             self.example_text = examples_mod.prompt_block(examples_mod.load(self.ai_dir), self.character_name)
-        # The author's note is set by the character editor. It is not part of the card, and it goes in the newest
-        # message near the end of the prompt, so it can steer tone and pacing without rewriting the card.
+        # The author's note is set by the character editor. It is not part of the card, and it goes in the cached
+        # system prompt after the card and memory, so it steers tone and pacing without rewriting the card.
         note_file = os.path.join(self.ai_dir, "author_note.md")
         if os.path.exists(note_file):
             try:
@@ -792,11 +877,14 @@ class Engine:
             prompt += "\n\n--- The world this story is set in ---\n" + self.world_text
         if self.is_novel:
             prompt += NOVEL_INSTRUCTION
+            if self.novel_faces:
+                prompt += _novel_face_note(self.novel_faces)
         else:
             prompt += NARRATIVE_INSTRUCTION
             prompt += DIALOGUE_INSTRUCTION
             prompt += FORMAT_INSTRUCTION
         prompt += self.reply_length_clause()
+        prompt += NOTES_GUIDE
         if self.user_prompt:
             prompt += f"\n\n--- User Persona ---\nThe user interacting with you is playing as the following character:\n{self.user_prompt}"
 
@@ -824,24 +912,40 @@ class Engine:
                 self.log(f"[cyan]Loaded memory bank from {self.memory_bank_file}[/cyan]")
             except Exception as e:
                 self.log(f"[yellow]Could not load memory.md: {e}[/yellow]")
+        # The constant Mind Palace entries and the open tensions change only when the palace or the threads change, so
+        # they sit here, in the cached part, rather than in each turn's notes.
+        if self.palace_static:
+            prompt += "\n\n--- Mind Palace (always on) ---\n" + self.palace_static
+        tension_block = self._tension_block()
+        if tension_block:
+            prompt += "\n\n" + tension_block
+        # The off-screen record of a solo chat is the same for the whole session. Its block already starts with blank
+        # lines, so it is added as it is. Empty when the chat's switch is off.
+        if self.offscreen_text and not self.is_group:
+            prompt += self.offscreen_text
+        # The relationship level and its tone sit here too, so they reach the model on every turn without being resent.
+        if self.attitude_stable and not self.is_group:
+            prompt += "\n\n" + self.attitude_stable
+        if self.mood_stable and not self.is_group:
+            prompt += "\n\n" + self.mood_stable
+        # The author's note is stable for the whole chat, so it sits in the cached part of the prompt rather
+        # than being resent with every user message. It goes after the card and the memory, and before the
+        # running summary, which is the part of this block that changes most often.
+        if self.author_note:
+            prompt += ("\n\n--- Author's note for this chat (follow it when it fits the scene) ---\n"
+                       + self.author_note)
         if self.summary_text:
             prompt += "\n\n--- Earlier in this chat (running summary) ---\n" + self.summary_text
         self.system_prompt = prompt
 
     # The notes for one turn: the relationship, the mood, and the palace, episode and event matches. They are sent with
     # the newest user message, not in the system prompt, so the system prompt and the history before that message stay
-    # the same from one turn to the next. The text is kept out of the saved chat.
+    # the same from one turn to the next. The text is kept out of the saved chat. The off-screen record is not here: it
+    # is the same for the whole session, so it sits in the system prompt (see _build_system_prompt).
     def _turn_notes(self):
-        body = (self.attitude_text + self.mood_text + self.offscreen_text + self._recall_text()
-                + self._tension_text()).strip()
+        body = (self.attitude_text + self.mood_text + self._recall_text()).strip()
         if body:
-            body = ("[Notes for this reply, from the simulation and memory. The user did not write these.]\n"
-                    + body)
-        if self.author_note:
-            if body:
-                body += "\n\n"
-            body += ("[Author's note for this chat. Follow it when it fits the scene.]\n"
-                     + self.author_note)
+            body = "[Notes for this reply, not written by the user.]\n" + body
         if self.call_mode:
             if body:
                 body += "\n\n"
@@ -851,11 +955,12 @@ class Engine:
         return body + "\n\n[The user says:]\n"
 
     # The open tensions as constraints for this reply, when the chat tracks them. Empty when off or none are open.
-    def _tension_text(self):
-        if self.tension_mode == "off":
+    # The open tensions of a solo chat. They sit in the system prompt, which changes only when a tension pass, a dream or
+    # a hand edit changes them, so the cached part of the prompt keeps them between those changes.
+    def _tension_block(self):
+        if self.tension_mode == "off" or self.is_group:
             return ""
-        block = tensions.prompt_block(self.tensions)
-        return ("\n\n" + block) if block else ""
+        return tensions.prompt_block(self.tensions)
 
     # What the model is sent for the user's message: the turn's notes, then the message itself.
     def _turn_message(self, processed):
@@ -882,14 +987,13 @@ class Engine:
 
     def restore(self, text):
         # Safe words back to the original wording, for display. Whole words only, longest phrase first.
-        for safe in sorted(self.safe_to_spicy, key=len, reverse=True):
-            spicy = self.safe_to_spicy[safe]
+        for safe, spicy in self._spicy_pairs:
             text = _whole_word(safe).sub(lambda m, s=spicy: s, text)
         return text
 
     def safe_text(self, text):
         # Original wording to safe words, before text goes to the model. Whole words only, longest first.
-        for spicy, safe in sorted(self.spicy_to_safe.items(), key=lambda kv: len(kv[0]), reverse=True):
+        for spicy, safe in self._safe_pairs:
             text = _whole_word(spicy).sub(lambda m, s=safe: s, text)
         return text
 
@@ -909,6 +1013,42 @@ class Engine:
 
     # ---- model selection
 
+    # The ordered model chain for one background generation: a dream, a tension pass, a story bible or a document
+    # import. It is the fixed Gemini chain in a chat on a provider with its own prompt cache, and the chat's own model
+    # first everywhere else (see _background_models). Every memory-job method iterates this once.
+    def _memory_models(self):
+        return self._background_models()
+
+    # The models for background work. A chat on DeepSeek or OpenRouter keeps those calls on the fixed Gemini chain,
+    # because none of them sends a prompt the chat has just sent, so a DeepSeek call would pay the cache-miss rate for
+    # tokens no cache holds. Any other chat keeps its own model first, as before. Duplicates are removed.
+    def _background_models(self):
+        chat_models = self.group_models if (self.is_group and self.group_models) else self.fallback_models
+        chat_first = (self.ordered_models(chat_models) or [self.model_name])[0]
+        if str(chat_first or "").startswith(("deepseek:", "openrouter:")):
+            order = MEMORY_MODELS_HEAD + MEMORY_MODELS_TAIL
+        else:
+            order = [chat_first] + MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL
+        models = []
+        for m in order:
+            if m and m not in models:
+                models.append(m)
+        return models
+
+    # The models for a memory save. The save is the one background job that sends the chat's own history, so in an
+    # anchored chat the model that answered last comes first: the prefix it just sent is still cached there, and the
+    # save then costs the cache-hit rate instead of a cold miss on another model. The background chain follows it.
+    def _save_models(self):
+        order = self._background_models()
+        last = str(self.model_name or "")
+        if self.cache_anchored() and last.startswith("deepseek:"):
+            order = [last] + order
+        models = []
+        for m in order:
+            if m and m not in models:
+                models.append(m)
+        return models
+
     def resolve_model_name(self, raw):
         # Map text like 'gemma-4-31B-it' or '3.8 flash' to a model id.
         # Returns a model id, a list when ambiguous, or None when empty.
@@ -918,7 +1058,7 @@ class Engine:
         if key[0].isdigit():
             key = "gemini-" + key
         known = {m.lower(): m for m in self.fallback_models}
-        for prefix in ("deepseek:", "local:", "claude:"):   # provider ids are exact, never guessed
+        for prefix in ("deepseek:", "local:", "claude:", "openrouter:"):   # provider ids are exact, never guessed
             if key.startswith(prefix):
                 return raw.strip() if raw.strip().lower().startswith(prefix) else key
         if key in known:
@@ -950,9 +1090,12 @@ class Engine:
         blocks = []
         self.policy_retrieved = []
         self.palace_fired = []
+        self.palace_static = ""
+        pcfg = None      # the palace settings, read once and handed to the episode refresh below
         if self.palace_enabled:
             recent = [str(m.get("text") or "") for m in self.full_history[-palace.DEPTH_MAX:]]
             entries, cfg = palace.load_all(self.palace_dir or self.ai_dir)
+            pcfg = cfg
             # Only the entries the character wrote for itself are scored and weighted. The user's entries are
             # matched exactly as before, and are never ranked by a score or dropped.
             weights = None
@@ -964,11 +1107,18 @@ class Engine:
             kept = palace.match_entries(entries, recent + [str(processed or "")], cfg["budget"], cfg["recursive"],
                                         weights, fired=fired)
             self.palace_fired = [palace.palace_key(e) for e in fired]
+            # A solo chat's constant entries never change between turns, so they go in the cached system prompt. A group
+            # reads the palace from its notes as before. The matching and the budget are the same either way.
+            matched_all = list(kept)
+            static = [] if self.is_group else [e for e in kept if e.get("constant")]
+            static_ids = {id(e) for e in static}
+            self.palace_static = "\n\n".join(palace.block_for(e) for e in static)
+            kept = [e for e in kept if id(e) not in static_ids]
             blocks = [palace.block_for(e) for e in kept]
             if self.policy_enabled:
                 # An entry that did not match this turn is still on the books, so one that never matches can be
                 # forgotten for being no use rather than for being old.
-                matched = {palace.palace_key(e) for e in kept}
+                matched = {palace.palace_key(e) for e in matched_all}
                 for e in auto:
                     key = palace.palace_key(e)
                     title = e["title"] or e["content"][:60]
@@ -977,7 +1127,7 @@ class Engine:
                         self.policy_retrieved.append((key, "palace", title))
         # Rebuilt every turn, so an admin switch to memory or the palace takes effect at once.
         self.palace_text = "\n\n".join(blocks)
-        self._refresh_episodes(processed)
+        self._refresh_episodes(processed, pcfg)
         self._refresh_events(processed)
         self._build_system_prompt()
 
@@ -997,10 +1147,13 @@ class Engine:
                          + "\n".join(f"- {t}" for t in evolving))
         self.event_text = "\n\n".join(parts)
 
-    def _refresh_episodes(self, processed):
+    def _refresh_episodes(self, processed, pcfg=None):
         # Episodic memory for this turn. Keywords first, which costs nothing. Only when they find nothing, and some
-        # episodes have vectors, is the new message embedded and matched by similarity.
-        _, pcfg = palace.load_all(self.palace_dir or self.ai_dir)
+        # episodes have vectors, is the new message embedded and matched by similarity. pcfg is the palace settings
+        # already read by _refresh_palace; without it, they are read here (the palace is switched off, so its
+        # own matching never loaded them).
+        if pcfg is None:
+            _, pcfg = palace.load_all(self.palace_dir or self.ai_dir)
         self.episodes_on = self.episodes_enabled and pcfg["episodes"]
         self.episode_text = ""
         if not (self.episodes_on and self.episodes):
@@ -1042,6 +1195,7 @@ class Engine:
         if self.policy_enabled:
             memory_policy.start_turn(self.policy)
             memory_policy.settle(self.policy, processed)
+        self.model_switch_save()
         self._refresh_palace(processed)
         # Run one turn (solo or group). Saves history and tracks tokens on success.
         # on_delta(speaker, text_so_far) is called as each reply streams in, if given.
@@ -1054,7 +1208,7 @@ class Engine:
         result.elapsed = time.time() - start
         if not result.ok:
             return result
-        result.tokens_state = self._count_tokens(result.turn_tokens, detail=result.usage_detail())
+        self._count_tokens(result.turn_tokens, detail=result.usage_detail())
         self.save()
         if self.policy_enabled:
             # The memories that went into this turn's prompt are credited by the user's next message. Scoring is an
@@ -1066,7 +1220,7 @@ class Engine:
                 memory_policy.save(self.policy_file, self.policy)
             except Exception as err:
                 self.log(f"[yellow]Memory retention bookkeeping failed: {err}[/yellow]")
-        result.memory_due = self.memory_enabled and len(self.full_history) > 0 and len(self.full_history) % MEMORY_EVERY == 0
+        result.memory_due = self.memory_enabled and len(self.full_history) > 0 and len(self.full_history) % self.memory_every() == 0
         return result
 
     def forget_memories(self):
@@ -1129,17 +1283,28 @@ class Engine:
     def create_chat_session(self, model_name):
         contents = self._window(self.window_size(), labelled=False)
         active = self.sandbox_active()
+        emotions = self.emotions_active()
         return self.client.chats.create(
             model=model_name,
             history=contents if contents else None,
             config=types.GenerateContentConfig(
-                system_instruction=self.system_prompt + (SANDBOX_NOTE if active else ""),
+                system_instruction=(self.system_prompt + (SANDBOX_NOTE if active else "")
+                                    + (EMOTION_NOTE if emotions else "")),
                 temperature=self.temperature_value(),
                 safety_settings=safety_settings(),
                 thinking_config=thinking_config_for(model_name, self.thinking, self.reasoning_for(model_name)),
-                tools=_sandbox_tools() if active else None,
+                tools=_tools(active),
             ),
         )
+
+    def emotions_active(self):
+        # Emotion images are a solo character's own switch. A group checks each member's folder as it speaks.
+        if self.is_group or self.is_novel:
+            return False
+        try:
+            return expressions.state(self.ai_dir)["emotions"]
+        except OSError:
+            return False
 
     @staticmethod
     def estimate_tokens(text):
@@ -1178,7 +1343,15 @@ class Engine:
         return {"window_start": parts["start"], "total": total, "window_size": size, "is_group": bool(self.is_group),
                 "system_tokens": system_tokens, "window_tokens": window_tokens, "cached_tokens": min(reused, system_tokens + window_tokens),
                 "quench": bool(self.quench_enabled), "quench_saved": (parts["report"] or {}).get("saved_tokens", 0),
-                "clip": bool(self.clip_enabled), "clip_saved": parts["clip_saved"]}
+                "clip": bool(self.clip_enabled), "clip_saved": parts["clip_saved"],
+                "cached_weight": self.budget_weight()}
+
+    # What one cached prompt token counts for in the token budget. A tenth on DeepSeek, a whole token otherwise. The
+    # model is the one the next prompt goes to: the pinned one first, as _send_solo and the director pick it.
+    def budget_weight(self):
+        models = self.group_models if self.is_group else self.fallback_models
+        model = (self.ordered_models(models) or [self.model_name])[0]
+        return llm_backends.CACHED_TOKEN_BUDGET_WEIGHT if str(model or "").startswith("deepseek:") else 1.0
 
     # Where the window starts, for a chat of total stored messages. It moves in steps of WINDOW_STEP, not one message a
     # turn, so the history prefix is the same for several turns running. Messages before it are the ones the summary
@@ -1187,13 +1360,23 @@ class Engine:
         size = self.window_size() if size is None else size
         # The window starts a whole number of steps before the clip boundary, so both move on the same turn and the
         # older part of the window (from its start up to the boundary) is the same for every turn between two steps.
-        back = max(1, round((size - CLIP_KEEP) / WINDOW_STEP))
-        return max(0, self.clip_cut(total) - back * WINDOW_STEP)
+        step = self.window_step()
+        back = max(1, round((size - CLIP_KEEP) / step))
+        return max(0, self.clip_cut(total) - back * step)
+
+    # The step the window and the clip boundary move in. A group on DeepSeek uses its memory interval, so its history
+    # stays the same between saves, as a solo DeepSeek chat's does. A solo DeepSeek chat is anchored at its save instead
+    # (memory_anchor), and every other chat keeps WINDOW_STEP.
+    def window_step(self):
+        if self.cache_anchored() or not self._first_model_deepseek(self.is_group):
+            return WINDOW_STEP
+        return self.memory_every()
 
     # The clip boundary for a chat of total messages: messages before it are cut, the rest are sent whole. It moves
-    # in steps of CLIP_STEP and keeps at least CLIP_KEEP messages whole.
+    # in steps of window_step() and keeps at least CLIP_KEEP messages whole.
     def clip_cut(self, total):
-        return max(0, ((total - CLIP_KEEP) // CLIP_STEP) * CLIP_STEP)
+        step = self.window_step()
+        return max(0, ((total - CLIP_KEEP) // step) * step)
 
     # Where the summary and the episodes stop for a chat of total messages: messages before this point are the ones
     # they cover. With clipping on, that is the clip boundary, so a message is summarised as soon as it is clipped and
@@ -1253,6 +1436,8 @@ class Engine:
     # The window as the model will see it, before it is turned into content: its start, each message as (role, text),
     # the quench report and how many tokens clipping saved. Used by the send and by the next-prompt estimate alike.
     def _window_parts(self, size, labelled, total):
+        if self.cache_anchored():
+            return self._anchored_parts(labelled, total)
         start = self.window_start(total, size)
         recent = self.full_history[start:total]
         # A chat can begin on a reply once the user has deleted the message it answered. The first content sent to
@@ -1287,7 +1472,8 @@ class Engine:
     def _call(self, chat, text, speaker, on_delta, on_think=None):
         # Send one message. With on_delta, stream the reply and call on_delta(speaker, text_so_far)
         # as each chunk arrives. With on_think, reasoning streams the same way. Returns an object with
-        # .text, .thought and .usage_metadata, like a normal response.
+        # .text, .thought and .usage_metadata, like a normal response. A sandbox call with tools runs
+        # without streaming, so its file round trips finish before the reply is shown.
         if self.sandbox_active():
             return self._call_with_tools(chat, text, speaker, on_delta)
         if on_delta is None and on_think is None:
@@ -1313,31 +1499,33 @@ class Engine:
                                usage_metadata=usage)
 
     def _call_with_tools(self, chat, message, speaker, on_delta):
-        # Run file-tool round trips until the model answers in text. Replies are not streamed here: the whole
-        # answer is passed to on_delta once it is finished. The first model call is counted by _send_solo;
-        # every later call is counted here, just before it is sent, so each Gemini call counts once.
-        totals = {"prompt_token_count": 0, "candidates_token_count": 0, "total_token_count": 0}
+        # Run sandbox file-tool round trips until the model answers in text. Replies are not streamed
+        # here: the whole answer is passed to on_delta once it is finished. The first model call is
+        # counted by _send_solo; every later call is counted here, so each Gemini call counts once.
+        total = {"prompt_token_count": 0, "candidates_token_count": 0, "total_token_count": 0}
         response = None
         for rnd in range(MAX_TOOL_ROUNDS + 1):
             if rnd > 0:
                 self._count_request()
             response = chat.send_message(message)
             usage = getattr(response, "usage_metadata", None)
-            for key in totals:
+            for key in total:
                 value = _usage(usage, key)
                 if isinstance(value, int):
-                    totals[key] += value
+                    total[key] += value
             calls = _function_calls(response)
             if not calls:
                 break
-            message = [types.Part.from_function_response(
-                           name=c.name,
-                           response=sandbox.run_tool(self.sandbox_root, c.name, dict(c.args or {})))
-                       for c in calls]
+            parts = []
+            for call in calls:
+                args = dict(call.args or {})
+                parts.append(types.Part.from_function_response(
+                    name=call.name, response=sandbox.run_tool(self.sandbox_root, call.name, args)))
+            message = parts
         answer = _text(response) if response is not None else None
         if on_delta and answer:
             on_delta(speaker, answer)
-        return SimpleNamespace(text=answer or None, thought="", usage_metadata=SimpleNamespace(**totals))
+        return SimpleNamespace(text=answer or None, thought="", usage_metadata=SimpleNamespace(**total))
 
     def _send_solo(self, processed, on_delta=None, on_think=None):
         result = TurnResult()
@@ -1378,12 +1566,17 @@ class Engine:
         result.turn_tokens = result.total_tokens if isinstance(result.total_tokens, int) else 0
 
         thought = getattr(response, "thought", "") or ""
+        emotion = ""
+        if self.emotions_active():
+            raw, emotion = take_emotion_tag(raw)
         self.full_history.append({"role": "user", "text": processed, "ts": _now_iso()})
-        self.full_history.append({"role": "model", "text": raw, "ts": _now_iso(), **({"thinking": thought} if thought else {})})
+        self.full_history.append({"role": "model", "text": raw, "ts": _now_iso(),
+                                  **({"thinking": thought} if thought else {}),
+                                  **({"emotion": emotion} if emotion else {})})
 
         result.model = self.model_name
         result.replies = [Reply(self.character_name, self.character_color, raw, self.restore(raw),
-                                self.model_name, get_request_bar(), thought)]
+                                self.model_name, get_request_bar(), thought, emotion)]
         return result
 
     # A group turn: the director picks the first speakers, then members may answer each other, up to AUTO_REPLY_LIMIT.
@@ -1454,6 +1647,10 @@ class Engine:
         self._count_request()
         block, color = self._member_block(name)
         contents = self._window(self.window_size(), labelled=True)
+        try:
+            emotion_on = expressions.state(name)["emotions"]
+        except OSError:
+            emotion_on = False
         resp = None
         for model in self.ordered_models(self.group_models):
             if on_delta:
@@ -1465,8 +1662,11 @@ class Engine:
                 chat = self.client.chats.create(
                     model=model,
                     history=contents if contents else None,
-                    config=types.GenerateContentConfig(system_instruction=self._group_system(), temperature=self.temperature_value(),
-                                                       thinking_config=thinking_config_for(model, self.thinking, self.reasoning_for(model))),
+                    config=types.GenerateContentConfig(
+                        system_instruction=self._group_system() + (EMOTION_NOTE if emotion_on else ""),
+                        temperature=self.temperature_value(),
+                        thinking_config=thinking_config_for(model, self.thinking, self.reasoning_for(model)),
+                        tools=_tools(False)),
                 )
                 ask = (f"[{label} respond to the group, answering the user's last message above]" if in_history
                        else f"[{label} respond to the group]: {request}")
@@ -1486,8 +1686,14 @@ class Engine:
             return False
         raw = text.strip()
         thought = getattr(resp, "thought", "") or ""
-        result.replies.append(Reply(label, color, raw, self.restore(raw), self.model_name, get_request_bar(), thought))
-        self.full_history.append({"role": "model", "speaker": name, "text": raw, "ts": _now_iso(), **({"thinking": thought} if thought else {})})
+        emotion = ""
+        if emotion_on:
+            raw, emotion = take_emotion_tag(raw)
+        result.replies.append(Reply(label, color, raw, self.restore(raw), self.model_name, get_request_bar(),
+                                    thought, emotion))
+        self.full_history.append({"role": "model", "speaker": name, "text": raw, "ts": _now_iso(),
+                                  **({"thinking": thought} if thought else {}),
+                                  **({"emotion": emotion} if emotion else {})})
         found = getattr(resp, "usage_metadata", None)
         for key, value in (("prompt", _usage(found, "prompt_token_count")),
                              ("cached", _usage(found, "cached_content_token_count")),
@@ -1506,7 +1712,8 @@ class Engine:
                 "playing and gives that member's character details. Speak only as that member.")
         if self.world_text:
             text += "\n\n--- The world this story is set in ---\n" + self.world_text
-        return text + NARRATIVE_INSTRUCTION + DIALOGUE_INSTRUCTION + FORMAT_INSTRUCTION + self.reply_length_clause()
+        return (text + NARRATIVE_INSTRUCTION + DIALOGUE_INSTRUCTION + FORMAT_INSTRUCTION + self.reply_length_clause()
+                + NOTES_GUIDE)
 
     # One member's own text: its card, its note from the user and its examples, sent in the message just before the
     # reply is asked for, after the shared history. Returns (text, colour).
@@ -1558,7 +1765,67 @@ class Engine:
                 return line[:limit]
         return ""
 
-    def _director_context(self, processed, window):
+    # The chat position the director's history starts at when the director runs on DeepSeek. A memory save runs every
+    # MEMORY_EVERY messages and cuts at summary_cut of the total at that point, so this is the cut of the last save point.
+    # It moves only at those points, which is what keeps the history the same between them. Without memory saves it still
+    # moves on the same schedule, so the history never grows past one save period.
+    def memory_anchor(self, total):
+        period = self.memory_every()
+        saved_at = (total // period) * period
+        base = self.summary_cut(saved_at) if saved_at > 0 else 0
+        # After an idle save the history starts at its last few messages, until the next period's save moves past them.
+        if self.idle_anchor is not None and base < self.idle_anchor <= total:
+            return self.idle_anchor
+        return base
+
+    # Messages between memory saves. A solo chat on DeepSeek saves every 30 turns, so its history can stay cached that long.
+    def memory_every(self):
+        # A solo chat on DeepSeek saves every DEEPSEEK_SOLO_MEMORY_EVERY messages, a group on DeepSeek every
+        # DEEPSEEK_MEMORY_EVERY. Other chats keep MEMORY_EVERY.
+        if self.cache_anchored():
+            return DEEPSEEK_SOLO_MEMORY_EVERY
+        return DEEPSEEK_MEMORY_EVERY if self._first_model_deepseek(self.is_group) else MEMORY_EVERY
+
+    # True for a solo chat whose first model is DeepSeek. Its prompt history starts at the last memory save and is kept
+    # the same until the next one, so the provider's cache can reuse it. Group members keep the sliding window.
+    def cache_anchored(self):
+        if self.is_group:
+            return False
+        return self._first_model_deepseek(False)
+
+    # True when the first model a chat would try is a DeepSeek one. group picks the group's models, else the chat's own.
+    def _first_model_deepseek(self, group):
+        models = self.group_models if group else self.fallback_models
+        model = (self.ordered_models(models) or [self.model_name])[0]
+        return str(model or "").startswith("deepseek:")
+
+    # The solo prompt history on DeepSeek: from the memory anchor to the newest message, stage-one quenched and not clipped.
+    # The anchor moves only at a save, so the history is the same text between saves.
+    def _anchored_parts(self, labelled, total):
+        start = self.memory_anchor(total)
+        recent = self.full_history[start:total]
+        # The first content sent should be the user's, as in the sliding window.
+        while recent and recent[0].get("role") != "user":
+            recent = recent[1:]
+            start += 1
+        roles = [e.get("role", "user") for e in recent]
+        texts = self._stage_one_texts(recent)
+        formatted = []
+        for e, role, text in zip(recent, roles, texts):
+            if labelled:
+                text = f"[{e.get('speaker', role)}]: {text}"
+            formatted.append((role, text))
+        return {"start": start, "formatted": formatted, "report": None, "clip_saved": 0}
+
+    # Stage 1 quenching only, one message at a time, so a message reads the same whichever history it sits in. The gated
+    # stage 2 looks at the whole list, so the anchored history leaves it out.
+    def _stage_one_texts(self, recent):
+        raw = [str(e.get("text") or "") for e in recent]
+        if not self.quench_enabled:
+            return raw
+        return [quench.strip(self.safe_text(text)) for text in raw]
+
+    def _director_context(self, processed, window, director_model):
         # What the director reads before it picks: members, chat so far, Mind Palace matches. Shared by both picks.
         labels = {display_for(m): m for m in self.group_members}   # display name -> folder name
         shown = list(labels)
@@ -1582,10 +1849,16 @@ class Engine:
             except Exception:
                 group_memory = ""
         total = len(self.full_history)
-        recent = self.full_history[-window:]
-        texts, _report = self._quench([str(e.get("text") or "") for e in recent],
-                                      [e.get("role", "user") for e in recent])
-        texts = self._clip_older(texts, max(0, total - window), total)
+        if str(director_model or "").startswith("deepseek:"):
+            # DeepSeek: the history runs from the memory anchor to the newest message. It is the same text between memory
+            # saves, so the provider's cache covers all of it, and the director's two picks share it.
+            recent = self.full_history[self.memory_anchor(total):]
+            texts = self._stage_one_texts(recent)
+        else:
+            recent = self.full_history[-window:]
+            texts, _report = self._quench([str(e.get("text") or "") for e in recent],
+                                          [e.get("role", "user") for e in recent])
+            texts = self._clip_older(texts, max(0, total - window), total)
         history_text = "\n".join(f"[{display_for(e['speaker']) if 'speaker' in e else e['role']}]: {t}"
                                  for e, t in zip(recent, texts))
         parts = [
@@ -1621,7 +1894,8 @@ class Engine:
             return list(members), f"Group chat active: the only member speaks: {[display_for(members[0])]} (OwO)"
         labels = {display_for(m): m for m in members}   # display name -> folder name
         shown = list(labels)
-        prompt = self._director_context(processed, SELECTOR_WINDOW) + (
+        director_model = self._director_model()
+        prompt = self._director_context(processed, SELECTOR_WINDOW, director_model) + (
             f"CRITICAL INSTRUCTION: Decide which members respond to this input and the order they speak in, using the "
             f"user's prompt and all the context above. Choose between 1 and {len(members)} members, only from {shown}. "
             "Leave out any member who should not speak this turn.\n"
@@ -1630,7 +1904,6 @@ class Engine:
         )
 
         # A failed call is not retried on another model; the turn falls back to one random member and says why.
-        director_model = self._director_model()
         selected, failure = [], None
         try:
             self._count_request(director_model)
@@ -1652,13 +1925,13 @@ class Engine:
     # Returns (folder name or None, failure text or None).
     def _select_next(self, processed, candidates, last):
         labels = {display_for(m): m for m in candidates}
-        prompt = self._director_context(processed, NEXT_WINDOW) + (
+        director_model = self._director_model()
+        prompt = self._director_context(processed, NEXT_WINDOW, director_model) + (
             f"CRITICAL INSTRUCTION: {display_for(last)} has just replied. Decide whether one more member should answer "
             f"right now so the members keep talking to each other. Choose one name from {list(labels)}, or reply NONE "
             "if nobody should speak next.\n"
             "Return ONLY that one name or NONE, with no extra text or explanation."
         )
-        director_model = self._director_model()
         try:
             self._count_request(director_model)
             chat = self.client.chats.create(model=director_model, config=types.GenerateContentConfig(temperature=0.7))
@@ -1734,12 +2007,17 @@ class Engine:
             parts.append("USER PERSONA:\n" + self.user_prompt)
         return "\n\n".join(parts)
 
-    def _one_shot(self, system, final_prompt):
+    def _one_shot(self, system, final_prompt, background=False):
         # One model call that is not saved to the chat. Counted like any other request. Returns (text, model).
+        # background=True runs it on the background chain (see _background_models) instead of the chat's own models.
         contents = self._window(self.window_size(), labelled=True)
-        models = self.group_models if (self.is_group and self.group_models) else self.fallback_models
+        if background:
+            order = self._background_models()
+        else:
+            models = self.group_models if (self.is_group and self.group_models) else self.fallback_models
+            order = self.ordered_models(models)
         last_err = None
-        for model in self.ordered_models(models):
+        for model in order:
             try:
                 self._count_request(model)
                 chat = self.client.chats.create(
@@ -1807,10 +2085,7 @@ class Engine:
             new_lines = [f"- [{e.get('speaker') or e.get('role')}]: {e['text']}" for e in span if e.get("text")]
             recent_events = eventgraph.recent_for_dream(self.graph)
         prompt = dreams.build_prompt(memory, auto, recent, new_lines, recent_events)
-        models = []
-        for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
-            if m and m not in models:
-                models.append(m)
+        models = self._memory_models()
         text = None
         for m in models:
             self.dream_calls += 1
@@ -1905,10 +2180,7 @@ class Engine:
         prompt = story_bible.build_prompt(memory, pinned, entries, self.summary_text, threads_open, events,
                                           story_bible.opening_lines(history), story_bible.recent_lines(history),
                                           self.user_display_name or "the reader")
-        models = []
-        for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
-            if m and m not in models:
-                models.append(m)
+        models = self._memory_models()
         text = None
         for m in models:
             self.bible_calls += 1
@@ -1950,10 +2222,7 @@ class Engine:
         text = str(text or "").strip()[:docextract.TEXT_LIMIT]
         if not text:
             raise RuntimeError("the document holds no readable text")
-        models = []
-        for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
-            if m and m not in models:
-                models.append(m)
+        models = self._memory_models()
         last_err = None
         for m in models:
             self.import_calls += 1
@@ -1985,10 +2254,7 @@ class Engine:
                   for e in self.full_history[-offscreen.NEW_MESSAGES:] if e.get("text")]
         threads = tensions.prompt_block(self.tensions) if self.tension_mode != "off" else ""
         prompt = offscreen.build_prompt(self.character_prompt, recent, record, threads)
-        models = []
-        for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
-            if m and m not in models:
-                models.append(m)
+        models = self._memory_models()
         text = None
         for m in models:
             self.director_calls += 1
@@ -2018,10 +2284,7 @@ class Engine:
         if not lines:
             return 0
         prompt = tensions.build_prompt(self.tensions, lines)
-        models = []
-        for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
-            if m and m not in models:
-                models.append(m)
+        models = self._memory_models()
         text, attempts = None, 0
         for m in models:
             attempts += 1
@@ -2058,9 +2321,9 @@ class Engine:
     def _dream_call(self, model):
         self.dream_calls += 1
 
-    def ask(self, system, prompt):
+    def ask(self, system, prompt, background=False):
         # One call with the scene in view, not saved to the chat. Returns the text the model wrote.
-        text, _ = self._one_shot(self._scene_system(system), prompt)
+        text, _ = self._one_shot(self._scene_system(system), prompt, background=background)
         return text
 
     def roll_event(self):
@@ -2143,6 +2406,19 @@ class Engine:
 
     def _load_summary(self):
         data = _read_json(self.summary_file, {})
+        # The idle save's state: where the next message's history starts, and how much of the chat it covers.
+        self.idle_anchor = None
+        self.idle_done = 0
+        # The first model the chat used on its last message. A different one on the next message means the user switched
+        # models, and the chat is saved before that message goes out.
+        self.last_first_model = None
+        if isinstance(data, dict):
+            self.last_first_model = str(data.get("last_model") or "") or None
+            try:
+                self.idle_anchor = int(data["idle_anchor"]) if data.get("idle_anchor") is not None else None
+                self.idle_done = max(0, int(data.get("idle_done", 0)))
+            except (TypeError, ValueError):
+                self.idle_anchor, self.idle_done = None, 0
         if isinstance(data, dict):
             self.summary_text = str(data.get("text") or "").strip()
             try:
@@ -2153,7 +2429,95 @@ class Engine:
     def _save_summary(self, text, covered):
         self.summary_text = text
         self.summary_covered = covered
-        _write_json(self.summary_file, {"text": text, "covered": covered})
+        self._write_summary_state()
+
+    def _write_summary_state(self):
+        _write_json(self.summary_file, {"text": self.summary_text, "covered": self.summary_covered,
+                                        "idle_anchor": self.idle_anchor, "idle_done": self.idle_done,
+                                        "last_model": self.last_first_model})
+
+    def _chat_first_model(self):
+        return str((self.ordered_models(self.fallback_models) or [self.model_name])[0] or "")
+
+    # A solo chat whose model changed since its last message gets a save that covers all but the last IDLE_KEEP_MESSAGES
+    # messages, before the next message goes out. On DeepSeek the prompt then starts from that save and those messages, so
+    # the new provider's cold cache is not asked to take the whole history. The save runs where the history is already
+    # cached, or as plain text on the Gemini chain when it is not: either way the new model's first message does not pay
+    # the whole history at the cache-miss rate.
+    def model_switch_save(self):
+        if self.is_group:
+            return False
+        now = self._chat_first_model()
+        prev = self.last_first_model
+        if prev == now:
+            return False
+        if prev is None and not str(now).startswith("deepseek:"):
+            # No recorded model to compare with: only a move to DeepSeek is worth a save, because its prompt is the one
+            # that starts from a cold cache. A chat with no history is left alone by the length check below.
+            self.last_first_model = now
+            self._write_summary_state()
+            return False
+        saved = False
+        if self.memory_enabled and len(self.full_history) > max(self.idle_done, IDLE_KEEP_MESSAGES):
+            before = self.idle_done
+            try:
+                if prev and str(prev).startswith("deepseek:") and self.cache_anchored():
+                    # DeepSeek to DeepSeek: the anchored history is cached under the model that last answered, so the
+                    # save runs there and reuses it. The Gemini chain follows in case that model fails.
+                    self.update_memory_bank(idle=True, models=[prev] + self._background_models())
+                else:
+                    self.update_memory_bank(idle=True, plain=True)
+                saved = self.idle_done != before
+            except Exception as err:
+                self.log(f"[yellow]Save before the model switch failed: {err}[/yellow]")
+        self.last_first_model = now
+        self._write_summary_state()
+        return saved
+
+    # A DeepSeek solo chat that has been idle gets a save covering all of it but the last IDLE_KEEP_MESSAGES. The next
+    # message then starts from those, not from the older history, which the cache may no longer hold. Returns True when
+    # the save made the change. The state file is written even when nothing changed, so an idle chat is not retried
+    # until a new message arrives.
+    # The length the chat's last request saw: the history before the reply just written, when there is one. A save made
+    # after a reply starts from the anchor that request used, not the anchor the save itself moves to.
+    def save_base(self, total):
+        return total - 1 if total and self.full_history[-1].get("role") != "user" else total
+
+    def idle_save(self):
+        if not self.cache_anchored() or not self.memory_enabled or len(self.full_history) <= self.idle_done:
+            self._write_summary_state()
+            return False
+        before = self.idle_done
+        self.update_memory_bank(idle=True)
+        self._write_summary_state()
+        return self.idle_done != before
+
+    # The save for a DeepSeek solo chat: the chat's own system prompt and history come first, so the save reuses the
+    # cached prefix, and the save instructions are the last message.
+    def _cached_save_call(self, model, missing_text, want_summary):
+        active = self.sandbox_active()
+        system = self.system_prompt + (SANDBOX_NOTE if active else "") + (EMOTION_NOTE if self.emotions_active() else "")
+        # The save starts from the anchor the chat's last request used, so its prompt shares that cached prefix. The reply
+        # just written, and anything after the chat's request, follow the prefix as text.
+        total = len(self.full_history)
+        chat_total = self.save_base(total)
+        parts = self._window_parts(self.window_size(), False, chat_total)
+        formatted = list(parts["formatted"])
+        later = self.full_history[chat_total:total]
+        formatted += [(e.get("role", "user"), text) for e, text in zip(later, self._stage_one_texts(later))]
+        contents = [types.Content(role=role, parts=[types.Part.from_text(text=text)]) for role, text in formatted]
+        prompt = (MEMORY_CHANGES_PROMPT + "\n\nNew History Snippet to Analyze:\nThe recent messages above.")
+        if missing_text:
+            prompt += "\n\nMessages that have just left the recent window, oldest first:\n" + missing_text
+        if want_summary:
+            prompt += SAVE_SUMMARY_REQUEST
+        chat = self.client.chats.create(
+            model=model,
+            history=contents if contents else None,
+            config=types.GenerateContentConfig(system_instruction=system, temperature=0.7,
+                                               safety_settings=safety_settings(), tools=_tools(active)),
+        )
+        return chat.send_message(prompt)
 
     def edit_message(self, index, text):
         # Replace the wording of one saved message (user line, reply or narrator event). No model call.
@@ -2243,31 +2607,45 @@ class Engine:
         _write_history(self.memory_file, self.full_history)
         return True
 
-    def update_memory_bank(self):
-        # Rewrite memory.md from the recent history, trying models in order.
+    def update_memory_bank(self, idle=False, plain=False, models=None):
+        # Rewrite memory.md from the recent history, trying models in order. plain sends the save as ordinary text on the
+        # non-DeepSeek models, used for a save before a model switch. models overrides the chain, for a save that has to
+        # start on one model: a switch between two DeepSeek models runs it where the anchored history is still cached.
         if not self.full_history:
             self.log("[yellow]No chat history to save yet! (OwO)[/yellow]")
             return
 
-        models = []
-        for m in MEMORY_MODELS_HEAD + [self.model_name] + MEMORY_MODELS_TAIL:
-            if m and m not in models:
-                models.append(m)
+        if models is None:
+            models = self._save_models()
+        else:
+            models = list(models)
+        if plain:
+            models = [m for m in models if not str(m).startswith(("deepseek:", "openrouter:"))] or models
 
-        cutoff = self.summary_cut(len(self.full_history))
+        # The save covers everything in the chat. An idle save leaves the last IDLE_KEEP_MESSAGES out, so the next message
+        # keeps them in its history.
+        cutoff = len(self.full_history) - (IDLE_KEEP_MESSAGES if idle else 0)
         start = max(min(self.summary_covered, cutoff), cutoff - SUMMARY_MAX_MESSAGES)
-        pending = self.full_history[start:cutoff]        # messages that have left the window since the last summary
-        want_summary = bool(pending)
+        pending = self.full_history[start:cutoff]        # messages not yet in the summary
+        want_summary = cutoff > self.summary_covered
         # each message is read to the length the window keeps it at, so the summary sees what the model saw
         summary_turns = "\n".join(f"{e.get('speaker') or e.get('role', 'user')}: {e.get('text', '')[:CLIP_CHARS]}" for e in pending)
+        # The cached save sends the chat's own prompt, which only pays off on a DeepSeek model, and only when it goes to
+        # the one whose cache holds that prompt. On the Gemini chain the compact plain save is sent instead.
+        cached = self.cache_anchored() and not plain and str(models[0] if models else "").startswith("deepseek:")
+        if cached:
+            # Messages from the prompt's history start on are already in the save's history, so only the ones before it
+            # are sent as text.
+            held_from = self.memory_anchor(self.save_base(len(self.full_history)))
+            missing = self.full_history[start:min(cutoff, held_from)]
+            summary_turns = "\n".join(f"{e.get('speaker') or e.get('role', 'user')}: {e.get('text', '')[:CLIP_CHARS]}" for e in missing)
 
         for m in models:
             try:
                 self._count_request(m)
-                time.sleep(2)
                 self.log(f"[dim magenta]Updating memory.md using {m}... (owo)[/dim magenta]")
 
-                turns = [f"{e['role']}: {e['text'][:300]}" for e in self.full_history[-MEMORY_SNIPPET:]]
+                turns = [f"{e['role']}: {e['text'][:300]}" for e in self.full_history[-max(MEMORY_SNIPPET, self.memory_every()):]]
                 snippet = self.safe_text("\n".join(turns))
 
                 existing = ""
@@ -2288,11 +2666,14 @@ class Engine:
                                "plain prose under 250 words covering what happened, decisions made and facts now established. "
                                "Keep the points from the existing summary that still matter.")
 
-                chat = self.client.chats.create(
-                    model=m,
-                    config=types.GenerateContentConfig(temperature=0.7, safety_settings=safety_settings()),
-                )
-                resp = chat.send_message(prompt)
+                if cached:
+                    resp = self._cached_save_call(m, self.safe_text(summary_turns) if summary_turns else "", want_summary)
+                else:
+                    chat = self.client.chats.create(
+                        model=m,
+                        config=types.GenerateContentConfig(temperature=0.7, safety_settings=safety_settings()),
+                    )
+                    resp = chat.send_message(prompt)
 
                 usage = getattr(resp, "usage_metadata", None)
                 total = usage.total_token_count if usage and hasattr(usage, "total_token_count") else 0
@@ -2319,6 +2700,9 @@ class Engine:
                 with open(self.memory_bank_file, "w", encoding="utf-8") as f:
                     f.write(merged)
                 if summary_text:
+                    if idle:
+                        self.idle_anchor = cutoff
+                        self.idle_done = len(self.full_history)
                     self._save_summary(summary_text, cutoff)
                 self._add_episodes(cutoff)
                 self._build_system_prompt()
@@ -2329,6 +2713,9 @@ class Engine:
                         self.tension_pass("save", self._count_request)
                     except Exception as err:
                         self.log(f"[yellow]Tension pass after the memory save failed: {err}[/yellow]")
+                    # The pass may have changed the threads that the prompt above was built from. Rebuild, so the prompt
+                    # matches the saved record. The next turn rebuilds it again anyway.
+                    self._build_system_prompt()
                 self.log(f"[dim green]Updated memory.md: {counts['added']} added, {counts['updated']} updated, "
                          f"{counts['removed']} removed.[/dim green]")
                 return

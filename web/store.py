@@ -209,7 +209,10 @@ DEFAULT_SETTINGS = {
     "char_messages_backfilled_v2": "0",
     "user_daily_cap": "100",     # Gemini calls per user per Pacific day
     "global_daily_cap": "800",   # all web users together, per Pacific day
-    "rpm_limit": "25",           # all web users together, per minute (key is 30 RPM)
+    "rpm_limit": "25",           # all web users together, per minute (key is 30 RPM); Gemini and the other providers
+    "deepseek_user_daily_cap": "500",    # DeepSeek calls per user per Pacific day (used only on DeepSeek accounts)
+    "deepseek_global_daily_cap": "1000", # DeepSeek calls for all web users together, per Pacific day
+    "deepseek_rpm_limit": "120",         # DeepSeek calls for all web users together, per minute
     "reply_min_tokens": "50",    # shortest reply length a user can pick, in tokens
     "reply_max_tokens": "1000",  # longest reply length a user can pick, in tokens
     "memory_enabled": "1",       # memory bank (memory.md and pinned facts): 1 on, 0 off
@@ -845,6 +848,19 @@ class Store:
         return self._run("SELECT COALESCE(SUM(requests), 0) AS n FROM usage WHERE day = ?",
                          (pacific_date(),), fetch="one")["n"]
 
+    # Requests today, split by provider. DeepSeek calls have their own caps; every other provider keeps the Gemini caps.
+    def user_requests_today(self, user_id, deepseek):
+        op = "=" if deepseek else "<>"
+        return self._run("SELECT COALESCE(SUM(requests), 0) AS n FROM usage_daily "
+                         f"WHERE day = ? AND user_id = ? AND provider {op} 'deepseek'",
+                         (pacific_date(), user_id), fetch="one")["n"]
+
+    def global_requests_by(self, deepseek):
+        op = "=" if deepseek else "<>"
+        return self._run("SELECT COALESCE(SUM(requests), 0) AS n FROM usage_daily "
+                         f"WHERE day = ? AND user_id <> ? AND provider {op} 'deepseek'",
+                         (pacific_date(), SYSTEM_USER), fetch="one")["n"]
+
     def usage_today_all(self):
         rows = self._run("SELECT user_id, requests, tokens FROM usage WHERE day = ?",
                          (pacific_date(),), fetch="all")
@@ -946,6 +962,12 @@ class Store:
 
     def attitude_get(self, user_id, character):
         return self._run("SELECT * FROM attitudes WHERE user_id = ? AND character = ?", (user_id, character), fetch="one")
+
+    # Every level this account has, in one read. The chat page only needs the word "married" for the
+    # small tag beside a name, so the scores and tone stay out of it.
+    def attitude_levels(self, user_id):
+        rows = self._run("SELECT character, level FROM attitudes WHERE user_id = ?", (user_id,), fetch="all")
+        return {row["character"]: row["level"] for row in rows}
 
     def attitude_save(self, user_id, character, row):
         cols = ", ".join(self.ATTITUDE_FIELDS)

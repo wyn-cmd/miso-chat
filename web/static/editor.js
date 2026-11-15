@@ -123,7 +123,7 @@ async function openEditor(name) {
   $("editorTitle").textContent = tr("Edit {name}", { name: name });
   const data = await api("GET", "/api/admin/characters/" + encodeURIComponent(name));
   $("edName").value = data.name;
-  $("edName").readOnly = true;
+  $("edName").readOnly = false;
   $("edCard").value = data.card;
   $("edContext").value = data.context;
   $("edAuthorNote").value = data.author_note || "";
@@ -137,6 +137,8 @@ async function openEditor(name) {
   setIconPreview(name, data.has_icon);
   setBgPreview(name, data.backgrounds || []);
   setMusicPreview(name, data.music || []);
+  $("edAgenticMsg").textContent = "";
+  setAgenticView(data.agentic);
   loadVoice(name);
   $("edColourText").classList.remove("invalid");
   $("edSandbox").closest("label").hidden = !(me && me.is_admin);   // sandboxes are an admin feature
@@ -276,6 +278,7 @@ async function saveCharacter(ev) {
     $("edErr").textContent = tr("Colour must be a hex code such as #c0392b.");
     return;
   }
+  const newName = $("edName").value.trim();
   const body = {
     card: $("edCard").value,
     context: $("edContext").value,
@@ -286,8 +289,11 @@ async function saveCharacter(ev) {
     profile: profileFromForm(),
     examples: readExamples(),
   };
+  if (newName && newName !== editing) body.new_name = newName;
   try {
     const saved = await api("PUT", "/api/admin/characters/" + encodeURIComponent(editing), body);
+    editing = saved.name;
+    $("editorTitle").textContent = tr("Edit {name}", { name: saved.name });
     setProfileFields(saved.profile);
     renderExamples(saved.examples);   // the saved list, so half-typed rows do not linger
     $("edOk").textContent = tr("Saved {name}. Chats pick up the change on their next message.", { name: saved.name });
@@ -636,6 +642,7 @@ async function loadPalace(name, uid) {
   }
   for (const id of ["edPalaceRecursive", "edPalaceBudget"]) $(id).disabled = viewing;
   $("edPalaceAdd").hidden = viewing;
+  $("edPalaceImport").hidden = viewing;
   $("edPalaceSave").hidden = viewing;
   renderPalace(viewing);
 }
@@ -677,6 +684,38 @@ async function savePalace() {
     $("edPalaceMsg").textContent = tr("Saved.");
   } catch (err) {
     $("edPalaceMsg").textContent = err.message;
+  }
+}
+
+async function importLorebook() {
+  // A SillyTavern World Info or JanitorAI lorebook file, added to the starting palace.
+  const pick = $("edPalaceFile");
+  const file = pick.files[0];
+  if (!file || !editing) {
+    $("edPalaceMsg").textContent = tr("Choose a lorebook JSON file first.");
+    return;
+  }
+  $("edPalaceMsg").textContent = tr("Importing...");
+  try {
+    const r = await fetch("/api/admin/characters/" + encodeURIComponent(editing) + "/palace/import", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-Requested-With": "roleplay", "Content-Type": "application/json" },
+      body: await file.text(),
+    });
+    let data = {};
+    try { data = await r.json(); } catch (e) { /* empty body */ }
+    if (!r.ok) throw apiError(r.status, data);
+    palaceEntries = data.entries || palaceEntries;
+    $("edPalaceRecursive").checked = !!data.recursive;
+    $("edPalaceBudget").value = data.budget;
+    renderPalace(false);
+    $("edPalaceMsg").textContent = [tr("{n} entries imported.", { n: data.added })]
+      .concat(data.notes || []).join(" ");
+  } catch (err) {
+    $("edPalaceMsg").textContent = err.message;
+  } finally {
+    pick.value = "";
   }
 }
 
@@ -817,6 +856,118 @@ async function removeMusic(id) {
     await refreshMusic();
   } catch (err) {
     $("edMusicErr").textContent = err.message;
+  }
+}
+
+// ---- Agentic mode and the emotion pictures under it. Both live in the character folder, so they travel
+// with the character. The pictures are what the chat shows beside a reply's name; an emoticon stands in
+// when one is missing.
+const EMOTION_ORDER = ["relaxed", "happy", "sad", "angry", "confused", "flustered", "steamy"];
+let agenticView = null;
+
+function agenticBase() {
+  return "/api/admin/characters/" + encodeURIComponent(editing) + "/agentic";
+}
+
+function setAgenticView(view) {
+  agenticView = view || { agentic: false, emotions: false, images: [], labels: {}, emoticons: {} };
+  $("edAgentic").checked = !!agenticView.agentic;
+  $("edEmotions").checked = !!agenticView.emotions;
+  renderEmotionGrid();
+}
+
+function renderEmotionGrid() {
+  const box = $("edEmotionGrid");
+  box.textContent = "";
+  const images = new Set(agenticView.images || []);
+  const theEmoticons = agenticView.emoticons || {};
+  for (const name of EMOTION_ORDER) {
+    const cell = el("div", null, "emotion-cell");
+    const label = (agenticView.labels || {})[name] || name;
+    cell.appendChild(el("div", label, "emotion-name"));
+    if (images.has(name)) {
+      const img = document.createElement("img");
+      img.className = "emotion-pic";
+      img.alt = "";
+      img.src = "/api/expression/" + encodeURIComponent(editing) + "/" + name + "?v=" + Date.now();
+      cell.appendChild(img);
+    } else {
+      cell.appendChild(el("div", theEmoticons[name] || "", "emotion-emote"));
+    }
+    const pick = document.createElement("input");
+    pick.type = "file";
+    pick.accept = "image/png,image/jpeg,image/webp,image/gif";
+    pick.setAttribute("aria-label", tr("Picture for {emotion}", { emotion: label }));
+    pick.addEventListener("change", () => {
+      const file = pick.files[0];
+      pick.value = "";
+      if (file) uploadEmotion(name, file);
+    });
+    cell.appendChild(pick);
+    if (images.has(name)) {
+      const del = el("button", tr("Remove"), "ghost small");
+      del.type = "button";
+      del.addEventListener("click", () => removeEmotion(name));
+      cell.appendChild(del);
+    }
+    box.appendChild(cell);
+  }
+}
+
+async function saveAgentic(agentic, emotions) {
+  $("edAgenticMsg").textContent = tr("Saving...");
+  try {
+    const view = await api("PUT", agenticBase(), { agentic: agentic, emotions: emotions });
+    setAgenticView(view);
+    $("edAgenticMsg").textContent = view.agentic ? tr("Agentic mode on.") : tr("Agentic mode off.");
+    if (typeof loadCharacters === "function") loadCharacters(false).catch(() => {});
+  } catch (err) {
+    $("edAgenticMsg").textContent = err.message;
+  }
+}
+
+async function saveEmotions(emotions) {
+  $("edEmotionMsg").textContent = tr("Saving...");
+  try {
+    const view = await api("PUT", agenticBase(), { agentic: $("edAgentic").checked, emotions: emotions });
+    setAgenticView(view);
+    $("edEmotionMsg").textContent = view.emotions ? tr("Emotion pictures on.") : tr("Emotion pictures off.");
+    if (typeof loadCharacters === "function") loadCharacters(false).catch(() => {});
+  } catch (err) {
+    $("edEmotionMsg").textContent = err.message;
+  }
+}
+
+async function uploadEmotion(name, file) {
+  $("edEmotionMsg").textContent = tr("Uploading...");
+  try {
+    const r = await fetch("/api/admin/characters/" + encodeURIComponent(editing) + "/expression/" + encodeURIComponent(name), {
+      method: "POST",
+      headers: { "X-Requested-With": "roleplay", "Content-Type": file.type || "application/octet-stream" },
+      credentials: "same-origin",
+      body: file,
+    });
+    let data = {};
+    try { data = await r.json(); } catch (e) { /* no body */ }
+    if (!r.ok) throw apiError(r.status, data);
+    setAgenticView(data);
+    $("edEmotionMsg").textContent = tr("Picture saved.");
+    if (typeof loadCharacters === "function") loadCharacters(false).catch(() => {});
+  } catch (err) {
+    $("edEmotionMsg").textContent = err.message;
+  }
+}
+
+async function removeEmotion(name) {
+  $("edEmotionMsg").textContent = tr("Removing...");
+  try {
+    const view = await api("DELETE", "/api/admin/characters/" + encodeURIComponent(editing)
+      + "/expression/" + encodeURIComponent(name));
+    setAgenticView(view);
+    $("edEmotionMsg").textContent = tr("Picture removed.");
+    if (typeof loadCharacters === "function") loadCharacters(false).catch(() => {});
+  } catch (err) {
+    $("edEmotionMsg").textContent = err.message;
   }
 }
 
@@ -1013,6 +1164,8 @@ $("edBgSave").addEventListener("click", uploadBackground);
 $("edBgFile").addEventListener("change", onBgFilesChosen);
 $("edMusicSave").addEventListener("click", uploadMusic);
 $("edMusicFile").addEventListener("change", onMusicFileChosen);
+$("edAgentic").addEventListener("change", () => saveAgentic($("edAgentic").checked, $("edEmotions").checked));
+$("edEmotions").addEventListener("change", () => saveEmotions($("edEmotions").checked));
 $("edVoiceVoice").addEventListener("change", saveVoice);
 $("edVoiceLang").addEventListener("change", saveVoice);
 $("edVoicePreview").addEventListener("click", previewVoice);
@@ -1076,6 +1229,43 @@ function addMyPalaceEntry() {
   renderPalaceList($("palList"), entries, false);
 }
 
+async function importMyLorebook() {
+  // A SillyTavern World Info or JanitorAI lorebook file, added to this account's own palace.
+  const pick = $("palFile");
+  const file = pick.files[0];
+  if (!file || !current) {
+    $("palMsg").textContent = tr("Choose a lorebook JSON file first.");
+    return;
+  }
+  $("palMsg").textContent = tr("Importing...");
+  try {
+    const r = await fetch("/api/character-palace/import?character=" + encodeURIComponent(current), {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-Requested-With": "roleplay", "Content-Type": "application/json" },
+      body: await file.text(),
+    });
+    let data = {};
+    try { data = await r.json(); } catch (e) { /* empty body */ }
+    if (!r.ok) throw apiError(r.status, data);
+    $("palRecursive").checked = !!data.recursive;
+    $("palBudget").value = data.budget;
+    $("palEpisodes").checked = data.episodes !== false;
+    setAutoFields(data.auto);
+    renderPalaceList($("palList"), data.entries, false);
+    $("palMsg").textContent = [tr("{n} entries imported.", { n: data.added })]
+      .concat(data.notes || []).join(" ");
+  } catch (err) {
+    $("palMsg").textContent = err.message;
+  } finally {
+    pick.value = "";
+  }
+}
+
+$("edPalaceImport").addEventListener("click", () => $("edPalaceFile").click());
+$("edPalaceFile").addEventListener("change", importLorebook);
+$("palImport").addEventListener("click", () => $("palFile").click());
+$("palFile").addEventListener("change", importMyLorebook);
 $("palaceOpen").addEventListener("click", openMyPalace);
 $("palAdd").addEventListener("click", addMyPalaceEntry);
 $("palSave").addEventListener("click", saveMyPalace);

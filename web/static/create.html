@@ -10,8 +10,10 @@
   <script src="/static/locales/en.js"></script>
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/base.css">
   <link id="uiTheme" rel="stylesheet" href="/static/redesign.css">
-  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic")document.getElementById("uiTheme").disabled=true;if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
+  <script>try{var rpUi=localStorage.getItem("rp_ui"),rpLook=["classic","moon","lantern","plexiglass","dusk"].indexOf(rpUi)<0?"moon":rpUi;if(rpLook==="dusk")rpLook="plexiglass";if(rpLook==="classic"){document.getElementById("uiTheme").disabled=true;for(const h of ["/static/tokens.css","/static/base.css"]){const l=document.querySelector('link[href="'+h+'"]');if(l)l.disabled=true;}}if(rpLook==="moon"||rpLook==="lantern"||rpLook==="plexiglass"){document.documentElement.dataset.look=rpLook;document.write('<link id="lookSheet" rel="stylesheet" href="/static/'+rpLook+'.css">')}}catch(e){}</script>
   <link rel="stylesheet" href="/static/create.css">
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
@@ -145,7 +147,7 @@
 
           <section class="wz-step" data-step="context" data-short="Context" hidden>
             <h2 class="wz-title">Context and author's note</h2>
-            <p class="wz-help">Context holds the memories, places and situations the character knows. The author's note is a short instruction sent near the end of every prompt, such as pacing or tone, without rewriting the character. Both are optional.</p>
+            <p class="wz-help">Context holds the memories, places and situations the character knows. The author's note is a short instruction kept in the cached part of every prompt, such as pacing or tone, without rewriting the character. Both are optional.</p>
             <div class="stack">
               <label>Context: memories, locations, situations
                 <textarea id="wzContext" rows="8" maxlength="20000" placeholder="Memories, places, and situations to add to this character."></textarea>

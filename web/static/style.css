@@ -37,6 +37,7 @@ body.centered { display:flex; min-height:100vh; align-items:center; justify-cont
 header { display:flex; gap:10px; align-items:center; height:52px; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--card); }
 header a, header button { font: inherit; }
 main { max-width: 960px; margin: 0 auto; padding: 16px; }
+body.admin main { max-width: 1400px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:24px; width:min(360px, 92vw); }
 h1 { margin:0 0 12px; font-size:22px; } h2 { font-size:18px; margin:18px 0 8px; }
 .brand { font-weight:700; color:var(--ink); letter-spacing:-0.01em; }
@@ -82,11 +83,54 @@ a { color:var(--accent); }
 .line.thinking { color:var(--muted); font-style:italic; }
 .line.note { color:var(--muted); font-size:13px; background:transparent; border:none; }
 .line.event { font-style:italic; }
+.line.image-line { background: transparent; border: none; padding: 0; }
+.scene-card { display:block; width: fit-content; max-width: min(440px, 100%); border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); box-shadow: 0 2px 10px rgba(0, 0, 0, .18); }
+.scene-img { display:block; width: 100%; height: auto; max-height: 420px; object-fit: contain; background: var(--theirs); }
+.scene-caption { margin-top: 6px; font-size: 13px; color: var(--muted); max-width: min(440px, 100%); }
+.scene-context { margin-top: 4px; font-size: 12px; color: var(--muted); max-width: min(440px, 100%); }
+.scene-context summary { cursor: pointer; }
+.vision-preview { margin: 0 0 10px; }
+.vision-preview img { display:block; max-width: 100%; max-height: 300px; border-radius: var(--radius); border: 1px solid var(--line); }
+.vision-text { white-space: pre-wrap; line-height: 1.5; background: var(--theirs); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; }
+.gallery-main { max-width: 1100px; margin: 0 auto; padding: 24px 18px 60px; }
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-top: 16px; }
+.gallery-card { display: flex; flex-direction: column; padding: 0; overflow: hidden; text-align: left; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+.gallery-card:hover { border-color: var(--accent); }
+.gallery-card-img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: var(--theirs); }
+.gallery-card-body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 3px; }
+.gallery-card-title { font-size: 15px; }
+.gallery-card-date { font-size: 11px; color: var(--muted); }
+.gallery-card-desc { font-size: 12px; color: var(--muted); margin: 2px 0 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.gallery-view { width: min(720px, 94vw); }
+.gallery-view-img { display: block; max-width: 100%; max-height: 52vh; margin: 0 auto 10px; border-radius: var(--radius); border: 1px solid var(--line); }
+.gallery-view-text { white-space: pre-wrap; max-height: 150px; overflow: auto; font-size: 14px; line-height: 1.45; background: var(--theirs); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px; }
+.gallery-view h3 { margin: 12px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 /* A scenario opening in a new chat: shown like a message, but nothing is sent until Start is pressed. */
 .line.scenario:not(.note) { background: color-mix(in srgb, var(--accent) 8%, var(--card)); border:1px solid var(--accent-soft); }
 .line.scenario .speaker { text-transform:uppercase; letter-spacing:.05em; font-size:11px; }
 .scenario-actions { display:flex; gap:8px; margin-top:10px; }
 .speaker { font-size:11px; font-weight:700; color:var(--muted); margin-bottom:2px; }
+/* A face beside the speaker: the character's emotion picture when it has one, its icon in a group chat,
+   and a small emoticon when an emotion has no picture. */
+.speaker-row { display:flex; align-items:center; gap:6px; margin-bottom:2px; }
+.speaker-row .speaker { margin-bottom:0; }
+.speaker-face { width:28px; height:28px; border-radius:50%; object-fit:cover; flex:none;
+  background:rgba(128,128,128,.15); }
+.speaker-emote { font-size:12px; opacity:.75; letter-spacing:.02em; white-space:nowrap; }
+@media (max-width:600px) { .speaker-face { width:24px; height:24px; } }
+/* A spoken line inside a novel's prose, with the speaker's face and name above it. */
+.novel-line { margin:10px 0 12px; }
+.novel-line .speaker-row { margin-bottom:3px; }
+.novel-line .speaker { font-size:12px; }
+/* Emotion pictures in the character editor: one cell per emotion, a preview and a picker. */
+.emotion-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:10px; }
+.emotion-cell { display:flex; flex-direction:column; align-items:center; gap:4px; font-size:11px; }
+.emotion-cell .emotion-name { color:var(--muted); font-weight:700; }
+.emotion-cell .emotion-pic, .emotion-cell .emotion-emote {
+  width:64px; height:64px; border-radius:50%; object-fit:cover; display:flex; align-items:center;
+  justify-content:center; background:rgba(128,128,128,.14); }
+.emotion-cell .emotion-emote { font-size:14px; color:var(--muted); }
+.emotion-cell input[type=file] { width:96px; font-size:11px; }
 .text { white-space: pre-wrap; word-wrap: break-word; }
 .composer { display:flex; gap:10px; margin-top:10px; }
 /* monthly token budget bar, shown after the request and token counter */
@@ -146,6 +190,7 @@ th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); 
 .chat-title { font-size: 18px; margin: 0; }
 .bar { flex: none; }
 .log { flex: 1; min-height: 200px; height: auto; }
+.load-earlier { display: block; margin: 2px auto 10px; }
 .scrim { position: fixed; top: 52px; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,.55); z-index: 15; }
 .menu-btn { padding: 4px 8px; line-height: 0; }
 body.locked .sidebar, body.locked .menu-btn { display: none; }
@@ -229,6 +274,12 @@ body { --chat-size: 15px; }
 .char-icon.placeholder { color: var(--speaker-text, var(--muted)); background: var(--dot, var(--input)); border-color: transparent; }
 /* popular badge (sidebar and home cards) and the home card stats line */
 .char-badge { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); vertical-align: middle; }
+/* A small tag beside the name of a character the user has married. */
+.married-badge { display: inline-block; flex: none; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; line-height: 1.35; letter-spacing: .03em; vertical-align: middle;
+  white-space: nowrap; color: var(--accent-2);
+  background: color-mix(in oklab, var(--accent) 14%, var(--card));
+  border: 1px solid color-mix(in oklab, var(--accent) 40%, transparent); }
 .home-stats { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
 
 /* favourite star: on sidebar items, and on home cards (top right, beside the i button) */
@@ -242,6 +293,9 @@ body { --chat-size: 15px; }
 #favOnly.on { background: var(--accent); color: #fff; }
 .sidebar .char-icon { width: 38px; height: 38px; }
 .char-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The name and the married tag stay together; the star and pencil keep the row's right edge. */
+.char-label { flex: 1; min-width: 0; display: flex; align-items: center; }
+.char-label .char-name { flex: 0 1 auto; }
 .char-edit { opacity: .55; padding: 0 4px; font-size: 13px; }
 .char-item:hover .char-edit { opacity: 1; }
 .side-section { margin-top: 8px; }

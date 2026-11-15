@@ -11,9 +11,6 @@
 
 import re
 
-# The stored columns, in the order the store keeps them.
-KEYS = ("energy", "affinity", "emotion", "streak", "last_update", "last_user", "reached")
-
 EMOTIONS = ("calm", "warm", "tired", "lonely")
 ENERGY_MAX = 100.0
 AFFINITY_MAX = 100.0
@@ -25,7 +22,8 @@ TOKENS_PER_EXCHANGE = 7000  # estimate: a 25-message window at about 150 tokens 
                             # block of about 2,000, and a reply of about 300, with headroom
 REST_AFTER_HOURS = 2       # a silence this long is a rest, and the conversation count starts again
 REST_PER_HOUR = 6.0        # energy regained per hour of silence
-EXCHANGE_GAIN = 0.8 / 3    # affinity gained per exchange
+EXCHANGE_GAIN = 0.9 / 3    # affinity gained per exchange
+MOOD_LINK_RATE = 0.08      # each reply, mood affinity closes this share of its gap to the relationship's affection
 FADE_AFTER_HOURS = 168    # silence before affinity starts to fade
 FADE_PER_DAY = 0.5         # affinity lost per day of silence beyond that
 AFFINITY_FLOOR = 10.0
@@ -55,6 +53,63 @@ COMFORT_KEYS = [
 
 def comforting(text):
     return any(pattern.search(text or "") for pattern in COMFORT_KEYS)
+
+
+# What a message does to affinity beyond the flat gain each exchange. Each event is a gain (or a loss, when negative)
+# for a message that matches one of its phrases. The gains from the user's message and half of the character's reply
+# are added together and capped per exchange, so no amount of warm wording pushes affinity far in one turn.
+AFFINITY_EVENTS = {
+    "greeting": (0.8, [r"\bgood (morning|night|evening)\b", r"\bsweet dreams\b", r"\btake care\b",
+                       r"\bhope you('re| are) (well|ok|okay|doing well|sleeping)\b", r"\bhow'?s your day\b"]),
+    "humour": (0.8, [r"\bhaha+\b", r"\bhehe+\b", r"\blol\b", r"\blmao\b", r"\bmade me laugh\b", r"\bthat'?s funny\b",
+                     r"\byou'?re funny\b", r"\bso funny\b"]),
+    "missed": (1.5, [r"\bi (really )?missed you\b", r"\bmiss you\b", r"\bglad to see you\b", r"\bgood to see you\b",
+                     r"\bgood to hear from you\b", r"\bi'?m back\b", r"\bit'?s me again\b"]),
+    "delight": (0.6, [r"\bi'?m (so )?happy\b", r"\blove this\b", r"\bthat'?s (great|wonderful|lovely)\b",
+                      r"\blovely day\b", r"\bwhat a (great|lovely|wonderful)\b"]),
+    "kind": (0.6, [r"\bthank(s| you)\b", r"\bappreciate (you|it|that)\b", r"\bgrateful\b"]),
+    "cared": (0.8, [r"\bhow have you been\b", r"\bhow are you (doing|feeling)\b", r"\bare you (alright|ok|okay)\b",
+                    r"\bi was thinking (about|of) you\b", r"\bthinking of you\b"]),
+    "dismissed": (-1.0, [r"\bgo away\b", r"\bleave me alone\b", r"\bshut up\b", r"\bi'?m bored\b", r"\byou'?re boring\b"]),
+    "unkind": (-1.0, [r"\bidiot\b", r"\bstupid\b", r"\buseless\b", r"\bworthless\b", r"\bi hate you\b"]),
+}
+AFFINITY_EVENTS_COMPILED = {name: (gain, [re.compile(p, re.I) for p in pats])
+                            for name, (gain, pats) in AFFINITY_EVENTS.items()}
+# Most a message may add through events in one exchange (the user's words, and half the reply's).
+AFFINITY_EVENT_CAP = 3.0
+REPLY_SCALE = 0.5
+# A user who comes back after a long silence gets this much, on top of the flat gain, whatever they say.
+WELCOME_BACK = 0.5
+# Words that cancel an event when they sit just before it, as in the attitude keywords.
+_NEGATIONS = {"not", "never", "nothing", "nobody", "without", "dont", "didnt", "doesnt", "wont", "cant", "cannot",
+              "isnt", "arent", "wasnt", "werent"}
+
+
+def _event_hits(text):
+    # Each event at most once per message, with no negation in the words just before its phrase.
+    hits = []
+    for name, (gain, patterns) in AFFINITY_EVENTS_COMPILED.items():
+        for p in patterns:
+            found = False
+            for m in p.finditer(text):
+                clause = re.split(r"[.!?;\n]", text[:m.start()])[-1]
+                before = [w.replace("'", "").lower() for w in re.findall(r"[\w']+", clause)][-3:]
+                if not _NEGATIONS.intersection(before):
+                    found = True
+                    break
+            if found:
+                hits.append(gain)
+                break
+    return hits
+
+
+def affinity_from_text(text, reply=""):
+    # The event gains for one exchange: the user's words, plus half of the character's reply, the positives capped.
+    user = _event_hits(text or "")
+    char = _event_hits(reply or "")
+    positive = sum(g for g in user if g > 0) + REPLY_SCALE * sum(g for g in char if g > 0)
+    negative = sum(g for g in user if g < 0) + REPLY_SCALE * sum(g for g in char if g < 0)
+    return min(AFFINITY_EVENT_CAP, positive) + negative
 
 TONE = {
     "calm": "You are in an ordinary mood.",
@@ -117,15 +172,18 @@ def lite_allowance(daily_tokens, request_cap):
 # One exchange: the user wrote and the character answered. The state is first moved to now. A silence long enough
 # to count as a rest starts the conversation count again. Only exchanges past the allowance cost energy. Every
 # exchange adds affinity and resets silence.
-def on_exchange(state, now, allowance, text=""):
+def on_exchange(state, now, allowance, text="", reply=""):
     s = advance(state, now)
-    if (now - s["last_user"]) / 3600 >= REST_AFTER_HOURS:
+    back_after_silence = (now - s["last_user"]) / 3600 >= REST_AFTER_HOURS
+    if back_after_silence:
         s["streak"] = 0
     if s["streak"] >= allowance:
         s["energy"] = max(0.0, s["energy"] - EXHAUST_COST)
-    s["affinity"] = min(AFFINITY_MAX, s["affinity"] + EXCHANGE_GAIN)
+    gain = EXCHANGE_GAIN + affinity_from_text(text, reply) + (WELCOME_BACK if back_after_silence else 0.0)
     if comforting(text):
+        gain += 0.5   # a cuddle or a rest in the chat is closeness as well as energy
         s["energy"] = min(ENERGY_MAX, s["energy"] + COMFORT_GAIN)
+    s["affinity"] = max(AFFINITY_FLOOR, min(AFFINITY_MAX, s["affinity"] + gain))
     s["streak"] += 1
     s["last_user"] = now
     s["emotion"] = next_emotion(s["emotion"], s["energy"], s["affinity"], 0.0)
@@ -133,6 +191,18 @@ def on_exchange(state, now, allowance, text=""):
 
 
 # A lonely character reaches out once per silence: not again until the user writes.
+# Moves mood affinity a little toward the relationship's affection. Only mood follows the relationship, never the other way.
+def link_to(state, affection):
+    s = dict(state)
+    target = _clamp_value(float(affection), AFFINITY_FLOOR, AFFINITY_MAX)
+    s["affinity"] = _clamp_value(s["affinity"] + (target - s["affinity"]) * MOOD_LINK_RATE, AFFINITY_FLOOR, AFFINITY_MAX)
+    return s
+
+
+def _clamp_value(value, low, high):
+    return max(low, min(high, value))
+
+
 def outreach_due(state, now):
     return state["emotion"] == "lonely" and state["reached"] < state["last_user"]
 
@@ -164,11 +234,13 @@ def affinity_band(value):
 
 
 # The block the engine puts in the prompt. The numbers are for the character's own tone, not for the user to see.
-def describe(state):
+def describe_stable(state):
+    # The part of the mood that changes only with the emotion or a band (energy low/medium/high, affinity distant to
+    # devoted). The numbers change every turn, so they are not sent. This text sits in the system prompt, which is
+    # rebuilt only when it changes.
     energy, affinity = round(state["energy"]), round(state["affinity"])
     return "\n".join([
-        "--- How you feel right now (kept by the simulation; act on it, do not discuss the numbers) ---",
-        f"Emotion: {state['emotion']}. Energy: {energy} of 100 ({energy_band(energy)}). "
-        f"Affinity: {affinity} of 100 ({affinity_band(affinity)}).",
+        "[How you feel right now]",
+        f"Emotion: {state['emotion']}. Energy {energy_band(energy)}. Affinity {affinity_band(affinity)}.",
         TONE[state["emotion"]],
     ])

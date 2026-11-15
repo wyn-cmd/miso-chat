@@ -9,14 +9,25 @@ import os
 import shutil
 
 PROVIDER_FILE = "providers.json"
+OPENROUTER_MAX_KEYS = 20
 DEFAULTS = {
     "deepseek": {"enabled": False, "api_key": ""},
+    # Free OpenRouter models only. The model list is fetched from OpenRouter, so nothing is named here.
+    # api_keys is a pool of keys, one per line in the admin box. api_key keeps the first one.
+    "openrouter": {"enabled": False, "api_key": "", "api_keys": []},
     "local": {"enabled": False, "base_url": "http://127.0.0.1:8000/v1", "api_key": "", "models": ""},
     "claude": {"enabled": False, "exe": ""},
+    # Opencode's own free models, reached by shelling out to the local `opencode` CLI.
+    "opencode": {"enabled": False, "exe": "opencode"},
     # A llama.cpp server started with an audio model, or any server with an OpenAI-compatible speech endpoint.
     # style "llama" posts to /tts and accepts a reference clip; style "openai" posts to /v1/audio/speech.
     "audio": {"enabled": False, "base_url": "http://127.0.0.1:8080", "api_key": "", "style": "llama",
               "model": "", "lang": "en", "voice": "female", "timeout": 60, "sample_rate": 24000},
+    # Optional extras. The vision model is the fallback for a chat model that cannot see images; the image
+    # model draws scene pictures for the chat and the gallery. Both stay hidden from users until an admin
+    # enables them and names a model here.
+    "vision": {"enabled": False, "model": ""},
+    "image": {"enabled": False, "model": ""},
 }
 
 
@@ -50,6 +61,15 @@ def save(data_dir, cfg):
     os.replace(tmp, _path(data_dir))
 
 
+def openrouter_keys(cfg):
+    # The OpenRouter pool: the saved list, or the single key an older settings file holds.
+    section = cfg.get("openrouter") or {}
+    keys = [k for k in (section.get("api_keys") or []) if isinstance(k, str) and k]
+    if not keys and section.get("api_key"):
+        keys = [section["api_key"]]
+    return keys
+
+
 def mask(secret):
     if not secret:
         return ""
@@ -63,16 +83,22 @@ def public_view(cfg):
     return {
         "deepseek": {"enabled": bool(cfg["deepseek"]["enabled"]), "key_set": bool(cfg["deepseek"]["api_key"]),
                      "key_hint": mask(cfg["deepseek"]["api_key"])},
+        "openrouter": {"enabled": bool(cfg["openrouter"]["enabled"]), "key_set": bool(openrouter_keys(cfg)),
+                       "key_hints": [mask(k) for k in openrouter_keys(cfg)]},
         "local": {"enabled": bool(cfg["local"]["enabled"]), "base_url": cfg["local"]["base_url"],
                   "key_set": bool(cfg["local"]["api_key"]), "key_hint": mask(cfg["local"]["api_key"]),
                   "models": cfg["local"]["models"]},
-        "claude": {"enabled": bool(cfg["claude"]["enabled"]), "exe": cfg["claude"]["exe"],
-                   "found": bool(shutil.which(cfg["claude"]["exe"] or "claude"))},
+  "claude": {"enabled": bool(cfg["claude"]["enabled"]), "exe": cfg["claude"]["exe"],
+             "found": bool(shutil.which(cfg["claude"]["exe"] or "claude"))},
+  "opencode": {"enabled": bool(cfg["opencode"]["enabled"]), "exe": cfg["opencode"]["exe"],
+               "found": bool(shutil.which(cfg["opencode"]["exe"] or "opencode"))},
         "audio": {"enabled": bool(cfg["audio"]["enabled"]), "base_url": cfg["audio"]["base_url"],
                   "key_set": bool(cfg["audio"]["api_key"]), "key_hint": mask(cfg["audio"]["api_key"]),
                   "style": cfg["audio"]["style"], "model": cfg["audio"]["model"],
                   "lang": cfg["audio"]["lang"], "voice": cfg["audio"]["voice"],
                   "timeout": cfg["audio"]["timeout"], "sample_rate": cfg["audio"]["sample_rate"]},
+        "vision": {"enabled": bool(cfg["vision"]["enabled"]), "model": cfg["vision"]["model"]},
+        "image": {"enabled": bool(cfg["image"]["enabled"]), "model": cfg["image"]["model"]},
     }
 
 
@@ -86,6 +112,21 @@ def update(data_dir, patch):
             if key not in DEFAULTS[name]:
                 continue
             if key in ("api_key",) and (val is None or val == ""):
+                continue
+            if key == "api_keys":
+                # One key per line, or a list. Blank keeps the saved pool. Any text replaces the whole pool.
+                if isinstance(val, str):
+                    items = val.replace(",", "\n").splitlines()
+                else:
+                    items = val if isinstance(val, list) else []
+                keys = []
+                for item in items:
+                    item = str(item).strip()
+                    if item and item not in keys:
+                        keys.append(item)
+                if keys:
+                    cfg[name]["api_keys"] = keys[:OPENROUTER_MAX_KEYS]
+                    cfg[name]["api_key"] = keys[0]
                 continue
             if key == "enabled":
                 cfg[name][key] = bool(val)

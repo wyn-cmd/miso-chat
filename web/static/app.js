@@ -7,12 +7,17 @@ const creatorMap = new Map();   // solo character -> who made it, and whether th
 const profileMap = new Map();   // solo character -> headline and info, handed to the game dialog
 let favSet = new Set();            // characters this account has starred
 let popularSet = new Set();        // top 10% of characters by user-sent messages
+let marriedSet = new Set();        // characters whose relationship level has reached married
 let editableSet = new Set();   // characters this account may change (shows the sidebar pencil)
 let busy = false;     // a turn is streaming: keep the character list and buttons locked
 let picking = false;   // Select mode is on: every line shows a pick box
 const picked = new Set();   // saved-chat positions picked for deletion
 let novelNames = {};           // novel ID -> its name, for the sidebar and the chat header
 let worldCache = { worlds: [], default: null };   // the account's worlds and default, as the server last sent them
+const HISTORY_PAGE = 120;   // messages loaded at first; Load earlier asks for one more page
+const HISTORY_MAX = 2000;   // matches HISTORY_PAGE_MAX in web/app.py
+let historyLimit = HISTORY_PAGE;
+let historyHasMore = false;
 
 function setSidebar(open) {
   $("sidebar").classList.toggle("open", open);
@@ -53,6 +58,7 @@ function applyFont(name) {
 let colorMap = {};        // name -> "#rrggbb"
 let iconSet = new Set(); // characters that have an icon.png/jpg/webp on the server
 let bgIds = {};   // solo character -> ids of its backgrounds on the server
+let expressionsByName = {};   // character -> {images: [emotions], emoticons, default}, when its emotion pictures are on
 let musicByName = new Map();   // solo character -> its theme music tracks (see theme_music.js)
 let defaultArt = [];   // shared default backgrounds, used when a character has none
 const BUBBLE_CHOICES = ["badge", "bubble"];
@@ -161,6 +167,8 @@ function setBusy(on) {
   for (const b of document.querySelectorAll(".turn-tools button")) b.disabled = on;
   $("memBtn").disabled = on;
   $("gamesBtn").disabled = on;
+  $("describeBtn").disabled = on;
+  $("sceneBtn").disabled = on;
 }
 
 function showPassword(note) {
@@ -186,12 +194,22 @@ function windowShare(w) {
   return w.limit > 0 ? w.used / w.limit : 1;
 }
 
+function applyMediaFeatures() {
+  // Describe image, Generate scene and Gallery stay hidden unless the admin has connected the models.
+  const f = (me && me.features) || {};
+  $("describeBtn").hidden = !f.vision;
+  $("sceneBtn").hidden = !(f.image && current);
+  $("galleryBtn").hidden = !f.gallery;
+  if ($("galleryLink")) $("galleryLink").hidden = !f.gallery;
+}
+
 function renderUsage() {
   // Memory is an admin switch; hide its button and its Story & memory entry when it is off.
   $("memBtn").hidden = !!(me && me.features && me.features.memory === false);
   $("memStoryLink").hidden = $("memBtn").hidden;
   // Mini-games are off until an admin turns them on.
   $("gamesBtn").hidden = !(me && me.features && me.features.minigames);
+  applyMediaFeatures();
   if (!me || !me.usage) return;
   const u = me.usage;
   // two forms of the same line: the long one on desktop, a compact one for phones (CSS picks which shows)
@@ -352,11 +370,116 @@ function addTool(box, node) {
   row.insertBefore(node, row.querySelector(".speak-btn") || row.querySelector(".stamp"));
 }
 
-function addLine(speaker, text, cls, time) {
+// A character's face for one message: the picture for the emotion the model set, a character's own icon
+// in a group chat, or nothing. Emotion pictures win over the icon, so the face changes with the reply.
+function faceFor(name, emotion, withIcon) {
+  const info = expressionsByName[name];
+  if (info) {
+    const wanted = emotion || info.default || "relaxed";
+    if (info.images.indexOf(wanted) !== -1) {
+      return "/api/expression/" + encodeURIComponent(name) + "/" + encodeURIComponent(wanted);
+    }
+  }
+  if (withIcon && iconSet.has(name)) return "/api/icon/" + encodeURIComponent(name);
+  return null;
+}
+
+function speakerFaceUrl(speaker, emotion) {
+  const info = expressionsByName[speaker];
+  return faceFor(speaker, emotion, Boolean(info) || groupNames.has(current));
+}
+
+// The emoticon beside the name when the character has emotion pictures on but no picture for this
+// emotion. An emotion the model did not set falls back to the character's default.
+function speakerEmote(speaker, emotion) {
+  const info = expressionsByName[speaker];
+  if (!info) return "";
+  const wanted = emotion || info.default || "relaxed";
+  if (info.images.indexOf(wanted) !== -1) return "";   // the picture already says it
+  return (info.emoticons && info.emoticons[wanted]) || "";
+}
+
+// A novel's reply is prose. A line that starts with [[Name|emotion]], from a cast member with emotion
+// pictures on, is a spoken line: it gets that member's face and name beside the words. The rest stays prose.
+const NOVEL_TAG = /^\[\[([^\]|]{1,80})\|([a-z]{3,12})\]\]\s*(.*)$/;
+
+function novelLine(name, emotion, rest) {
+  const wrap = el("div", null, "novel-line");
+  const head = el("div", null, "speaker-row");
+  const face = faceFor(name, emotion, true);
+  if (face) {
+    const img = el("img", "speaker-face");
+    img.alt = "";
+    img.src = face;
+    head.appendChild(img);
+  }
+  head.appendChild(el("div", name, "speaker"));
+  const emote = speakerEmote(name, emotion);
+  if (emote) head.appendChild(el("span", emote, "speaker-emote"));
+  wrap.appendChild(head);
+  const body = el("div", null, "text");
+  renderMarkdown(rest, body);
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function renderNovelBody(box, text) {
+  const cast = novelCast.get(current) || [];
+  box.textContent = "";
+  const prose = [];
+  const flush = () => {
+    if (!prose.length) return;
+    const part = document.createElement("div");
+    renderMarkdown(prose.join("\n"), part);
+    box.appendChild(part);
+    prose.length = 0;
+  };
+  for (const line of String(text || "").split("\n")) {
+    if (line.indexOf("[[") === 0 && line.indexOf("]]") === -1) continue;   // a tag still arriving
+    const hit = NOVEL_TAG.exec(line);
+    if (!hit) { prose.push(line); continue; }
+    const name = hit[1].trim();
+    if (cast.indexOf(name) === -1) { prose.push(hit[3]); continue; }   // not in this novel: plain words
+    flush();
+    box.appendChild(novelLine(name, hit[2], hit[3]));
+  }
+  flush();
+}
+
+// Draws a message's body: prose for a novel, markdown everywhere else.
+function renderMessageBody(box, text, speaker) {
+  if (speaker && typeof isNovelName === "function" && isNovelName(current) && String(text || "").indexOf("[[") !== -1) {
+    renderNovelBody(box, text);
+    return;
+  }
+  renderMarkdown(text, box);
+}
+
+function addLine(speaker, text, cls, time, emotion, host) {
   const box = el("div", null, "line " + (cls || ""));
   if (speaker) {
     const name = el("div", speaker, "speaker");
-    box.appendChild(name);
+    box.dataset.speaker = speaker;   // lets a new relationship level find the names already drawn
+    const badge = marriedBadge(speaker);
+    if (badge) name.appendChild(badge);
+    // A streaming bubble has no emotion yet: the finished line draws the face, so it never flashes a default.
+    const theirs = !!(cls && cls.includes("theirs")) && !(cls && cls.includes("streaming"));
+    const face = theirs ? speakerFaceUrl(speaker, emotion) : null;
+    const emote = theirs ? speakerEmote(speaker, emotion) : "";
+    if (face || emote) {
+      const row = el("div", null, "speaker-row");
+      if (face) {
+        const img = el("img", "speaker-face");
+        img.alt = "";
+        img.src = face;
+        row.appendChild(img);
+      }
+      row.appendChild(name);
+      if (emote) row.appendChild(el("span", emote, "speaker-emote"));
+      box.appendChild(row);
+    } else {
+      box.appendChild(name);
+    }
     if (cls && cls.includes("theirs")) {
       colourLine(box, speaker);
       // A character's name opens the story bible for this chat.
@@ -366,7 +489,7 @@ function addLine(speaker, text, cls, time) {
     }
   }
   const body = el("div", null, "text");
-  renderMarkdown(text, body);
+  renderMessageBody(body, text, speaker);
   box.appendChild(body);
   if (speaker && cls && cls.includes("theirs") && window.ttsMessageButton) {
     const speak = window.ttsMessageButton(box, speaker);
@@ -375,8 +498,9 @@ function addLine(speaker, text, cls, time) {
   if (time) addStamp(box, time);
   const log = $("log");
   // A message the reader just sent always comes into view; other lines follow only when already at the bottom.
-  const follow = nearBottom(log) || (cls || "").includes("mine");
-  log.appendChild(box);
+  // A history render passes a fragment and scrolls once at the end, so it never forces a layout per line.
+  const follow = !host && (nearBottom(log) || (cls || "").includes("mine"));
+  (host || log).appendChild(box);
   if (follow) log.scrollTop = log.scrollHeight;
   return box;
 }
@@ -442,29 +566,46 @@ function setChatHeader(name) {
   }
 }
 
-function renderHistory(messages) {
-  $("log").textContent = "";
+function renderHistory(messages, startIndex, hasMore, scrollBottom) {
+  const log = $("log");
+  const start = startIndex || 0;
+  log.textContent = "";
   picked.clear();   // positions change with every render, so a pick list never carries over
+  if (start === 0 && !hasMore) historyLimit = Math.min(HISTORY_MAX, Math.max(HISTORY_PAGE, messages.length));
+  historyHasMore = !!hasMore && historyLimit < HISTORY_MAX;
   if (!messages.length) {
     loadScenarioDraft(current);   // an opening for a new chat, if the account asked for one
   } else {
+    if (hasMore && historyLimit < HISTORY_MAX) {
+      const earlier = el("button", tr("Load earlier messages"), "ghost small load-earlier");
+      earlier.type = "button";
+      earlier.addEventListener("click", () => {
+        loadEarlier(earlier).catch((err) => { $("chatErr").textContent = err.message; });
+      });
+      log.appendChild(earlier);
+    }
+    // Build the whole history off-screen, then attach it in one step. Appending each line to the live
+    // log would read scrollHeight and scroll once per message, which is slow on a long chat.
+    const frag = document.createDocumentFragment();
     messages.forEach((m, i) => {
       const isEvent = m.speaker === "Narrator";   // random events are saved as user-side entries, shown as notes
       const isGame = !!m.game;   // a line spoken during a mini-game: stored as narration, shown as the character
       const box = addLine(m.speaker, m.text,
-        isGame ? "theirs" : isEvent ? "note event" : (m.role === "user" ? "mine" : "theirs"), m.time);
+        isGame ? "theirs" : isEvent ? "note event" : (m.role === "user" ? "mine" : "theirs"), m.time, m.emotion, frag);
       if (m.scheduled) box.prepend(el("div", tr("Check-in"), "checkin-tag"));   // sent on the character's schedule
-      box.dataset.idx = String(i);   // position in the saved chat, used to place the context marker
-      addEditButton(box, i, m);
-      addBranchButton(box, i, m);
+      box.dataset.idx = String(start + i);   // position in the saved chat, used to place the context marker
+      addEditButton(box, start + i, m);
+      addBranchButton(box, start + i, m);
       if (m.role === "user" && !isEvent && !isGame && me && me.persona) colourLine(box, me.persona.name);
       if (m.thinking) setThinking(box, m.thinking);
     });
+    log.appendChild(frag);
   }
-  placeTurnTools(messages);
+  placeTurnTools(messages, start);
   applyPickBoxes();
   updatePickBar();
   refreshContext();
+  if (scrollBottom !== false) log.scrollTop = log.scrollHeight;
 }
 
 // A new chat can offer one of the account's scenarios as its opening. It is shown in the window with a Start button
@@ -636,7 +777,11 @@ function applyCharSettings(d) {
   $("winSlider").value = w;
   $("winVal").textContent = w + (d.window == null ? " " + tr("(default)") : "");
   $("winReset").disabled = d.window == null;
-  $("winNote").textContent = tr("Messages from the chat sent to the model with each reply, at least this many: the window moves in steps of 10, so it can run up to 9 messages over. Default: {solo} for 1:1 chats, {group} for group chats.", { solo: d.window_defaults.solo, group: d.window_defaults.group });
+  // On a DeepSeek model the window length is not set by the user: the slider is replaced by a note.
+  $("winRow").hidden = !!d.window_hidden;
+  $("winNote").textContent = d.window_hidden
+    ? tr("DeepSeek takes better advantage of cached tokens, so the rolling window length is set for you on this model. Cached tokens are charged at 0.05 tokens each, so they count a twentieth as much against your token budget.")
+    : tr("Messages from the chat sent to the model with each reply, at least this many: the window moves in steps of 10, so it can run up to 9 messages over. Default: {solo} for 1:1 chats, {group} for group chats.", { solo: d.window_defaults.solo, group: d.window_defaults.group });
 }
 
 async function saveCharSettings(patch) {
@@ -700,8 +845,9 @@ function removeTurnTools() {
   for (const n of document.querySelectorAll(".turn-tools")) n.remove();
 }
 
-function placeTurnTools(messages) {
+function placeTurnTools(messages, startIndex) {
   removeTurnTools();
+  const start = startIndex || 0;
   let last = -1;
   messages.forEach((m, i) => { if (m.role === "user" && m.speaker !== "Narrator") last = i; });
   if (last < 0 || !messages.slice(last + 1).some((m) => m.role !== "user")) return;
@@ -734,7 +880,7 @@ function placeTurnTools(messages) {
     + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
     + '<path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
   del.disabled = busy;
-  del.addEventListener("click", () => deleteLastMessage(messages.length - 1));
+  del.addEventListener("click", () => deleteLastMessage(start + messages.length - 1));
   bar.append(prev, count, next, regen, del);
   $("log").appendChild(bar);
 }
@@ -762,7 +908,11 @@ function nextPromptTokens() {
   if (!ctxInfo) return null;
   const typed = Math.ceil(($("msg").value || "").length / 4);
   const total = ctxInfo.system_tokens + ctxInfo.window_tokens + typed;
-  return { total, cached: Math.min(ctxInfo.cached_tokens || 0, total) };
+  const cached = Math.min(ctxInfo.cached_tokens || 0, total);
+  // What the prompt counts for in the token budget: a cached token at the server's weight (a tenth on DeepSeek).
+  const weight = ctxInfo.cached_weight == null ? 1 : ctxInfo.cached_weight;
+  const budget = Math.round((total - cached) + cached * weight);
+  return { total, cached, budget, weight };
 }
 
 // Quenching and clipping savings for the next prompt, when either is on.
@@ -786,6 +936,8 @@ function updateEstimate() {
                  "\u2248 " + fresh.toLocaleString() + " new"];
   const saved = promptSaved();
   if (saved) lines.push(saved.toLocaleString() + " saved");
+  // On DeepSeek the cached part is cheap in the budget, so the budget figure is shown on its own line.
+  if (n.weight !== 1) lines.push("≈ " + n.budget.toLocaleString() + " budget tokens (cached at " + n.weight + ")");
   label.textContent = lines.join("\n");
   label.title = tr("Estimates, about 4 characters a token. Reused from cache: the part of this prompt the provider can reuse, which holds only while the system text and the older messages stay the same as the last reply's.");
 }
@@ -798,9 +950,14 @@ function placeMarker() {
   marker.appendChild(el("span", "context window ends here", "ctx-label"));
   marker.appendChild(el("span", "", "ctx-est"));
   marker.appendChild(el("span", "", "ctx-rule"));
-  // above the oldest message the next prompt includes; a chat shorter than the window puts it at the top
+  // above the oldest message the next prompt includes; a chat shorter than the window puts it at the top.
+  // When paging, that line may be older than the loaded page, so the marker goes above the first loaded line.
+  const log = $("log");
   const target = document.querySelector('#log .line[data-idx="' + ctxInfo.window_start + '"]');
-  $("log").insertBefore(marker, target || null);
+  const first = log.querySelector('.line[data-idx]');
+  if (target) log.insertBefore(marker, target);
+  else if (first && ctxInfo.window_start < Number(first.dataset.idx)) log.insertBefore(marker, first);
+  else log.appendChild(marker);
   updateEstimate();
 }
 
@@ -820,12 +977,57 @@ function iconFor(name) {
   return icon;
 }
 
+// The editor is a large script that only the pencil needs. Load it on first use, then hand over.
+function openEditorLazy(name) {
+  if (typeof openEditor === "function") return Promise.resolve(openEditor(name));
+  return loadScript("/static/editor.js").then(() => openEditor(name));
+}
+
 function editPencil(name) {
   const edit = el("span", "✎", "char-edit");
   edit.title = tr("Edit {name}", { name: name });
   edit.setAttribute("role", "button");
-  edit.addEventListener("click", (e) => { e.stopPropagation(); openEditor(name).catch((err) => { $("chatErr").textContent = err.message; }); });
+  edit.addEventListener("click", (e) => { e.stopPropagation(); openEditorLazy(name).catch((err) => { $("chatErr").textContent = err.message; }); });
   return edit;
+}
+
+// A small tag beside a name once the relationship level has reached married. It sits inside the
+// line's speaker name and inside the sidebar label, so it stays next to the name rather than the row.
+function marriedBadge(name) {
+  if (!marriedSet.has(name)) return null;
+  const badge = el("span", tr("Married"), "married-badge");
+  badge.title = tr("Married to you");
+  return badge;
+}
+
+// Adds or removes the tag on lines already drawn and on the sidebar row. Called only when the level
+// changes, so a long chat is not walked after every reply.
+function syncMarriedBadge(name) {
+  const wanted = marriedSet.has(name);
+  for (const line of $("log").querySelectorAll(".line")) {
+    if (line.dataset.speaker !== name) continue;
+    const speaker = line.querySelector(".speaker");
+    if (!speaker) continue;
+    const old = speaker.querySelector(".married-badge");
+    if (wanted && !old) speaker.appendChild(marriedBadge(name));
+    else if (!wanted && old) old.remove();
+  }
+  for (const item of $("charList").querySelectorAll(".char-item")) {
+    if (item.dataset.name !== name) continue;
+    const old = item.querySelector(".married-badge");
+    if (wanted && !old) {
+      const label = item.querySelector(".char-label");
+      if (label) label.appendChild(marriedBadge(name));
+    } else if (!wanted && old) {
+      old.remove();
+    }
+  }
+}
+
+function setMarried(name, married) {
+  if (marriedSet.has(name) === !!married) return;
+  if (married) marriedSet.add(name); else marriedSet.delete(name);
+  syncMarriedBadge(name);
 }
 
 function charButton(name) {
@@ -836,7 +1038,11 @@ function charButton(name) {
   b.disabled = busy;
   if (colorMap[name]) b.style.setProperty("--dot", colorMap[name]);
   b.appendChild(iconFor(name));
-  b.appendChild(el("span", name, "char-name"));
+  const label = el("span", null, "char-label");
+  label.appendChild(el("span", name, "char-name"));
+  const badge = marriedBadge(name);
+  if (badge) label.appendChild(badge);
+  b.appendChild(label);
   if (editableSet.has(name)) b.appendChild(editPencil(name));
   if (soloNames.includes(name)) {
     b.appendChild(favStar(name, favSet.has(name), async (on) => {
@@ -1238,6 +1444,8 @@ async function saveSettings(patch) {
     me.model = data.model;
     if (data.reasoning) me.reasoning = data.reasoning;
     renderModels();
+    // The window row depends on the model, so the open character's settings are read again after a model change.
+    if ("model" in patch && current) loadCharSettings();
     $("settingsMsg").textContent = tr("Saved. Applies from your next message.");
   } catch (err) {
     $("settingsMsg").textContent = err.message;
@@ -1278,6 +1486,7 @@ async function loadCharacters(choose = true) {
   colorMap = data.colors || {};
   iconSet = new Set(data.icons || []);
   bgIds = data.bg_ids || {};
+  expressionsByName = data.expressions || {};
   musicByName = new Map((data.cards || []).map((card) => [card.name, card.music || []]));
   for (const g of data.groups || []) musicByName.set(g.name, g.music || []);
   for (const n of data.novels || []) musicByName.set(n.id, n.music || []);
@@ -1285,6 +1494,8 @@ async function loadCharacters(choose = true) {
   editableSet = new Set(data.editable || []);
   favSet = new Set(data.favourites || []);
   popularSet = new Set(data.popular || []);
+  marriedSet = new Set(Object.entries(data.attitude_levels || {})
+    .filter(([, level]) => level === "married").map(([name]) => name));
   creatorMap.clear();
   profileMap.clear();
   for (const card of data.cards || []) {
@@ -1310,6 +1521,7 @@ async function loadCharacters(choose = true) {
   soloNames = data.solo || [];
   groupNames = new Set((data.groups || []).map((g) => g.name));
   novelIds = new Set((data.novels || []).map((n) => n.id));
+  novelCast = new Map((data.novels || []).map((n) => [n.id, n.members || []]));
   const all = [...data.solo, ...data.groups.map((g) => g.name), ...(data.novels || []).map((n) => n.id)];
   // A card on the home page sends the name as ?c=; that wins over the last character used.
   const asked = new URLSearchParams(location.search).get("c");
@@ -1340,7 +1552,12 @@ async function applySearchJump(name) {
     }
   }
   if (msg !== null && /^\d+$/.test(msg)) {
-    const line = document.querySelector('#log .line[data-idx="' + msg + '"]');
+    let line = document.querySelector('#log .line[data-idx="' + msg + '"]');
+    // A search hit can be older than the first page. Pull older pages until it is on screen.
+    while (!line && historyHasMore && historyLimit < HISTORY_MAX) {
+      await loadEarlier(null);
+      line = document.querySelector('#log .line[data-idx="' + msg + '"]');
+    }
     if (line) {
       line.scrollIntoView({ block: "center", behavior: "smooth" });
       line.classList.add("search-hit");
@@ -1411,6 +1628,7 @@ async function applyAmbientMood(name) {
   }
   if (current !== name) return;
   setAmbientMood(warm, green);
+  setMarried(name, Boolean(a && a.enabled && a.level === "married"));
 }
 
 // Takes the background away: the picture variables, the classes and the video element's source.
@@ -1435,6 +1653,8 @@ function clearChatArt(section) {
 async function pickCharacter(name) {
   if (busy) return;
   current = name;
+  historyLimit = HISTORY_PAGE;
+  historyHasMore = false;
   if (window.misoCallSetCharacter) window.misoCallSetCharacter(name);
   if (window.ttsSetCharacter) window.ttsSetCharacter(name, soloNames.includes(name));
   if (picking) setPicking(false);   // a pick list belongs to the chat it was made in
@@ -1453,17 +1673,42 @@ async function pickCharacter(name) {
   await loadHistory();
 }
 
-async function loadHistory() {
+async function loadHistory(options) {
+  options = options || {};
   const name = current;
   if (!name) return;
-  const data = await api("GET", "/api/history?character=" + encodeURIComponent(name));
+  applyMediaFeatures();
+  const limit = Math.min(HISTORY_MAX, options.limit || historyLimit || HISTORY_PAGE);
+  const data = await api("GET", "/api/history?character=" + encodeURIComponent(name) + "&limit=" + limit);
   if (name !== current) return;   // the user switched characters while this was loading
-  renderHistory(data.messages);
+  historyLimit = limit;
+  const log = $("log");
+  const oldHeight = options.keepScroll ? log.scrollHeight : 0;
+  const oldTop = options.keepScroll ? log.scrollTop : 0;
+  renderHistory(data.messages, data.start || 0, !!data.has_more, !options.keepScroll);
+  if (options.keepScroll) log.scrollTop = log.scrollHeight - oldHeight + oldTop;
+  if (options.keepScroll) return;   // paging does not change the branch list
   try {
     const list = await api("GET", "/api/branches?character=" + encodeURIComponent(name));
     if (name === current) renderBranches(list);
   } catch (err) {
     $("branchPick").hidden = true;
+  }
+}
+
+// Load one more page above the current one. Re-rendering the loaded range keeps the saved indexes
+// honest and lets the scroll position stay on the line the reader was looking at.
+async function loadEarlier(btn) {
+  if (!current || busy || !historyHasMore || historyLimit >= HISTORY_MAX) return;
+  if (btn) btn.disabled = true;
+  const before = historyLimit;
+  historyLimit = Math.min(HISTORY_MAX, historyLimit + HISTORY_PAGE);
+  try {
+    await loadHistory({ keepScroll: true });
+  } catch (err) {
+    historyLimit = before;
+    if (btn) btn.disabled = false;
+    throw err;
   }
 }
 
@@ -1566,9 +1811,123 @@ async function sendMessage(text) {
   }
 }
 
-// Stream one turn (a new message, or a regenerated reply) into the log, then reload the saved chat.
-async function streamTurn(path, body, who) {
+// ---- image description and scene pictures. The controls stay hidden unless an admin connects the models.
+let visionPreviewUrl = null;
+let visionDescription = "";
+
+function clearVisionPreview() {
+  if (visionPreviewUrl) {
+    URL.revokeObjectURL(visionPreviewUrl);
+    visionPreviewUrl = null;
+  }
+  $("visionImg").removeAttribute("src");
+  $("visionPreview").hidden = true;
+  $("visionText").hidden = true;
+  $("visionCopy").hidden = true;
+  $("visionInsert").hidden = true;
+}
+
+async function describeImage(file) {
+  clearVisionPreview();
+  visionDescription = "";
+  $("visionMsg").textContent = tr("Describing...");
+  visionPreviewUrl = URL.createObjectURL(file);
+  $("visionImg").src = visionPreviewUrl;
+  $("visionPreview").hidden = false;
+  if (!$("visionDlg").open) $("visionDlg").showModal();
+  try {
+    const r = await fetch("/api/vision/describe", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-Requested-With": "roleplay", "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    let data = {};
+    try { data = await r.json(); } catch (e) { /* empty body */ }
+    if (r.status === 401) { sendToLogin(); return; }
+    if (!r.ok) throw apiError(r.status, data);
+    visionDescription = data.description || "";
+    $("visionText").textContent = visionDescription;
+    $("visionText").hidden = false;
+    $("visionCopy").hidden = !visionDescription;
+    $("visionInsert").hidden = !visionDescription;
+    $("visionMsg").textContent = "";
+  } catch (err) {
+    $("visionMsg").textContent = err.message;
+  }
+}
+
+function addSceneLine(url, description, context) {
+  const box = el("div", null, "line image-line");
+  const link = el("a", null, "scene-card");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  const img = el("img", null, "scene-img");
+  img.src = url;
+  img.alt = description || tr("Generated scene");
+  img.loading = "lazy";
+  link.appendChild(img);
+  box.appendChild(link);
+  if (description) box.appendChild(el("div", description, "scene-caption"));
+  if (context) {
+    const details = el("details", null, "scene-context");
+    details.appendChild(el("summary", tr("Scene context")));
+    details.appendChild(el("p", context));
+    box.appendChild(details);
+  }
+  addStamp(box, new Date().toISOString());
+  const log = $("log");
+  log.appendChild(box);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function generateScene() {
+  if (!current || busy) return;
   setBusy(true);
+  $("chatErr").textContent = "";
+  const note = addLine("", tr("Drawing the scene..."), "note");
+  try {
+    const data = await api("POST", "/api/image/scene", { character: current });
+    note.remove();
+    addSceneLine(data.url, data.item.description, data.item.context);
+    addLine("", tr("Scene saved to your Gallery."), "note");
+  } catch (err) {
+    note.remove();
+    $("chatErr").textContent = err.message;
+  } finally {
+    setBusy(false);
+  }
+}
+
+$("describeBtn").addEventListener("click", () => $("visionFile").click());
+$("visionFile").addEventListener("change", () => {
+  const file = $("visionFile").files[0];
+  $("visionFile").value = "";
+  if (file) describeImage(file);
+});
+$("visionClose").addEventListener("click", () => $("visionDlg").close());
+$("visionDlg").addEventListener("close", clearVisionPreview);
+$("visionCopy").addEventListener("click", async () => {
+  if (!visionDescription) return;
+  try {
+    await navigator.clipboard.writeText(visionDescription);
+    $("visionMsg").textContent = tr("Copied.");
+  } catch (err) {
+    $("visionMsg").textContent = tr("Could not copy.");
+  }
+});
+$("visionInsert").addEventListener("click", () => {
+  if (!visionDescription) return;
+  const msg = $("msg");
+  msg.value = (msg.value.trim() ? msg.value.trimEnd() + "\n\n" : "") + visionDescription;
+  msg.focus();
+  $("visionDlg").close();
+});
+$("sceneBtn").addEventListener("click", generateScene);
+
+// Stream one turn (a new message, or a regenerated reply) into the log, then reload the saved chat.
+async function streamTurn(path, body, who) {  setBusy(true);
   $("chatErr").textContent = "";
   removeTurnTools();
 
@@ -1584,7 +1943,7 @@ async function streamTurn(path, body, who) {
     reveals[speaker] = makeReveal((txt) => {
       const log = $("log");
       const follow = nearBottom(log);
-      renderMarkdown(txt || "mrrp~ thinking…", node);
+      renderMessageBody(node, txt || "mrrp~ thinking…", speaker);
       if (follow) log.scrollTop = log.scrollHeight;
     });
   };
@@ -1619,7 +1978,7 @@ async function streamTurn(path, body, who) {
           clearBubbles();
           if (who !== current) return;
           for (const r of data.replies) {
-            const box = addLine(r.speaker, r.text, "theirs", new Date().toISOString());
+            const box = addLine(r.speaker, r.text, "theirs", new Date().toISOString(), r.emotion);
             if (r.thinking) setThinking(box, r.thinking);
             if (window.ttsAutoSpeak) window.ttsAutoSpeak(box, r.speaker);
           }
@@ -1853,7 +2212,7 @@ function openRequestedEditor() {
   const name = new URLSearchParams(location.search).get("edit");
   if (!name) return;
   history.replaceState(null, "", "/chat");
-  const open = () => openEditor(name).catch((err) => { $("chatErr").textContent = err.message; });
+  const open = () => openEditorLazy(name).catch((err) => { $("chatErr").textContent = err.message; });
   if (typeof openEditor === "function") open();
   else window.addEventListener("load", open, { once: true });
 }
@@ -2709,6 +3068,7 @@ async function refreshStateCards() {
     if (current !== who) return;
     showAttitude(a);
     attOn = !!a.enabled;
+    setMarried(who, !!(a.enabled && a.level === "married"));
   } catch (err) {
     // On a failed load the block stays hidden.
   }
@@ -2740,6 +3100,7 @@ async function saveAttitudeAdmin() {
       trust: Number($("attTrustInput").value),
     });
     showAttitude(a);
+    setMarried(current, !!(a.enabled && a.level === "married"));
     $("attMsg").textContent = tr("Saved.");
   } catch (err) {
     $("attMsg").textContent = err.message;
@@ -3131,6 +3492,7 @@ setInterval(refreshUnread, 60000);
 let soloNames = [];
 let groupNames = new Set();
 let novelIds = new Set();
+let novelCast = new Map();   // novel id -> its cast members' display names, for the inline dialogue faces
 // ---- Branch tree. Everyone sees their own; admins can also open any account's tree, read-only.
 async function openTree() {
   const admin = !!(me && me.is_admin);
@@ -3704,4 +4066,45 @@ $("offWrite").addEventListener("click", async () => {
   } finally {
     offSyncButtons();
   }
+});
+
+// Games and calls are interaction-only scripts. The first click loads the script, then clicks the
+// button again so the script's own handler opens it; our handler stands aside once it is ready.
+let gamesBooting = false;
+let gamesReady = false;
+$("gamesBtn").addEventListener("click", (e) => {
+  if (gamesReady) return;
+  e.preventDefault();
+  if (gamesBooting) return;
+  gamesBooting = true;
+  loadScript("/static/minigames.js")
+    .then(() => {
+      gamesReady = true;
+      gamesBooting = false;
+      $("gamesBtn").click();
+    })
+    .catch((err) => {
+      gamesBooting = false;
+      $("chatErr").textContent = err.message;
+    });
+});
+
+let callBooting = false;
+let callReady = false;
+$("callBtn").addEventListener("click", (e) => {
+  if (callReady) return;
+  e.preventDefault();
+  if (callBooting) return;
+  callBooting = true;
+  loadScript("/static/call.js")
+    .then(() => {
+      if (window.misoCallSetCharacter) window.misoCallSetCharacter(current || "");
+      callReady = true;
+      callBooting = false;
+      $("callBtn").click();
+    })
+    .catch((err) => {
+      callBooting = false;
+      $("chatErr").textContent = err.message;
+    });
 });

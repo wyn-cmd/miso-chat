@@ -1,12 +1,29 @@
-Miso Chat 1.6.1 update
+Miso Chat 1.7.0 update
 
-This release brings the server to 1.6.1 from 1.6.0. It adds prepaid credits with a balance page and admin top-up review, a hands-free voice call mode, Plexiglass in place of the Dusk look, and mini-games: a dice button beside the settings button opens a picker of small games to play with the open character, with three games built in, per-character progress, play limits, mood and relationship rewards and one narrator line in the chat, and an admin section that switches games on and imports new ones. A novel and a group chat can now have a background picture and up to three theme tracks of their own, and group chats keep theme music the way characters do; both are set on the novel's or group's edit page. The release also ships the desktop package for Windows, macOS and Linux as separate downloads from the release page: one installer for Windows (NSIS or MSI), a zip for macOS and an AppImage for Linux, with the packaged app checking for newer stable releases in the background.
+This release brings the server to 1.7.0 from 1.6.1, the last published version. 1.6.2 and 1.6.3 were never published, so this zip carries their changes too: better DeepSeek prompt caching, the DeepSeek request limits, the emotion pictures and agentic mode, OpenRouter as a provider with a pool of free keys, and /redo, /regenerate and /relationship in the terminal client.
 
-The server adds two tables, one column and one setting on first start, so chats, characters, accounts and settings carry over.
+New in 1.7.0:
+- A solo DeepSeek chat's memory save runs on the model the chat is using, so the history the chat just sent is reused from that model's prompt cache instead of being paid for again at the cache-miss rate. A save over a 34,000-token history costs about a third of what it did, and about a twentieth when the chat itself runs on deepseek-flash.
+- Dreams, tension passes, the story bible, document imports, the off-screen record and the Mind Palace check in a DeepSeek chat run on the Gemini chain again. None of them shares a prompt with the chat, so on DeepSeek they paid the cache-miss rate for every token.
+- A switch between two DeepSeek models saves the memory on the model the chat is leaving, which is the one that still has the history cached.
+- A chat from before 1.6.2 has no recorded model, so switching it to DeepSeek used to send its whole history to a cold cache. It now saves first, and its next message starts from the summary and the last four messages.
+- A memory save no longer pays for the whole anchored history when it falls back to a Gemini model, because the fallback sends the compact save instead.
 
-The terminal client is 1.6.1. A 1.6.x client and a 1.6.x server work together because the major.minor matches, but the client file in this zip is the matching one.
+The server adds no tables and no columns. Existing chats, characters, accounts and settings are kept. The DeepSeek limits are settings that take their defaults until an admin changes them.
+
+The terminal client is 1.7.0. A 1.x client and a 1.x server work together because the major.minor matches, but the client file in this zip is the matching one.
+
+If you are coming from 1.6.0 or earlier, read the 1.6.1 notes in CHANGELOG.md first; they still apply.
 
 Before you update, note these changes:
+- OpenRouter models are free but have low request limits, and OpenRouter may log prompts. Do not use them for characters you want kept private.
+- A memory save on a DeepSeek chat sends the chat's own history. It reuses the prompt cache, so it is much cheaper than in 1.6.x, but it is still the largest single call a DeepSeek chat makes.
+- A switch between two DeepSeek models costs one request on the model you are leaving, because the save runs there. A switch into DeepSeek keeps the compact save on the Gemini chain.
+- The rolling window length setting is hidden for a chat on a DeepSeek model. The value you set stays saved and applies again when you switch back to another model.
+- A solo DeepSeek chat's memory saves every 30 turns, not every 10, and each refresh reads the last 60 messages. Memory updates therefore arrive less often on those chats.
+- The DeepSeek daily caps and the 120-a-minute budget are separate from the Gemini ones. An admin's per-account daily cap applies to each provider separately.
+- A DeepSeek chat's memory save, dreams and the other background work run on the Gemini chain and count against the Gemini per-user caps. A DeepSeek account whose Gemini cap is used up has its background work stopped until the cap resets.
+- The desktop app is not rebuilt by this zip. Download its installer from the release page.
 - Prepaid credits are off until an admin uses them. A tier's quota still applies first; credits are drawn only after it is used up.
 - Mini-games are off until an admin turns them on under Admin, Mini-games, and switches individual games on. A game asks the character for a short line, so it uses the same request and token limits as a chat turn.
 - A novel's background and theme music are kept in that novel's own folder, and a group's in the group's folder. Theme music needs ffmpeg on the server, like a character's track does.
@@ -25,12 +42,13 @@ Before you update, note these changes:
 
    The zip leaves alone: .env, data/, every character folder, and the files you keep beside them.
 
-4. Data: the server adds two tables, one column and one setting on first start. Existing chats, characters, accounts and settings are kept.
+4. Data: the server adds no tables and no columns. Existing chats, characters, accounts and settings are kept.
 
-5. Start the web app again and sign in. Open Admin, Mini-games, switch the feature on and tick the games you want. Open a character's chat and press the dice button beside settings.
+5. Start the web app again and sign in. To use DeepSeek with the new limits, set your DeepSeek key under Admin, Model providers, and check the three DeepSeek limits under Admin, Limits.
+   To use OpenRouter, tick Enabled and paste your key or keys under Admin, Model providers, OpenRouter, then save. The free models appear in the model picker. Under Admin, Tiers, tick OpenRouter for any tier that has it saved without it.
 
 6. To use the desktop app, download the package for your system from the release page instead of this zip. The first start asks for a Gemini key by writing a .env in the app's own data folder and naming it.
 
 7. Run the terminal client from this zip. If an old client is still installed, replace it with client/miso_remote.py.
 
-8. Report anything that breaks against the 1.6.1 notes in CHANGELOG.md.
+8. Report anything that breaks against the 1.7.0 notes in CHANGELOG.md.
